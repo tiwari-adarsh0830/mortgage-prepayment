@@ -1,5 +1,4 @@
 # Mortgage Prepayment Prediction
-**NYU Stern — RA Project | Advisor: Prof. Gupta**
 
 ---
 
