@@ -1,0 +1,7 @@
+data/
+*.csv
+*.zip
+*.log
+__pycache__/
+*.pyc
+outputs/
