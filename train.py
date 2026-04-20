@@ -70,40 +70,46 @@ def load_vintage(vintage):
     path = os.path.join(DATA_DIR, f'{vintage}.csv')
     print(f'Loading {vintage}...', flush=True)
 
-    # Only read columns we actually need to save memory
-    usecols_idx = [
-        all_cols.index('loan_id'),
-        all_cols.index('monthly_reporting_period'),
-        all_cols.index('original_interest_rate'),
-        all_cols.index('borrower_credit_score'),
-        all_cols.index('original_ltv'),
-        all_cols.index('original_upb'),
-        all_cols.index('loan_age'),
-        all_cols.index('extra_13'),   # zero_balance_code_actual
+    usecols_idx_raw = [
+        all_cols.index('loan_id') + 1,
+        all_cols.index('monthly_reporting_period') + 1,
+        all_cols.index('original_interest_rate') + 1,
+        all_cols.index('borrower_credit_score') + 1,
+        all_cols.index('original_ltv') + 1,
+        all_cols.index('original_upb') + 1,
+        all_cols.index('loan_age') + 1,
+        all_cols.index('extra_13') + 1,
     ]
-    # +1 because we drop column 0 after reading
-    usecols_idx_raw = [i + 1 for i in usecols_idx]
 
-    df = pd.read_csv(
-        path,
-        sep='|',
-        header=None,
-        usecols=usecols_idx_raw,
-        low_memory=False
-    )
-
-    # Rename columns
     col_names = [
         'loan_id', 'monthly_reporting_period', 'original_interest_rate',
         'borrower_credit_score', 'original_ltv', 'original_upb',
         'loan_age', 'zero_balance_code_actual'
     ]
-    df.columns = col_names
 
-    # Collapse to one row per loan (last observed record)
+    # Read in chunks to save memory
+    chunks = []
+    for chunk in pd.read_csv(
+        path, sep='|', header=None,
+        usecols=usecols_idx_raw,
+        low_memory=False,
+        chunksize=500_000
+    ):
+        chunk.columns = col_names
+        # Keep only last record per loan within chunk
+        chunk = chunk.sort_values('monthly_reporting_period').groupby('loan_id').last().reset_index()
+        chunks.append(chunk)
+        del chunk
+        gc.collect()
+
+    df = pd.concat(chunks, ignore_index=True)
+    del chunks
+    gc.collect()
+
+    # Final collapse — get true last record per loan across all chunks
     df = df.sort_values('monthly_reporting_period').groupby('loan_id').last().reset_index()
 
-    # Target: prepaid = zero_balance_code == 1.0
+    # Target
     df['prepaid'] = (df['zero_balance_code_actual'] == 1.0).astype(int)
 
     # Features
@@ -111,13 +117,11 @@ def load_vintage(vintage):
     df['loan_age_months'] = df['loan_age'].astype(float)
     df['vintage']         = vintage
 
-    # Keep only what we need
     keep = FEATURES + ['prepaid', 'vintage']
     df   = df[keep].dropna()
 
     print(f'  -> {len(df):,} loans | prepay rate: {df["prepaid"].mean()*100:.2f}%', flush=True)
     return df
-
 
 # ── MLP ───────────────────────────────────────────────────────────────────────
 class PrepayMLP(nn.Module):
