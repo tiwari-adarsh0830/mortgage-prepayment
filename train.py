@@ -16,8 +16,8 @@ import gc
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DATA_DIR    = '/scratch/at7095/mortgage_prepayment/data/raw'
+PMMS_PATH   = '/scratch/at7095/mortgage_prepayment/data/pmms_monthly.csv'
 OUTPUT_DIR  = '/scratch/at7095/mortgage_prepayment/outputs'
-CURRENT_RATE = 6.8
 VINTAGES = [
     '2020Q1', '2020Q2', '2020Q3', '2020Q4',
     '2021Q1', '2021Q2', '2021Q3', '2021Q4',
@@ -65,8 +65,16 @@ extra_cols = [f'extra_{i}' for i in range(1, 17)]
 all_cols   = cols + extra_cols  # 109 total
 
 
+# ── Load PMMS monthly rates ───────────────────────────────────────────────────
+def load_pmms():
+    pmms = pd.read_csv(PMMS_PATH)
+    pmms = pmms[['reporting_period', 'rate_30yr']].copy()
+    pmms['reporting_period'] = pmms['reporting_period'].astype(int)
+    return dict(zip(pmms['reporting_period'], pmms['rate_30yr']))
+
+
 # ── Load one vintage, return only what we need ────────────────────────────────
-def load_vintage(vintage):
+def load_vintage(vintage, pmms_rates):
     path = os.path.join(DATA_DIR, f'{vintage}.csv')
     print(f'Loading {vintage}...', flush=True)
 
@@ -78,7 +86,7 @@ def load_vintage(vintage):
         all_cols.index('original_ltv') + 1,
         all_cols.index('original_upb') + 1,
         all_cols.index('loan_age') + 1,
-        all_cols.index('extra_13') + 1,
+        all_cols.index('extra_13') + 1,   # zero_balance_code_actual
     ]
 
     col_names = [
@@ -96,7 +104,6 @@ def load_vintage(vintage):
         chunksize=500_000
     ):
         chunk.columns = col_names
-        # Keep only last record per loan within chunk
         chunk = chunk.sort_values('monthly_reporting_period').groupby('loan_id').last().reset_index()
         chunks.append(chunk)
         del chunk
@@ -106,14 +113,16 @@ def load_vintage(vintage):
     del chunks
     gc.collect()
 
-    # Final collapse — get true last record per loan across all chunks
+    # True last record per loan across all chunks
     df = df.sort_values('monthly_reporting_period').groupby('loan_id').last().reset_index()
 
     # Target
     df['prepaid'] = (df['zero_balance_code_actual'] == 1.0).astype(int)
 
-    # Features
-    df['refi_incentive']  = df['original_interest_rate'] - CURRENT_RATE
+    # Time-varying refi incentive — market rate at last reporting period
+    df['market_rate'] = df['monthly_reporting_period'].map(pmms_rates)
+    df['refi_incentive'] = df['original_interest_rate'] - df['market_rate']
+
     df['loan_age_months'] = df['loan_age'].astype(float)
     df['vintage']         = vintage
 
@@ -122,6 +131,7 @@ def load_vintage(vintage):
 
     print(f'  -> {len(df):,} loans | prepay rate: {df["prepaid"].mean()*100:.2f}%', flush=True)
     return df
+
 
 # ── MLP ───────────────────────────────────────────────────────────────────────
 class PrepayMLP(nn.Module):
@@ -140,10 +150,15 @@ class PrepayMLP(nn.Module):
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+    # Load PMMS monthly rates
+    print('Loading PMMS monthly rates...', flush=True)
+    pmms_rates = load_pmms()
+    print(f'  -> {len(pmms_rates)} monthly rate observations loaded', flush=True)
+
     # Load all vintages one at a time, keeping only model-ready rows
     chunks = []
     for v in VINTAGES:
-        chunks.append(load_vintage(v))
+        chunks.append(load_vintage(v, pmms_rates))
         gc.collect()
 
     df_all = pd.concat(chunks, ignore_index=True)
@@ -257,7 +272,7 @@ def main():
     print('='*50)
 
     # Save results
-    with open(os.path.join(OUTPUT_DIR, 'results_multivintage.json'), 'w') as f:
+    with open(os.path.join(OUTPUT_DIR, 'results_timevarying.json'), 'w') as f:
         json.dump(results, f, indent=2)
     print(f'\nResults saved to {OUTPUT_DIR}/results_multivintage.json')
 
