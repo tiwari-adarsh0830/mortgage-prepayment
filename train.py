@@ -17,6 +17,7 @@ import gc
 # ── Config ────────────────────────────────────────────────────────────────────
 DATA_DIR    = '/scratch/at7095/mortgage_prepayment/data/raw'
 PMMS_PATH   = '/scratch/at7095/mortgage_prepayment/data/pmms_monthly.csv'
+ZHVI_PATH   = '/scratch/at7095/mortgage_prepayment/data/zhvi_cbsa.csv'
 OUTPUT_DIR  = '/scratch/at7095/mortgage_prepayment/outputs'
 VINTAGES = [
     '2020Q1', '2020Q2', '2020Q3', '2020Q4',
@@ -25,7 +26,7 @@ VINTAGES = [
 ]
 FEATURES = [
     'refi_incentive', 'borrower_credit_score',
-    'original_ltv', 'original_upb', 'loan_age_months'
+    'original_ltv', 'current_ltv', 'original_upb', 'loan_age_months'
 ]
 
 # ── Column setup ──────────────────────────────────────────────────────────────
@@ -73,8 +74,18 @@ def load_pmms():
     return dict(zip(pmms['reporting_period'], pmms['rate_30yr']))
 
 
+# ── Load ZHVI MSA-level lookup ────────────────────────────────────────────────
+def load_zhvi():
+    zhvi = pd.read_csv(ZHVI_PATH)
+    zhvi['cbsa'] = zhvi['cbsa'].astype(int)
+    zhvi['reporting_period'] = zhvi['reporting_period'].astype(int)
+    # Return dict keyed by (cbsa, reporting_period) -> zhvi
+    return {(row['cbsa'], row['reporting_period']): row['zhvi']
+            for _, row in zhvi.iterrows()}
+
+
 # ── Load one vintage, return only what we need ────────────────────────────────
-def load_vintage(vintage, pmms_rates):
+def load_vintage(vintage, pmms_rates, zhvi_lookup):
     path = os.path.join(DATA_DIR, f'{vintage}.csv')
     print(f'Loading {vintage}...', flush=True)
 
@@ -86,16 +97,17 @@ def load_vintage(vintage, pmms_rates):
         all_cols.index('original_ltv') + 1,
         all_cols.index('original_upb') + 1,
         all_cols.index('loan_age') + 1,
+        all_cols.index('origination_date') + 1,
+        all_cols.index('msa') + 1,
         all_cols.index('extra_13') + 1,   # zero_balance_code_actual
     ]
 
     col_names = [
         'loan_id', 'monthly_reporting_period', 'original_interest_rate',
         'borrower_credit_score', 'original_ltv', 'original_upb',
-        'loan_age', 'zero_balance_code_actual'
+        'loan_age', 'origination_date', 'msa', 'zero_balance_code_actual'
     ]
 
-    # Read in chunks to save memory
     chunks = []
     for chunk in pd.read_csv(
         path, sep='|', header=None,
@@ -113,15 +125,32 @@ def load_vintage(vintage, pmms_rates):
     del chunks
     gc.collect()
 
-    # True last record per loan across all chunks
     df = df.sort_values('monthly_reporting_period').groupby('loan_id').last().reset_index()
 
     # Target
     df['prepaid'] = (df['zero_balance_code_actual'] == 1.0).astype(int)
 
-    # Time-varying refi incentive — market rate at last reporting period
-    df['market_rate'] = df['monthly_reporting_period'].map(pmms_rates)
+    # Time-varying refi incentive
+    df['market_rate']    = df['monthly_reporting_period'].map(pmms_rates)
     df['refi_incentive'] = df['original_interest_rate'] - df['market_rate']
+
+    # Dynamic LTV using ZHVI
+    df['msa'] = pd.to_numeric(df['msa'], errors='coerce').astype('Int64')
+    df['origination_date'] = pd.to_numeric(df['origination_date'], errors='coerce').astype('Int64')
+
+    df['zhvi_orig'] = df.apply(
+        lambda r: zhvi_lookup.get((r['msa'], r['origination_date']), np.nan), axis=1
+    )
+    df['zhvi_last'] = df.apply(
+        lambda r: zhvi_lookup.get((r['msa'], r['monthly_reporting_period']), np.nan), axis=1
+    )
+
+    # original_home_value = original_upb / (original_ltv / 100)
+    # current_home_value  = original_home_value * (zhvi_last / zhvi_orig)
+    # current_ltv         = original_upb / current_home_value * 100
+    df['original_home_value'] = df['original_upb'] / (df['original_ltv'] / 100)
+    df['price_appreciation']  = df['zhvi_last'] / df['zhvi_orig']
+    df['current_ltv']         = (df['original_upb'] / (df['original_home_value'] * df['price_appreciation'])) * 100
 
     df['loan_age_months'] = df['loan_age'].astype(float)
     df['vintage']         = vintage
@@ -129,7 +158,8 @@ def load_vintage(vintage, pmms_rates):
     keep = FEATURES + ['prepaid', 'vintage']
     df   = df[keep].dropna()
 
-    print(f'  -> {len(df):,} loans | prepay rate: {df["prepaid"].mean()*100:.2f}%', flush=True)
+    print(f'  -> {len(df):,} loans | prepay rate: {df["prepaid"].mean()*100:.2f}% | '
+          f'avg current_ltv: {df["current_ltv"].mean():.1f}', flush=True)
     return df
 
 
@@ -155,10 +185,15 @@ def main():
     pmms_rates = load_pmms()
     print(f'  -> {len(pmms_rates)} monthly rate observations loaded', flush=True)
 
+    # Load ZHVI MSA lookup
+    print('Loading ZHVI MSA lookup...', flush=True)
+    zhvi_lookup = load_zhvi()
+    print(f'  -> {len(zhvi_lookup)} MSA-period observations loaded', flush=True)
+
     # Load all vintages one at a time, keeping only model-ready rows
     chunks = []
     for v in VINTAGES:
-        chunks.append(load_vintage(v, pmms_rates))
+        chunks.append(load_vintage(v, pmms_rates, zhvi_lookup))
         gc.collect()
 
     df_all = pd.concat(chunks, ignore_index=True)
@@ -265,14 +300,14 @@ def main():
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print('\n' + '='*50)
-    print('MODEL COMPARISON — Multi-Vintage 2020-2023')
+    print('MODEL COMPARISON — Multi-Vintage + Dynamic LTV')
     print('='*50)
     for model, auc in sorted(results.items(), key=lambda x: -x[1]):
         print(f'  {model:<25} AUC: {auc:.4f}')
     print('='*50)
 
     # Save results
-    with open(os.path.join(OUTPUT_DIR, 'results_timevarying.json'), 'w') as f:
+    with open(os.path.join(OUTPUT_DIR, 'results_dynamic_ltv.json'), 'w') as f:
         json.dump(results, f, indent=2)
     print(f'\nResults saved to {OUTPUT_DIR}/results_multivintage.json')
 
