@@ -17,7 +17,7 @@ import gc
 # ── Config ────────────────────────────────────────────────────────────────────
 DATA_DIR    = '/scratch/at7095/mortgage_prepayment/data/raw'
 PMMS_PATH   = '/scratch/at7095/mortgage_prepayment/data/pmms_monthly.csv'
-ZHVI_PATH   = '/scratch/at7095/mortgage_prepayment/data/zhvi_cbsa.csv'
+ZHVI_PATH   = '/scratch/at7095/mortgage_prepayment/data/zhvi_zip3.csv'
 OUTPUT_DIR  = '/scratch/at7095/mortgage_prepayment/outputs'
 VINTAGES = [
     '2020Q1', '2020Q2', '2020Q3', '2020Q4',
@@ -74,13 +74,12 @@ def load_pmms():
     return dict(zip(pmms['reporting_period'], pmms['rate_30yr']))
 
 
-# ── Load ZHVI MSA-level lookup ────────────────────────────────────────────────
+# ── Load ZHVI zip3-level lookup ───────────────────────────────────────────────
 def load_zhvi():
     zhvi = pd.read_csv(ZHVI_PATH)
-    zhvi['cbsa'] = zhvi['cbsa'].astype(int)
+    zhvi['zip3'] = zhvi['zip3'].astype(int)
     zhvi['reporting_period'] = zhvi['reporting_period'].astype(int)
-    # Return dict keyed by (cbsa, reporting_period) -> zhvi
-    return {(row['cbsa'], row['reporting_period']): row['zhvi']
+    return {(row['zip3'], row['reporting_period']): row['zhvi']
             for _, row in zhvi.iterrows()}
 
 
@@ -98,14 +97,14 @@ def load_vintage(vintage, pmms_rates, zhvi_lookup):
         all_cols.index('original_upb') + 1,
         all_cols.index('loan_age') + 1,
         all_cols.index('origination_date') + 1,
-        all_cols.index('msa') + 1,
+        all_cols.index('zip') + 1,
         all_cols.index('extra_13') + 1,   # zero_balance_code_actual
     ]
 
     col_names = [
         'loan_id', 'monthly_reporting_period', 'original_interest_rate',
         'borrower_credit_score', 'original_ltv', 'original_upb',
-        'loan_age', 'origination_date', 'msa', 'zero_balance_code_actual'
+        'loan_age', 'origination_date', 'zip3', 'zero_balance_code_actual'
     ]
 
     chunks = []
@@ -134,15 +133,15 @@ def load_vintage(vintage, pmms_rates, zhvi_lookup):
     df['market_rate']    = df['monthly_reporting_period'].map(pmms_rates)
     df['refi_incentive'] = df['original_interest_rate'] - df['market_rate']
 
-    # Dynamic LTV using ZHVI
-    df['msa'] = pd.to_numeric(df['msa'], errors='coerce').astype('Int64')
+    # Dynamic LTV using ZHVI zip3
+    df['zip3'] = pd.to_numeric(df['zip3'], errors='coerce').astype('Int64')
     df['origination_date'] = pd.to_numeric(df['origination_date'], errors='coerce').astype('Int64')
 
     df['zhvi_orig'] = df.apply(
-        lambda r: zhvi_lookup.get((r['msa'], r['origination_date']), np.nan), axis=1
+        lambda r: zhvi_lookup.get((r['zip3'], r['origination_date']), np.nan), axis=1
     )
     df['zhvi_last'] = df.apply(
-        lambda r: zhvi_lookup.get((r['msa'], r['monthly_reporting_period']), np.nan), axis=1
+        lambda r: zhvi_lookup.get((r['zip3'], r['monthly_reporting_period']), np.nan), axis=1
     )
 
     # original_home_value = original_upb / (original_ltv / 100)
