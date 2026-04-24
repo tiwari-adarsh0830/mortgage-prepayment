@@ -88,24 +88,23 @@ def load_vintage(vintage, pmms_rates, zhvi_lookup):
     path = os.path.join(DATA_DIR, f'{vintage}.csv')
     print(f'Loading {vintage}...', flush=True)
 
-    usecols_idx_raw = [
-        all_cols.index('loan_id') + 1,
-        all_cols.index('monthly_reporting_period') + 1,
-        all_cols.index('original_interest_rate') + 1,
-        all_cols.index('borrower_credit_score') + 1,
-        all_cols.index('original_ltv') + 1,
-        all_cols.index('original_upb') + 1,
-        all_cols.index('loan_age') + 1,
-        all_cols.index('origination_date') + 1,
-        all_cols.index('zip') + 1,
-        all_cols.index('extra_13') + 1,   # zero_balance_code_actual
-    ]
-
-    col_names = [
-        'loan_id', 'monthly_reporting_period', 'original_interest_rate',
-        'borrower_credit_score', 'original_ltv', 'original_upb',
-        'loan_age', 'origination_date', 'zip3', 'zero_balance_code_actual'
-    ]
+    # Map column names to file positions (1-indexed, sorted for pandas)
+    col_map = {
+        all_cols.index('loan_id') + 1:                    'loan_id',
+        all_cols.index('monthly_reporting_period') + 1:   'monthly_reporting_period',
+        all_cols.index('original_interest_rate') + 1:     'original_interest_rate',
+        all_cols.index('borrower_credit_score') + 1:      'borrower_credit_score',
+        all_cols.index('original_ltv') + 1:               'original_ltv',
+        all_cols.index('original_upb') + 1:               'original_upb',
+        all_cols.index('loan_age') + 1:                   'loan_age',
+        all_cols.index('origination_date') + 1:           'origination_date',
+        all_cols.index('zip') + 1:                        'zip3',
+        all_cols.index('extra_13') + 1:                   'zero_balance_code_actual',
+    }
+    # Sort by file position — pandas returns usecols in file order
+    sorted_cols = dict(sorted(col_map.items()))
+    usecols_idx_raw = list(sorted_cols.keys())
+    col_names = list(sorted_cols.values())
 
     chunks = []
     for chunk in pd.read_csv(
