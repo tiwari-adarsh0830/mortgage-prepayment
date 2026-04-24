@@ -146,6 +146,8 @@ def load_vintage(vintage, pmms_rates, zhvi_lookup):
     # original_home_value = original_upb / (original_ltv / 100)
     # current_home_value  = original_home_value * (zhvi_last / zhvi_orig)
     # current_ltv         = original_upb / current_home_value * 100
+    # Note: using original_upb (not current_actual_upb) to avoid leakage —
+    # current_actual_upb = 0 for prepaid loans, which would trivially predict the target
     df['original_home_value'] = df['original_upb'] / (df['original_ltv'] / 100)
     df['price_appreciation']  = df['zhvi_last'] / df['zhvi_orig']
     df['current_ltv']         = (df['original_upb'] / (df['original_home_value'] * df['price_appreciation'])) * 100
@@ -166,9 +168,9 @@ class PrepayMLP(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(5, 64), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(6, 64), nn.ReLU(), nn.Dropout(0.3),
             nn.Linear(64, 32), nn.ReLU(), nn.Dropout(0.3),
-            nn.Linear(32, 1), nn.Sigmoid()
+            nn.Linear(32, 1)  # raw logits — BCEWithLogitsLoss applies sigmoid internally
         )
     def forward(self, x):
         return self.net(x).squeeze()
@@ -292,7 +294,7 @@ def main():
 
     mlp.eval()
     with torch.no_grad():
-        y_prob_mlp = mlp(X_test_t).numpy()
+        y_prob_mlp = torch.sigmoid(mlp(X_test_t)).numpy()
     results['MLP'] = roc_auc_score(y_test, y_prob_mlp)
     print(f'  AUC: {results["MLP"]:.4f}')
 
@@ -307,7 +309,7 @@ def main():
     # Save results
     with open(os.path.join(OUTPUT_DIR, 'results_dynamic_ltv.json'), 'w') as f:
         json.dump(results, f, indent=2)
-    print(f'\nResults saved to {OUTPUT_DIR}/results_multivintage.json')
+    print(f'\nResults saved to {OUTPUT_DIR}/results_dynamic_ltv.json')
 
 
 if __name__ == '__main__':
