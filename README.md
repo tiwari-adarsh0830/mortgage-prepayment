@@ -46,20 +46,26 @@ mortgage_prepayment/
 **Format:** Post-October 2020 single-file format, 108–109 fields, pipe-delimited (`|`), no header.
 
 ### Key Design Decisions
-- `CURRENT_RATE = 6.8` (approximate 2025 30yr fixed average) used uniformly across all vintages. This is a simplification — a natural extension would be to use time-varying rates based on each loan's prepayment month. Flagged for discussion.
-- Target variable: `prepaid = 1` if `zero_balance_code == 1.0` (voluntary prepayment), else 0.
-- One row per loan (last observed monthly record used for outcome).
+- Time-varying PMMS rate used for refi incentive — monthly average 30yr fixed rate from Freddie Mac matched to each loan's last reporting period
+- Target variable: `prepaid = 1` if `zero_balance_code == 1.0` (voluntary prepayment), else 0
+- One row per loan (last observed monthly record used for outcome)
+- `original_upb` used in current_ltv numerator (not `current_actual_upb`) to avoid data leakage — current UPB drops to zero for prepaid loans in their final record
 
 ---
 
 ## Features
 | Feature | Description |
 |---------|-------------|
-| `refi_incentive` | `original_interest_rate - CURRENT_RATE` (bps of savings from refinancing) |
+| `refi_incentive` | `original_interest_rate - pmms_rate_at_reporting_period` (time-varying) |
 | `borrower_credit_score` | FICO score at origination |
 | `original_ltv` | Loan-to-value ratio at origination |
+| `current_ltv` | Dynamic LTV using Zillow ZHVI appreciation: `original_upb / (original_home_value × zhvi_last/zhvi_orig) × 100` |
 | `original_upb` | Original unpaid principal balance (loan size) |
 | `loan_age_months` | Age of loan in months |
+
+**External data sources:**
+- **Freddie Mac PMMS** — weekly 30yr fixed rates → monthly averages → matched by reporting period
+- **Zillow ZHVI** — zip-level monthly home values → aggregated to zip3 → matched by zip3 + period
 
 ---
 
@@ -93,7 +99,31 @@ mortgage_prepayment/
 
 **loan_age_months flipped negative:** In the refi regime, newer loans prepay more — they originated at low rates and face little burnout. Older loans may have already refinanced (burnout effect).
 
-**refi_incentive now second most important feature** in Random Forest (0.2229), up from near-zero importance in Phase 1.
+### Phase 3 — Time-Varying PMMS Rate ✅
+| Model | AUC | vs Phase 2 |
+|-------|-----|------------|
+| LightGBM | **0.8310** | +0.0015 |
+| XGBoost | 0.8308 | +0.0011 |
+| MLP Neural Network | 0.8208 | +0.0016 |
+| Random Forest | 0.8190 | +0.0001 |
+| Logistic Regression | 0.8077 | +0.0098 |
+
+**Key insight:** Time-varying rate helped LR most (+0.0098) — refi incentive is now properly measured. LightGBM edges ahead of XGBoost.
+
+### Phase 4 — Dynamic LTV via Zillow ZHVI ✅
+| Model | AUC | vs Phase 3 |
+|-------|-----|------------|
+| XGBoost | **0.8306** | -0.0002 |
+| LightGBM | 0.8306 | -0.0004 |
+| MLP Neural Network | 0.8289 | +0.0081 |
+| Random Forest | 0.8174 | -0.0016 |
+| Logistic Regression | 0.8074 | -0.0003 |
+
+**Key insight:** Dynamic LTV helped MLP most (+0.008) but had minimal impact on tree-based models — they already captured the collateral signal through original LTV and loan age. Current LTV has low feature importance in RF (0.04) and negative coefficient in LR — likely multicollinearity with original LTV.
+
+**avg current_ltv by vintage:**
+- 2020Q1: 59.2% — large appreciation, lots of equity built
+- 2023Q1: 71.5% — less appreciation, closer to original LTV
 
 ---
 
@@ -130,16 +160,20 @@ tail -f /scratch/at7095/mortgage_prepayment/logs/train_<JOBID>.out
 - [x] Transfer 2020Q1–Q4, 2021Q1–Q4, 2023Q1 to Torch (9.8M loans)
 - [x] Multi-vintage training pipeline with chunk-based memory-efficient loading
 - [x] Multi-vintage results — XGBoost leads at 0.8297
+- [x] Time-varying PMMS rate — Freddie Mac monthly rates merged by reporting period
+- [x] Dynamic LTV — Zillow ZHVI merged at zip3 level
+- [x] Fixed data leakage — use original_upb not current_actual_upb in current_ltv
+- [x] Fixed MLP sigmoid + BCEWithLogitsLoss double application bug
 
 ### Next Steps
-- [ ] Merge Zillow ZHVI (zip-level house price appreciation) for dynamic LTV
+- [ ] Restructure data to keep full monthly sequence per loan (for Transformer)
+- [ ] Implement PyTorch Transformer with location embedding at zip3 level
 - [ ] Read Fuster et al. (SSRN 3072038) — ML fairness in credit markets
 - [ ] Study Higham et al. (arxiv 2312.14977) — diffusion model math primer
-- [ ] Restructure data to keep full monthly sequence per loan (for Transformer)
-- [ ] Implement PyTorch Transformer
 - [ ] Implement diffusion model (arxiv 2509.11047)
 - [ ] Add 2018–2019 vintages for additional rate regime coverage
 - [ ] Switch from binary classification to survival/hazard model for CPR output
+- [ ] Ensemble averaging across models
 
 ---
 
@@ -155,8 +189,12 @@ tail -f /scratch/at7095/mortgage_prepayment/logs/train_<JOBID>.out
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | Apr 19, 2026 | Use 2020–2021 vintages | COVID-era low rates (~3%) create refi-driven prepayment — best contrast with 2023Q1 turnover regime |
-| Apr 19, 2026 | CURRENT_RATE = 6.8 for all vintages | Simplification for first pass; time-varying rate is a natural extension |
 | Apr 19, 2026 | Work in /scratch on Torch | Home dir quota too small for multi-GB CSV files |
 | Apr 19, 2026 | No Q1-only restriction | Fannie Mae data is by origination quarter, not reporting quarter — using all quarters of 2020–2021 |
 | Apr 20, 2026 | Chunk-based CSV loading | Full file loading caused OOM even with usecols — chunked reading at 500K rows resolves this |
-| Apr 20, 2026 | Binary classification target | Simplification for Phase 1–2; longer term should move to survival/hazard model for CPR output |
+| Apr 20, 2026 | Binary classification target | Simplification for Phase 1–4; longer term should move to survival/hazard model for CPR output |
+| Apr 23, 2026 | Time-varying PMMS rate | Gupta suggestion — monthly average 30yr fixed rate more accurate than fixed 6.8% |
+| Apr 23, 2026 | ZHVI at zip3 level | Fannie Mae masks geography to 3-digit zip prefix — must aggregate Zillow zip-level data to zip3 |
+| Apr 23, 2026 | Use original_upb in current_ltv | current_actual_upb = 0 for prepaid loans in final record — would leak the target |
+| Apr 23, 2026 | Remove sigmoid from MLP | BCEWithLogitsLoss applies sigmoid internally — double application was a bug |
+| Apr 23, 2026 | Dict-based usecols mapping | Pandas returns usecols in file order not specified order — positional col_names assignment caused misalignment |
