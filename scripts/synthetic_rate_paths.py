@@ -105,7 +105,7 @@ def calibrate_hull_white(rates):
         return -ll.sum()
 
     result = minimize(neg_log_likelihood, x0=[0.5, 0.5],
-                      bounds=[(0.01, 5.0), (0.001, 2.0)],
+                      bounds=[(0.001, 5.0), (0.001, 2.0)],
                       method='L-BFGS-B')
     a, sigma = result.x
     print(f"Hull-White: a={a:.4f}, sigma={sigma:.4f}")
