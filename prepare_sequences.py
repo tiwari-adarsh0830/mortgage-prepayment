@@ -2,6 +2,10 @@
 Job 1 — CPU only
 Loads all vintages, builds padded sequences, saves to disk as .npy files.
 Run this on cpu_short before submitting the GPU training job.
+
+Fixes vs original:
+- train_seq/labels/loan_ids now correctly saved
+- prepay_timestep saved for each loan (needed for hazard model)
 """
 import pandas as pd
 import numpy as np
@@ -75,7 +79,6 @@ def load_zhvi():
     zhvi = pd.read_csv(ZHVI_PATH)
     zhvi['zip3'] = zhvi['zip3'].astype(int)
     zhvi['reporting_period'] = zhvi['reporting_period'].astype(int)
-    # Return as DataFrame for vectorized merge
     return zhvi
 
 
@@ -115,11 +118,10 @@ def load_vintage_sequences(vintage, pmms_rates, zhvi_df, sample_frac=0.5):
 
     df = df.sort_values(['loan_id', 'monthly_reporting_period']).reset_index(drop=True)
 
-    # Subsample loans before any heavy processing — reduces memory early
-    all_loan_ids    = df['loan_id'].unique()
-    n_sample        = int(len(all_loan_ids) * sample_frac)
-    sampled_ids     = np.random.default_rng(42).choice(all_loan_ids, size=n_sample, replace=False)
-    df              = df[df['loan_id'].isin(set(sampled_ids))].copy()
+    all_loan_ids = df['loan_id'].unique()
+    n_sample     = int(len(all_loan_ids) * sample_frac)
+    sampled_ids  = np.random.default_rng(42).choice(all_loan_ids, size=n_sample, replace=False)
+    df           = df[df['loan_id'].isin(set(sampled_ids))].copy()
     gc.collect()
 
     df['zip3']                     = pd.to_numeric(df['zip3'], errors='coerce')
@@ -127,11 +129,9 @@ def load_vintage_sequences(vintage, pmms_rates, zhvi_df, sample_frac=0.5):
     df['monthly_reporting_period'] = pd.to_numeric(df['monthly_reporting_period'], errors='coerce')
     df['zero_balance_code_actual'] = pd.to_numeric(df['zero_balance_code_actual'], errors='coerce')
 
-    # Time-varying refi incentive
     df['market_rate']    = df['monthly_reporting_period'].map(pmms_rates)
     df['refi_incentive'] = df['original_interest_rate'] - df['market_rate']
 
-    # Time-varying current LTV — vectorized merge
     df = df.merge(
         zhvi_df.rename(columns={'reporting_period': 'origination_date', 'zhvi': 'zhvi_orig'}),
         on=['zip3', 'origination_date'], how='left'
@@ -146,11 +146,11 @@ def load_vintage_sequences(vintage, pmms_rates, zhvi_df, sample_frac=0.5):
     df['current_ltv']         = (df['original_upb'] / (df['original_home_value'] * df['price_appreciation'])) * 100
     df['loan_age_months']     = df['loan_age'].astype(float)
 
-    # Target
     prepaid_set   = set(df.loc[df['zero_balance_code_actual'] == 1.0, 'loan_id'].unique())
     df['prepaid'] = df['loan_id'].isin(prepaid_set).astype(int)
 
-    keep_cols = ['loan_id', 'monthly_reporting_period', 'prepaid'] + FEATURE_COLS
+    keep_cols = ['loan_id', 'monthly_reporting_period', 'prepaid',
+                 'zero_balance_code_actual'] + FEATURE_COLS
     df        = df[keep_cols].dropna(subset=FEATURE_COLS)
 
     n_loans   = df['loan_id'].nunique()
@@ -160,7 +160,11 @@ def load_vintage_sequences(vintage, pmms_rates, zhvi_df, sample_frac=0.5):
 
 
 def build_sequences(df, scaler):
-    # Note: modifies df in place — caller must not use df after this call
+    """
+    Build padded sequences and compute prepay_timestep per loan.
+    prepay_timestep[i] = timestep (0-indexed) when loan i prepaid, or -1 if never.
+    """
+    df = df.copy()
     df[FEATURE_COLS] = scaler.transform(df[FEATURE_COLS])
 
     loan_ids_unique = df['loan_id'].unique()
@@ -173,6 +177,7 @@ def build_sequences(df, scaler):
     sequences = np.zeros((n_loans, MAX_SEQ_LEN, N_FEATURES), dtype=np.float32)
     masks     = np.zeros((n_loans, MAX_SEQ_LEN), dtype=bool)
     labels    = np.zeros(n_loans, dtype=np.float32)
+    prepay_t  = np.full(n_loans, -1, dtype=np.int32)
 
     loan_idx  = df['loan_idx'].values
     timesteps = df['timestep'].values
@@ -182,7 +187,13 @@ def build_sequences(df, scaler):
     label_df = df.groupby('loan_idx')['prepaid'].first()
     labels[label_df.index.values] = label_df.values.astype(np.float32)
 
-    return sequences, masks, labels, loan_ids_unique
+    # Prepay timestep: first timestep where zero_balance_code_actual == 1
+    prepaid_rows = df[df['zero_balance_code_actual'] == 1.0]
+    if not prepaid_rows.empty:
+        first_prepay = prepaid_rows.groupby('loan_idx')['timestep'].min()
+        prepay_t[first_prepay.index.values] = first_prepay.values.astype(np.int32)
+
+    return sequences, masks, labels, prepay_t, loan_ids_unique
 
 
 def main():
@@ -194,7 +205,6 @@ def main():
     print('Loading ZHVI...', flush=True)
     zhvi_df = load_zhvi()
 
-    # Load all vintages
     all_dfs = []
     for v in VINTAGES:
         all_dfs.append(load_vintage_sequences(v, pmms_rates, zhvi_df, sample_frac=0.5))
@@ -208,7 +218,6 @@ def main():
     overall_prepay = df_all.groupby('loan_id')['prepaid'].first().mean()
     print(f'\nTotal loans: {total_loans:,} | Prepay rate: {overall_prepay*100:.2f}%', flush=True)
 
-    # Split at loan level
     loan_ids       = df_all['loan_id'].unique()
     loan_labels    = df_all.groupby('loan_id')['prepaid'].first()
     aligned_labels = loan_labels.loc[loan_ids].values
@@ -217,32 +226,40 @@ def main():
         loan_ids, test_size=0.2, random_state=42, stratify=aligned_labels
     )
 
+    # ── Build and save TRAIN sequences ────────────────────────────────────────
     train_df = df_all[df_all['loan_id'].isin(set(train_ids))].copy()
     del df_all
     gc.collect()
 
     print(f'Train: {len(train_ids):,} loans | Test: {len(test_ids):,} loans', flush=True)
 
-    # Fit scaler on train rows only
     scaler = StandardScaler()
     scaler.fit(train_df[FEATURE_COLS])
     with open(os.path.join(SAVE_DIR, 'scaler.pkl'), 'wb') as f:
         pickle.dump(scaler, f)
     print('Scaler saved.', flush=True)
 
-    # Build and save train sequences — then free memory before processing test
     print('\nBuilding train sequences...', flush=True)
-    train_seq, train_mask, train_labels, _ = build_sequences(train_df, scaler)
+    train_seq, train_mask, train_labels, train_prepay_t, train_loan_ids = build_sequences(train_df, scaler)
     del train_df
     gc.collect()
-    np.save(os.path.join(SAVE_DIR, 'train_seq.npy'),    train_seq)
-    np.save(os.path.join(SAVE_DIR, 'train_mask.npy'),   train_mask)
-    np.save(os.path.join(SAVE_DIR, 'train_labels.npy'), train_labels)
+
+    np.save(os.path.join(SAVE_DIR, 'train_seq.npy'),          train_seq)
+    np.save(os.path.join(SAVE_DIR, 'train_mask.npy'),         train_mask)
+    np.save(os.path.join(SAVE_DIR, 'train_labels.npy'),       train_labels)
+    np.save(os.path.join(SAVE_DIR, 'train_loan_ids.npy'),     train_loan_ids)
+    np.save(os.path.join(SAVE_DIR, 'train_prepay_timestep.npy'), train_prepay_t)
     print(f'  Train shape: {train_seq.shape} — saved.', flush=True)
-    del train_seq, train_mask, train_labels
+
+    # Sanity check
+    prepaid_mask = train_labels == 1
+    found = (train_prepay_t[prepaid_mask] >= 0).sum()
+    print(f'  Train prepay timestep: {found:,}/{prepaid_mask.sum():,} prepaid loans have t>=0', flush=True)
+
+    del train_seq, train_mask, train_labels, train_prepay_t
     gc.collect()
 
-    # Reload vintages for test set — avoids holding train and test in memory simultaneously
+    # ── Build and save TEST sequences ─────────────────────────────────────────
     print('\nReloading data for test sequences...', flush=True)
     test_dfs = []
     for v in VINTAGES:
@@ -255,15 +272,22 @@ def main():
     del test_dfs
     gc.collect()
 
-    # Build and save test sequences
     print('Building test sequences...', flush=True)
-    test_seq, test_mask, test_labels, _ = build_sequences(test_df, scaler)
+    test_seq, test_mask, test_labels, test_prepay_t, test_loan_ids = build_sequences(test_df, scaler)
     del test_df
     gc.collect()
-    np.save(os.path.join(SAVE_DIR, 'test_seq.npy'),    test_seq)
-    np.save(os.path.join(SAVE_DIR, 'test_mask.npy'),   test_mask)
-    np.save(os.path.join(SAVE_DIR, 'test_labels.npy'), test_labels)
+
+    np.save(os.path.join(SAVE_DIR, 'test_seq.npy'),          test_seq)
+    np.save(os.path.join(SAVE_DIR, 'test_mask.npy'),         test_mask)
+    np.save(os.path.join(SAVE_DIR, 'test_labels.npy'),       test_labels)
+    np.save(os.path.join(SAVE_DIR, 'test_loan_ids.npy'),     test_loan_ids)
+    np.save(os.path.join(SAVE_DIR, 'test_prepay_timestep.npy'), test_prepay_t)
     print(f'  Test shape: {test_seq.shape} — saved.', flush=True)
+
+    # Sanity check
+    prepaid_mask = test_labels == 1
+    found = (test_prepay_t[prepaid_mask] >= 0).sum()
+    print(f'  Test prepay timestep: {found:,}/{prepaid_mask.sum():,} prepaid loans have t>=0', flush=True)
 
     print('\nAll sequences saved to', SAVE_DIR, flush=True)
 
