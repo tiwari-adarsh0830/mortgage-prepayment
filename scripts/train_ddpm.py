@@ -20,7 +20,7 @@ PMMS_PATH = os.path.join(BASE, "data/pmms_monthly.csv")
 
 SEQ_LEN    = 33
 T_STEPS    = 200
-N_EPOCHS   = 500
+N_EPOCHS   = 2000
 BATCH_SIZE = 64
 LR         = 1e-3
 N_GENERATE = 1000
@@ -81,7 +81,7 @@ class DenoiseNet(nn.Module):
     Input: (batch, seq_len) noisy sequence + timestep embedding
     Output: (batch, seq_len) predicted noise
     """
-    def __init__(self, seq_len=33, time_dim=64, hidden_dim=256):
+    def __init__(self, seq_len=33, time_dim=64, hidden_dim=512):
         super().__init__()
         self.time_emb = SinusoidalPositionEmbedding(time_dim)
         self.time_mlp = nn.Sequential(
