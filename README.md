@@ -1,55 +1,66 @@
 # Mortgage Prepayment Prediction
-**NYU Stern — RA Project | Advisor: Prof. Gupta**
+**NYU Stern — RA Project | Advisor: Prof. Arpit Gupta**
 
 ---
 
 ## Project Overview
-Predicting mortgage prepayment using Fannie Mae Single-Family Loan Performance Data. The goal is to build a sequence of increasingly sophisticated models — from logistic regression through transformer-based architectures — and understand what drives prepayment behavior across different interest rate regimes.
+Predicting mortgage prepayment using Fannie Mae Single-Family Loan Performance Data. The project builds a sequence of increasingly sophisticated models — from logistic regression through Transformer-based architectures — and is now extending toward Option-Adjusted Spread (OAS) pricing using AI-driven rate simulation and discrete hazard models.
 
 ---
 
 ## Repository Structure
-```
 mortgage_prepayment/
 ├── data/
-│   └── raw/              # Raw Fannie Mae CSVs (not tracked in git)
-├── notebooks/            # Exploration and analysis notebooks
-├── outputs/              # Model results, plots, saved models
-├── logs/                 # SLURM job logs
-├── train.py              # Main training script
-├── run_train.sbatch      # SLURM job script
+│   ├── raw/                  # Raw Fannie Mae CSVs (not tracked in git)
+│   ├── sequences/            # Preprocessed padded sequences (not tracked)
+│   ├── pmms_monthly.csv      # Freddie Mac PMMS 30yr rates
+│   ├── zhvi_zip3.csv         # Zillow ZHVI at zip3 level
+│   └── treasury_yields.csv   # Treasury zero-coupon curve (pending)
+├── notebooks/                # Exploration and analysis
+├── outputs/                  # Model checkpoints, results, plots
+├── logs/                     # SLURM job logs
+├── scripts/
+│   ├── train_hazard.py       # Discrete hazard model training
+│   ├── run_hazard.sbatch     # SLURM job for hazard training
+│   ├── oas_engine.py         # Monte Carlo OAS cashflow engine
+│   ├── run_oas.sbatch        # SLURM job for OAS
+│   ├── shap_transformer.py   # SHAP interpretability
+│   ├── train_ddpm.py         # DDPM rate path simulation
+│   ├── synthetic_rate_paths.py # Hull-White synthetic paths
+│   └── segmentation_analysis.py # Transformer vs XGBoost by loan bucket
+├── prepare_sequences.py      # Data pipeline: raw CSV → padded sequences
+├── train_transformer.py      # Binary classifier Transformer
+├── train_zip3.py             # Static models with zip3 covariate
+├── run_prepare.sbatch        # SLURM job for data prep
+├── work_log.txt              # Hourly work log
 └── README.md
-```
 
 ---
 
 ## Data
-**Source:** Fannie Mae Single-Family Loan Performance Dataset
+**Source:** Fannie Mae Single-Family Loan Performance Dataset  
 **Portal:** https://loanperformancedata.fanniemae.com
 
 ### Vintages Used
 | Vintage | Loans | Prepay Rate | Rate Environment | Prepayment Driver |
 |---------|-------|-------------|-----------------|-------------------|
-| 2020Q1 | 683,383 | 3.56% | ~3% (COVID low) | Refi-driven |
-| 2020Q2 | 1,235,302 | 1.32% | ~3% (COVID low) | Refi-driven |
-| 2020Q3 | 1,383,813 | 0.75% | ~3% (COVID low) | Refi-driven |
-| 2020Q4 | 1,513,322 | 0.64% | ~3% (COVID low) | Refi-driven |
-| 2021Q1 | 1,413,004 | 0.58% | ~3% (COVID low) | Refi-driven |
-| 2021Q2 | 1,315,673 | 0.66% | ~3% (COVID low) | Refi-driven |
-| 2021Q3 | 1,038,463 | 0.81% | ~3% (COVID low) | Refi-driven |
-| 2021Q4 | 1,012,946 | 0.81% | ~3% (COVID low) | Refi-driven |
-| 2023Q1 | 210,545 | 0.68% | ~6.5–7% (high) | Turnover-driven |
-| **Total** | **9,806,451** | **0.97%** | | |
+| 2020Q1 | 341,184 | 3.84% | ~3% (COVID low) | Refi-driven |
+| 2020Q2 | 617,442 | 1.44% | ~3% (COVID low) | Refi-driven |
+| 2020Q3 | 691,357 | 0.83% | ~3% (COVID low) | Refi-driven |
+| 2020Q4 | 755,874 | 0.71% | ~3% (COVID low) | Refi-driven |
+| 2021Q1 | 705,614 | 0.63% | ~3% (COVID low) | Refi-driven |
+| 2021Q2 | 656,891 | 0.70% | ~3% (COVID low) | Refi-driven |
+| 2021Q3 | 518,391 | 0.89% | ~3% (COVID low) | Refi-driven |
+| 2021Q4 | 505,505 | 0.88% | ~3% (COVID low) | Refi-driven |
+| 2023Q1 | 105,087 | 0.71% | ~6.5–7% (high) | Turnover-driven |
+| **Total** | **4,897,345** | **1.06%** | | |
 
-**Note:** Data is organized by origination quarter. Each file contains static loan characteristics at origination plus dynamic monthly performance data through the most recent available quarter.
+**Format:** Post-October 2020 single-file format, 109 fields, pipe-delimited (`|`), no header.
 
-**Format:** Post-October 2020 single-file format, 108–109 fields, pipe-delimited (`|`), no header.
-
-### Key Design Decisions
-- Time-varying PMMS rate used for refi incentive — monthly average 30yr fixed rate from Freddie Mac matched to each loan's last reporting period
-- Target variable: `prepaid = 1` if `zero_balance_code == 1.0` (voluntary prepayment), else 0
-- One row per loan (last observed monthly record used for outcome)
-- `original_upb` used in current_ltv numerator (not `current_actual_upb`) to avoid data leakage — current UPB drops to zero for prepaid loans in their final record
+### Sequence Data
+- Train: 3,917,876 loans × 33 months × 6 features
+- Test: 979,469 loans × 33 months × 6 features
+- Stored as padded numpy arrays with boolean mask (True = real timestep)
 
 ---
 
@@ -59,142 +70,158 @@ mortgage_prepayment/
 | `refi_incentive` | `original_interest_rate - pmms_rate_at_reporting_period` (time-varying) |
 | `borrower_credit_score` | FICO score at origination |
 | `original_ltv` | Loan-to-value ratio at origination |
-| `current_ltv` | Dynamic LTV using Zillow ZHVI appreciation: `original_upb / (original_home_value × zhvi_last/zhvi_orig) × 100` |
-| `original_upb` | Original unpaid principal balance (loan size) |
+| `current_ltv` | Dynamic LTV: `original_upb / (orig_home_value × zhvi_now/zhvi_orig) × 100` |
+| `original_upb` | Original unpaid principal balance |
 | `loan_age_months` | Age of loan in months |
 
-**External data sources:**
-- **Freddie Mac PMMS** — weekly 30yr fixed rates → monthly averages → matched by reporting period
-- **Zillow ZHVI** — zip-level monthly home values → aggregated to zip3 → matched by zip3 + period
+**External data:**
+- **Freddie Mac PMMS** — monthly 30yr fixed rates, matched by reporting period
+- **Zillow ZHVI** — zip3-level monthly home values for dynamic LTV
 
 ---
 
 ## Results
 
-### Phase 1 — 2023 Q1 Only (~210K loans, 0.68% prepay rate)
+### Phase 1 — Single Vintage 2023Q1 (~105K loans)
 | Model | AUC |
 |-------|-----|
 | Logistic Regression | **0.7765** |
-| Random Forest (tuned) | 0.7743 |
+| Random Forest | 0.7743 |
 | XGBoost | 0.7713 |
-| MLP Neural Network | 0.7706 |
+| MLP | 0.7706 |
 | LightGBM | 0.7688 |
 
-**Key insight:** All models converge to ~0.77 AUC. LR wins because 2023Q1 loans originated at 6–7% with current rates at ~6.8% — virtually no refinancing incentive exists. Almost all prepayments are turnover-driven (home sales), which is a linear, low-complexity signal. The nonlinearity that tree-based models capture simply isn't present in this rate regime.
+All models converge ~0.77. Turnover-driven regime has low nonlinearity — LR wins.
 
-**FICO sign flip:** Higher FICO borrowers prepay *less* in this dataset — counterintuitive at first, but explained by turnover dynamics. Lower FICO borrowers may be more financially stressed and more likely to sell.
+### Phase 2–4 — Multi-Vintage 2020–2023 with Time-Varying Features
+| Model | AUC |
+|-------|-----|
+| XGBoost | 0.8306 |
+| LightGBM | 0.8306 |
+| MLP | 0.8289 |
+| Random Forest | 0.8174 |
+| Logistic Regression | 0.8074 |
 
-### Phase 2 — Multi-Vintage 2020–2023 (9.8M loans, 0.97% overall prepay rate) ✅
-| Model | AUC | vs Phase 1 |
-|-------|-----|------------|
-| **XGBoost** | **0.8297** | +0.0584 |
-| LightGBM | 0.8295 | +0.0607 |
-| MLP Neural Network | 0.8192 | +0.0486 |
-| Random Forest | 0.8189 | +0.0446 |
-| Logistic Regression | 0.7979 | +0.0214 |
+Tree models take the lead as refi nonlinearity enters the data.
 
-**Key insight:** Hypothesis confirmed. Once 2020–2021 refi-driven prepayments are included, the model rankings flip — XGBoost and LightGBM now lead, while LR falls to last. The S-curve nonlinearity of refinancing behavior is now present in the data, and tree-based models capture it better.
+### Phase 5 — Transformer (Full Sequence Model)
+| Model | AUC |
+|-------|-----|
+| **Transformer** | **0.8431** |
+| XGBoost | 0.8306 |
+| LightGBM | 0.8306 |
+| MLP | 0.8289 |
+| Random Forest | 0.8174 |
+| Logistic Regression | 0.8074 |
 
-**FICO sign corrected:** With refi behavior present, higher FICO borrowers now correctly show *higher* prepayment probability — they are more able to refinance when rates drop.
+Transformer learns path dependence across 33-month sequences. Best overall model.
 
-**loan_age_months flipped negative:** In the refi regime, newer loans prepay more — they originated at low rates and face little burnout. Older loans may have already refinanced (burnout effect).
+**Architecture:** input 6 → d_model 64, learnable positional embeddings (MAX_SEQ=33), 2-layer encoder 4 heads dim_ff=256, mean pooling with mask, 64→32→1 classifier. BCEWithLogitsLoss + pos_weight. Adam lr=1e-3, StepLR step=5 gamma=0.5, grad clip 1.0.
 
-### Phase 3 — Time-Varying PMMS Rate ✅
-| Model | AUC | vs Phase 2 |
-|-------|-----|------------|
-| LightGBM | **0.8310** | +0.0015 |
-| XGBoost | 0.8308 | +0.0011 |
-| MLP Neural Network | 0.8208 | +0.0016 |
-| Random Forest | 0.8190 | +0.0001 |
-| Logistic Regression | 0.8077 | +0.0098 |
+### Phase 6 — zip3 as Raw Covariate (Static Models)
+| Model | Baseline | + zip3 | Delta |
+|-------|----------|--------|-------|
+| XGBoost | 0.8306 | 0.8367 | +0.006 |
+| LightGBM | 0.8306 | 0.8361 | +0.006 |
+| MLP | 0.8289 | 0.8230 | -0.006 |
+| Random Forest | 0.8174 | 0.8111 | -0.006 |
+| Logistic Regression | 0.8074 | 0.8051 | ~0 |
 
-**Key insight:** Time-varying rate helped LR most (+0.0098) — refi incentive is now properly measured. LightGBM edges ahead of XGBoost.
+Tree models benefit; linear/neural models do not. Geographic signal is real but nonlinear — motivates zip3 embeddings.
 
-### Phase 4 — Dynamic LTV via Zillow ZHVI ✅
-| Model | AUC | vs Phase 3 |
-|-------|-----|------------|
-| XGBoost | **0.8306** | -0.0002 |
-| LightGBM | 0.8306 | -0.0004 |
-| MLP Neural Network | 0.8289 | +0.0081 |
-| Random Forest | 0.8174 | -0.0016 |
-| Logistic Regression | 0.8074 | -0.0003 |
+### Phase 7 — Segmentation Analysis (Transformer vs XGBoost)
+Transformer wins every loan attribute bucket. Largest gaps:
+- Oldest loans (loan_age > 24mo): +0.024
+- Near-zero refi incentive: +0.018
 
-**Key insight:** Dynamic LTV helped MLP most (+0.008) but had minimal impact on tree-based models — they already captured the collateral signal through original LTV and loan age. Current LTV has low feature importance in RF (0.04) and negative coefficient in LR — likely multicollinearity with original LTV.
+### Phase 8 — SHAP Interpretability
+| Feature | Mean |SHAP| |
+|---------|------|
+| loan_age_months | 0.040 |
+| borrower_credit_score | 0.031 |
+| refi_incentive | 0.029 |
+| original_ltv | 0.025 |
+| current_ltv | 0.024 |
+| original_upb | 0.007 |
 
-**avg current_ltv by vintage:**
-- 2020Q1: 59.2% — large appreciation, lots of equity built
-- 2023Q1: 71.5% — less appreciation, closer to original LTV
+Peak activation at month 28. Negative loan_age SHAP at month 28 = burnout signal. Discrete activation spikes at months 3, 16, 28.
+
+### Phase 9 — Hazard Model (Discrete-Time Survival)
+Retrained Transformer as discrete hazard model — predicts P(prepay at month t | survived to t).
+
+**Test AUC: 0.7958**
+
+Key fixes: mask convention (True=real), oversampling prepaid loans 50% per batch (only 0.036% of loan-month pairs are positive events), ReduceLROnPlateau scheduler.
+
+### Phase 10 — DDPM Rate Simulation
+Trained DDPM on full PMMS history (660 monthly observations) to generate synthetic rate paths. Outputs: 1000 paths × 34 months, rates 0.5–14%, mean ~6.8%.
+
+### Phase 11 — OAS Cashflow Engine (In Progress)
+Monte Carlo OAS pipeline:
+1. For each DDPM rate path, recompute refi incentive per loan per month
+2. Run hazard model → per-month prepayment probabilities
+3. Compute scheduled cashflows adjusted for prepayments
+4. Discount back at path rates → price per path
+5. Average across 1000 paths → model fair price
+
+**Current limitation:** PMMS embeds g-fee and primary-secondary spread — need separate risk-free curve (Treasury/SOFR) for discounting. DDPM paths are real-world (P) measure — need risk-neutral (Q) paths anchored to today's term structure.
+
+**Next steps:**
+- Pull Treasury zero-coupon curve from FRED
+- Implement risk-neutral drift correction or conditional DDPM generation
+- Plug in Bloomberg/ICE market prices from Gupta → compute OAS spread
 
 ---
 
 ## Infrastructure
-**HPC:** NYU Torch (`login.torch.hpc.nyu.edu`)
-**Working directory:** `/scratch/at7095/mortgage_prepayment/`
-**Conda env:** `mortgage_env` at `/scratch/at7095/conda_envs/mortgage_env`
+**HPC:** NYU Torch (`login.torch.hpc.nyu.edu`)  
+**Working directory:** `/scratch/at7095/mortgage_prepayment/`  
+**Conda env:** `/scratch/at7095/conda_envs/mortgage_env`  
+**SLURM account:** `torch_pr_932_general`  
+**GitHub:** `tiwari-adarsh0830/mortgage-prepayment`
 
 ### Connect to Torch
 ```bash
 ssh-keygen -R login.torch.hpc.nyu.edu
-ssh -o KexAlgorithms=curve25519-sha256 at7095@login.torch.hpc.nyu.edu
+ssh at7095@login.torch.hpc.nyu.edu
+# Note: submit without --partition flag
 ```
 
-### Submit Training Job
-```bash
-sbatch /scratch/at7095/mortgage_prepayment/run_train.sbatch
-```
-
-### Monitor Job
-```bash
-squeue -u at7095
-tail -f /scratch/at7095/mortgage_prepayment/logs/train_<JOBID>.out
-```
+### Key Paths
+| Path | Description |
+|------|-------------|
+| `/data/raw/2020Q1.csv` | Raw Fannie Mae (pipe-delimited, no header, 109 cols) |
+| `/data/sequences/train_seq.npy` | Train sequences (3,917,876×33×6) |
+| `/data/sequences/test_seq.npy` | Test sequences (979,469×33×6) |
+| `/data/sequences/train_mask.npy` | Boolean mask True=real |
+| `/data/sequences/train_prepay_timestep.npy` | Prepayment timestep per loan (-1 if none) |
+| `/data/sequences/scaler.pkl` | StandardScaler for 6 features |
+| `/outputs/transformer_best.pt` | Binary classifier checkpoint |
+| `/outputs/hazard_best.pt` | Hazard model checkpoint |
+| `/outputs/ddpm_rate_paths.npy` | 1000 DDPM rate paths (1000×34) |
+| `/outputs/oas_loan_prices.npy` | OAS model prices (1000 loans × 1000 paths) |
 
 ---
 
-## Roadmap
-
-### Completed
-- [x] Baseline models on 2023Q1 (LR, RF, XGBoost, LightGBM, MLP) — AUC ~0.77
-- [x] EDA — prepayment by refi incentive, FICO, LTV buckets
-- [x] Set up NYU Torch HPC environment + conda env
-- [x] Transfer 2020Q1–Q4, 2021Q1–Q4, 2023Q1 to Torch (9.8M loans)
-- [x] Multi-vintage training pipeline with chunk-based memory-efficient loading
-- [x] Multi-vintage results — XGBoost leads at 0.8297
-- [x] Time-varying PMMS rate — Freddie Mac monthly rates merged by reporting period
-- [x] Dynamic LTV — Zillow ZHVI merged at zip3 level
-- [x] Fixed data leakage — use original_upb not current_actual_upb in current_ltv
-- [x] Fixed MLP sigmoid + BCEWithLogitsLoss double application bug
-
-### Next Steps
-- [ ] Restructure data to keep full monthly sequence per loan (for Transformer)
-- [ ] Implement PyTorch Transformer with location embedding at zip3 level
-- [ ] Read Fuster et al. (SSRN 3072038) — ML fairness in credit markets
-- [ ] Study Higham et al. (arxiv 2312.14977) — diffusion model math primer
-- [ ] Implement diffusion model (arxiv 2509.11047)
-- [ ] Add 2018–2019 vintages for additional rate regime coverage
-- [ ] Switch from binary classification to survival/hazard model for CPR output
-- [ ] Ensemble averaging across models
+## Key Engineering Decisions & Bugs Fixed
+| Issue | Fix |
+|-------|-----|
+| Data leakage in current_ltv | Use `original_upb` not `current_actual_upb` |
+| Column misalignment | Dict-based col_map sorted by file position index |
+| MLP double sigmoid | Remove sigmoid from final layer with BCEWithLogitsLoss |
+| OOM on 400M+ rows | Split into CPU data prep + GPU training SLURM jobs |
+| Slow ZHVI merge | Vectorized pandas join instead of row-by-row apply |
+| Mask convention | True=real throughout; invert inside forward() for transformer encoder |
+| Hazard class imbalance | Oversample prepaid loans 50% per batch; pos_weight=1.0 |
+| SLURM partition rejection | Submit without --partition flag |
 
 ---
 
 ## References
-1. Fuster, Goldsmith-Pinkham, Ramadorai, Walther — "Predictably Unequal? The Effects of Machine Learning on Credit Markets" — *Journal of Finance* (SSRN 3072038)
-2. Higham et al. — "Diffusion Models for Generative AI: An Introduction for Applied Mathematicians" — arxiv 2312.14977
-3. Valencia et al. — "Data-Efficient Ensemble Forecasting with Diffusion Models" — arxiv 2509.11047
-4. Zillow Research Data — ZHVI (Home Value Index) — https://www.zillow.com/research/data/
-
----
-
-## Notes & Decisions Log
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| Apr 19, 2026 | Use 2020–2021 vintages | COVID-era low rates (~3%) create refi-driven prepayment — best contrast with 2023Q1 turnover regime |
-| Apr 19, 2026 | Work in /scratch on Torch | Home dir quota too small for multi-GB CSV files |
-| Apr 19, 2026 | No Q1-only restriction | Fannie Mae data is by origination quarter, not reporting quarter — using all quarters of 2020–2021 |
-| Apr 20, 2026 | Chunk-based CSV loading | Full file loading caused OOM even with usecols — chunked reading at 500K rows resolves this |
-| Apr 20, 2026 | Binary classification target | Simplification for Phase 1–4; longer term should move to survival/hazard model for CPR output |
-| Apr 23, 2026 | Time-varying PMMS rate | Gupta suggestion — monthly average 30yr fixed rate more accurate than fixed 6.8% |
-| Apr 23, 2026 | ZHVI at zip3 level | Fannie Mae masks geography to 3-digit zip prefix — must aggregate Zillow zip-level data to zip3 |
-| Apr 23, 2026 | Use original_upb in current_ltv | current_actual_upb = 0 for prepaid loans in final record — would leak the target |
-| Apr 23, 2026 | Remove sigmoid from MLP | BCEWithLogitsLoss applies sigmoid internally — double application was a bug |
-| Apr 23, 2026 | Dict-based usecols mapping | Pandas returns usecols in file order not specified order — positional col_names assignment caused misalignment |
+1. Ho et al. — "Denoising Diffusion Probabilistic Models" — arxiv 2006.11239
+2. arxiv 2011.13456 — DDPM variant
+3. arxiv 2410.18897 — DDPM + wavelet for synthetic financial time series
+4. arxiv 2511.17892 — HJM no-arbitrage neural yield curve (AER penalty)
+5. Fuster et al. — "Predictably Unequal?" — SSRN 3072038
+6. Higham et al. — "Diffusion Models for Applied Mathematicians" — arxiv 2312.14977
+7. Valencia et al. — "Data-Efficient Ensemble Forecasting with Diffusion Models" — arxiv 2509.11047
