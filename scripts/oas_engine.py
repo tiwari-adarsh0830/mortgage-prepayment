@@ -141,6 +141,12 @@ def compute_prices_vectorized(h, seq_lens, orig_upbs, annual_rate, path_rates):
         balance  = np.maximum(balance - principal - prepay, 0.0)
         survival = survival * (1 - h_t)  # kept for potential future use
 
+    # Terminal value: remaining balance at end of sequence discounted back
+    # This captures the value of cashflows beyond month 33
+    # Use the last month's discount factor and remaining balance
+    terminal_value = balance / cum_disc  # (N,) remaining balance discounted to t=0
+    pv += terminal_value
+
     # Price as % of par
     prices = pv / orig_upbs * 100.0
     return prices
@@ -153,8 +159,10 @@ def main():
     print("Loading sequences and rate paths...")
     test_seq   = np.load(os.path.join(SEQ_DIR, 'test_seq.npy'),  mmap_mode='r')
     test_mask  = np.load(os.path.join(SEQ_DIR, 'test_mask.npy'), mmap_mode='r')
-    rate_paths = np.load(os.path.join(OUTPUTS, 'ddpm_rate_paths.npy'))  # (1000, 34)
-    rate_paths = rate_paths[:N_PATHS, :MAX_SEQ]  # (N_PATHS, MAX_SEQ)
+    treasury_paths = np.load(os.path.join(OUTPUTS, 'treasury_rate_paths.npy'))  # (1000, 33)
+    pmms_paths     = np.load(os.path.join(OUTPUTS, 'pmms_rate_paths_rn.npy'))    # (1000, 33)
+    treasury_paths = treasury_paths[:N_PATHS, :MAX_SEQ]
+    pmms_paths     = pmms_paths[:N_PATHS, :MAX_SEQ]
 
     with open(os.path.join(SEQ_DIR, 'scaler.pkl'), 'rb') as f:
         scaler = pickle.load(f)
@@ -191,24 +199,23 @@ def main():
         if p % 100 == 0:
             print(f"  Path {p}/{N_PATHS}...", flush=True)
 
-        path_rates = rate_paths[p]  # (33,) in %
+        pmms_path     = pmms_paths[p]      # (33,) PMMS rates in % — for refi incentive
+        treasury_path = treasury_paths[p]  # (33,) Treasury rates in % — for discounting
 
-        # Rebuild sequences with path-driven refi_incentive
-        # refi_t = orig_rate(%) - pmms_t(%) — per loan, vectorized across t
-        # orig_rate_pct: (N,) in %, path_rates: (T,) in %
+        # Rebuild sequences with path-driven refi_incentive using PMMS path
         orig_rate_pct = orig_rate * 100  # (N,) convert decimal to %
         path_seq = sampled_seq.copy()
         for t in range(MAX_SEQ):
-            pmms_t = path_rates[t]                             # scalar
+            pmms_t = pmms_path[t]                              # scalar
             refi_t = orig_rate_pct - pmms_t                    # (N,) per-loan
             path_seq[:, t, 0] = (refi_t - refi_mean) / refi_std
 
-        # Get per-timestep hazard probs under this path
+        # Get per-timestep hazard probs under this PMMS path
         h = get_hazard_probs(model, path_seq, sampled_mask)  # (N, 33)
 
-        # Vectorized cashflow discounting
+        # Vectorized cashflow discounting using Treasury path
         prices = compute_prices_vectorized(
-            h, seq_lens, orig_upb, orig_rate, path_rates
+            h, seq_lens, orig_upb, orig_rate, treasury_path
         )
         loan_prices[:, p] = prices
 
