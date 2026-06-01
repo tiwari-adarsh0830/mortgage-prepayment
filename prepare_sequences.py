@@ -23,9 +23,10 @@ VINTAGES = [
 ]
 
 MAX_SEQ_LEN  = 33
-N_FEATURES   = 6
+N_FEATURES   = 9
 FEATURE_COLS = ['refi_incentive', 'borrower_credit_score', 'original_ltv',
-                'current_ltv', 'original_upb', 'loan_age_months']
+                'current_ltv', 'original_upb', 'loan_age_months',
+                'dti', 'loan_purpose_enc', 'property_type_enc']
 
 cols = [
     'loan_id', 'monthly_reporting_period', 'channel', 'seller_name', 'servicer_name',
@@ -91,6 +92,9 @@ def load_vintage(vintage, pmms_rates, zhvi_df, keep_ids=None, sample_frac=0.5):
         all_cols.index('origination_date') + 1:          'origination_date',
         all_cols.index('zip') + 1:                       'zip3',
         all_cols.index('extra_13') + 1:                  'zero_balance_code_actual',
+        all_cols.index('dti') + 1:                       'dti',
+        all_cols.index('loan_purpose') + 1:              'loan_purpose',
+        all_cols.index('property_type') + 1:             'property_type',
     }
     sorted_cols     = dict(sorted(col_map.items()))
     usecols_idx_raw = list(sorted_cols.keys())
@@ -143,6 +147,13 @@ def load_vintage(vintage, pmms_rates, zhvi_df, keep_ids=None, sample_frac=0.5):
     df['price_appreciation']  = df['zhvi_now'] / df['zhvi_orig']
     df['current_ltv']         = (df['original_upb'] / (df['original_home_value'] * df['price_appreciation'])) * 100
     df['loan_age_months']     = df['loan_age'].astype(float)
+
+    # Encode categorical features
+    df['dti'] = pd.to_numeric(df['dti'], errors='coerce')
+    # loan_purpose: N=0 (no refi/purchase), Y=1 (refi/cash-out)
+    df['loan_purpose_enc'] = df['loan_purpose'].map({'N': 0, 'Y': 1}).fillna(0).astype(float)
+    # property_type: P=0 (planned unit dev), R=1 (row house), C=2 (condo)
+    df['property_type_enc'] = df['property_type'].map({'P': 0, 'R': 1, 'C': 2}).fillna(0).astype(float)
 
     prepaid_set   = set(df.loc[df['zero_balance_code_actual'] == 1.0, 'loan_id'].unique())
     df['prepaid'] = df['loan_id'].isin(prepaid_set).astype(int)

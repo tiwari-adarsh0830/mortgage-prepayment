@@ -25,7 +25,7 @@ TEST_LABELS  = os.path.join(SEQ_DIR, "test_labels.npy")
 TEST_PREPAY  = os.path.join(SEQ_DIR, "test_prepay_timestep.npy")
 
 MAX_SEQ    = 33
-N_FEATURES = 6
+N_FEATURES = 9
 DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Training config
@@ -39,7 +39,7 @@ STEPS_PER_EPOCH = 10000   # random timestep sampling — define epoch by steps n
 
 # ── Model (identical to binary classifier) ────────────────────────────────────
 class PrepaymentTransformer(nn.Module):
-    def __init__(self, input_dim=6, d_model=64, n_heads=4, n_layers=2,
+    def __init__(self, input_dim=9, d_model=64, n_heads=4, n_layers=2,
                  dim_ff=256, max_seq=33, dropout=0.1):
         super().__init__()
         self.input_proj    = nn.Linear(input_dim, d_model)
@@ -216,15 +216,10 @@ def main():
     results    = []
     start_epoch = 1
 
-    # Resume from checkpoint if available
+    # Resume disabled — retraining with new 9-feature input
+    # (old checkpoint has 6-feature weights, incompatible)
     ckpt_path = os.path.join(OUTPUTS, 'hazard_best.pt')
-    if os.path.exists(ckpt_path):
-        print("Resuming from checkpoint...", flush=True)
-        ckpt = torch.load(ckpt_path, map_location=DEVICE)
-        model.load_state_dict(ckpt['model_state'])
-        best_auc    = ckpt['auc']
-        start_epoch = ckpt['epoch'] + 1
-        print(f"  Loaded epoch {ckpt['epoch']} AUC={best_auc:.4f}", flush=True)
+    # if os.path.exists(ckpt_path): ... (disabled)
 
     print(f"\nTraining for {N_EPOCHS} epochs × {STEPS_PER_EPOCH} steps (start={start_epoch})...", flush=True)
 
