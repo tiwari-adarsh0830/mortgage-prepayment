@@ -201,6 +201,22 @@ def main():
     pmms_paths, spread = compute_pmms_paths(treasury_paths, pmms_csv, treasury_csv)
     print(f"PMMS paths: mean={pmms_paths.mean():.3f}%, std={pmms_paths.std():.3f}%")
 
+    # Also apply drift correction to conditional DDPM paths
+    cond_path = os.path.join(OUTPUTS, 'ddpm_conditional_paths.npy')
+    if os.path.exists(cond_path):
+        print("
+--- Processing Conditional DDPM Paths ---")
+        cond_paths = np.load(cond_path)[:, :MAX_SEQ]  # (1000, 33)
+        cond_treasury, cond_shifts = apply_drift_correction(cond_paths, forward_rates)
+        cond_pmms = cond_treasury + spread
+        print(f"Conditional treasury: mean={cond_treasury.mean():.3f}%, start={cond_treasury[:,0].mean():.3f}%")
+        validate_zcb_repricing(cond_treasury, monthly_zeros)
+        np.save(os.path.join(OUTPUTS, 'treasury_cond_paths.npy'), cond_treasury)
+        np.save(os.path.join(OUTPUTS, 'pmms_cond_paths.npy'),     cond_pmms)
+        print("Saved: treasury_cond_paths.npy, pmms_cond_paths.npy")
+    else:
+        print("Conditional paths not found, skipping.")
+
     # Save
     np.save(os.path.join(OUTPUTS, 'treasury_rate_paths.npy'), treasury_paths)
     np.save(os.path.join(OUTPUTS, 'pmms_rate_paths_rn.npy'),  pmms_paths)
