@@ -26,7 +26,7 @@ OUTPUTS = os.path.join(BASE, "outputs")
 
 DEVICE         = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_SEQ        = 33
-N_FEATURES     = 6
+N_FEATURES     = 9
 N_LOANS_SAMPLE = 1000
 N_PATHS        = 1000
 # Per-loan orig_rate recovered from sequences (see main())
@@ -36,7 +36,7 @@ PMMS_MEAN_2020_2021 = 3.03  # % — used to recover per-loan orig_rate
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 class PrepaymentTransformer(nn.Module):
-    def __init__(self, input_dim=6, d_model=64, n_heads=4, n_layers=2,
+    def __init__(self, input_dim=9, d_model=64, n_heads=4, n_layers=2,
                  dim_ff=256, max_seq=33, dropout=0.1):
         super().__init__()
         self.input_proj    = nn.Linear(input_dim, d_model)
