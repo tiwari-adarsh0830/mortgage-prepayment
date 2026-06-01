@@ -113,10 +113,11 @@ def compute_prices_vectorized(h, seq_lens, orig_upbs, annual_rate, path_rates):
     n_payments   = 360
     pmt = orig_upbs * monthly_note / (1 - (1 + monthly_note) ** (-n_payments))  # (N,)
 
-    balance  = orig_upbs.copy()   # (N,)
-    survival = np.ones(N)         # (N,)
-    pv       = np.zeros(N)        # (N,) present value accumulator
-    cum_disc = np.ones(N)         # (N,) cumulative discount factor
+    balance   = orig_upbs.copy()                        # (N,)
+    survival  = np.ones(N)                              # (N,)
+    pv        = np.zeros(N)                             # (N,)
+    cum_disc  = np.ones(N)                              # (N,)
+    total_cfs = np.zeros((N, T), dtype=np.float32)     # (N, T)
 
     monthly_disc = path_rates / 100.0 / 12.0  # (T,) monthly discount rates
 
@@ -136,6 +137,7 @@ def compute_prices_vectorized(h, seq_lens, orig_upbs, annual_rate, path_rates):
 
         # Add discounted cashflow for active loans
         pv += np.where(active, cf / cum_disc, 0.0)
+        total_cfs[:, t] = np.where(active, cf, 0.0)
 
         # Update state
         balance  = np.maximum(balance - principal - prepay, 0.0)
@@ -149,7 +151,7 @@ def compute_prices_vectorized(h, seq_lens, orig_upbs, annual_rate, path_rates):
 
     # Price as % of par
     prices = pv / orig_upbs * 100.0
-    return prices
+    return prices, total_cfs
 
 
 def main():
@@ -193,7 +195,8 @@ def main():
     model = load_hazard_model()
 
     print(f"\nRunning OAS engine: {N_LOANS_SAMPLE} loans x {N_PATHS} paths...")
-    loan_prices = np.zeros((N_LOANS_SAMPLE, N_PATHS), dtype=np.float32)
+    loan_prices    = np.zeros((N_LOANS_SAMPLE, N_PATHS), dtype=np.float32)
+    loan_cashflows = np.zeros((N_LOANS_SAMPLE, N_PATHS, MAX_SEQ), dtype=np.float32)
 
     for p in range(N_PATHS):
         if p % 100 == 0:
@@ -214,10 +217,11 @@ def main():
         h = get_hazard_probs(model, path_seq, sampled_mask)  # (N, 33)
 
         # Vectorized cashflow discounting using Treasury path
-        prices = compute_prices_vectorized(
+        prices, cfs = compute_prices_vectorized(
             h, seq_lens, orig_upb, orig_rate, treasury_path
         )
-        loan_prices[:, p] = prices
+        loan_prices[:, p]       = prices
+        loan_cashflows[:, p, :] = cfs
 
     # Average across paths
     model_prices = loan_prices.mean(axis=1)
@@ -240,7 +244,9 @@ def main():
         'annual_coupon': 'per_loan_recovered',
         'note': 'Prices as % of par. OAS pending market price data from advisor.'
     }
-    np.save(os.path.join(OUTPUTS, 'oas_loan_prices.npy'), loan_prices)
+    np.save(os.path.join(OUTPUTS, 'oas_loan_prices.npy'),  loan_prices)
+    np.save(os.path.join(OUTPUTS, 'oas_cashflows.npy'),    loan_cashflows)
+    np.save(os.path.join(OUTPUTS, 'oas_orig_upbs.npy'),    orig_upb)
     with open(os.path.join(OUTPUTS, 'oas_results.json'), 'w') as f:
         json.dump(results, f, indent=2)
 
