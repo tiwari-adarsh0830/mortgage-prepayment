@@ -111,6 +111,11 @@ Tasks completed:
 
 ========================================================
 TOTAL ESTIMATED HOURS THROUGH SESSION 4: ~127 hrs
+
+------------------------------------------------------------
+SESSIONS 5–7 — May 26–31, 2026
+------------------------------------------------------------
+See dated entries below. Additional ~23 hrs logged.
 ========================================================
 
 Notes:
@@ -118,8 +123,9 @@ Notes:
   corroborating timestamps for all code work
 - SLURM job IDs on record: 6686984, 7437227, 9554254, 9569295,
   9574051, 9574676, 9575149, 9621004
-- All HPC work on NYU Torch cluster under account torch_pr_932_general2026-05-26 | ~13hrs | Hazard model debugging and training: partition fix (no --partition), prepare_sequences job (9569295 ok), fixed evaluate_hazard survival CDF, fixed pos_weight (2796->29->1.0 with oversampling), fixed mask convention bug (True=real vs padding in sampler+forward+eval), fixed ReduceLROnPlateau verbose arg, fixed scheduler.step(auc) ordering bug, added 50% prepaid oversampling in HazardSampler, added resume-from-checkpoint logic, bumped STEPS_PER_EPOCH 2000->10000 N_EPOCHS 30->50. Jobs: 9554254(timeout), 9569295(prepare-ok), 9574051(auc0.48), 9574676(auc0.53), 9575149(auc0.53-maskfix), 9621004(auc0.5428), 9622791(crashed-verbose), 9624297(crashed-auc-unbound), 9624384(auc0.7958-breakthrough), 9625641(auc0.7958-resumed). Final best hazard AUC: 0.7958. GitHub pushed: 92f10f6
+- All HPC work on NYU Torch cluster under account torch_pr_932_general
+
+2026-05-26 | ~13hrs | Hazard model debugging and training: partition fix (no --partition), prepare_sequences job (9569295 ok), fixed evaluate_hazard survival CDF, fixed pos_weight (2796->29->1.0 with oversampling), fixed mask convention bug (True=real vs padding in sampler+forward+eval), fixed ReduceLROnPlateau verbose arg, fixed scheduler.step(auc) ordering bug, added 50% prepaid oversampling in HazardSampler, added resume-from-checkpoint logic, bumped STEPS_PER_EPOCH 2000->10000 N_EPOCHS 30->50. Jobs: 9554254(timeout), 9569295(prepare-ok), 9574051(auc0.48), 9574676(auc0.53), 9575149(auc0.53-maskfix), 9621004(auc0.5428), 9622791(crashed-verbose), 9624297(crashed-auc-unbound), 9624384(auc0.7958-breakthrough), 9625641(auc0.7958-resumed). Final best hazard AUC: 0.7958. GitHub pushed: 92f10f6
 2026-05-27 | ~4hrs | OAS engine completed (job 9626801): mean price 57.81% of par. Gupta feedback: use risk-free curve (Treasury/SOFR) for discounting not PMMS, need risk-neutral Q paths anchored to today's term structure (conditional DDPM or drift correction). Meeting scheduled Friday June 6 10:30am
 2026-05-27 | ~5hrs | Risk-neutral rate paths: bootstrapped Treasury zero curve, forward-rate drift correction on DDPM paths, PMMS-Treasury spread separation (1.89%), terminal value fix in OAS engine. OAS prices improved: mean 57.81%->81.78%, median 97.60%. Jobs: 9674440(risk_neutral), 9674536(oas_v2). GitHub: c496da2
-2026-05-27 | session end | Total today ~5hrs. Risk-neutral paths + OAS engine v2 complete. Ready for Friday June 6 meeting with Gupta. Waiting on Bloomberg/ICE prices from Gupta.
 2026-05-28 | ~10hrs | Added DTI/loan_purpose/property_type features (6->9), rebuilt sequences (job 9962503), retrained hazard model AUC 0.7939->0.8181 (jobs 9967652, 9996792). Trained conditional DDPM (job 9962528, start=6.18%). Applied drift correction to conditional paths (jobs 10005352, 10012818). Updated OAS engine: conditional paths, cashflow matrix saving. OAS solver with brentq. Median OAS price 99.06%. GitHub committed.
