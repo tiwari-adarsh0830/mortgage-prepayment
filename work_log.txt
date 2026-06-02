@@ -1,0 +1,125 @@
+========================================================
+RA WORK LOG — Adarsh Tiwari (at7095)
+Project: Mortgage Prepayment Risk — NYU Stern / Prof. Arpit Gupta
+========================================================
+
+------------------------------------------------------------
+SESSION 1 — RA_1 Chat (approx. early-mid April 2026)
+Estimated hours: 45 hrs
+------------------------------------------------------------
+
+Tasks completed:
+- Read and understood Fannie Mae Single-Family Loan Performance Data schema
+  (109 cols, pipe-delimited, no header, MMYYYY date format, zip3 prefix)
+- Set up NYU Torch HPC environment: conda env, scratch directory, SLURM account
+- Reproduced baseline notebook (single-quarter 2020Q1, 5 models, AUC ~0.77)
+- Expanded to multi-vintage data (2020Q1–2021Q4 + 2023Q1, 9 vintages, ~9.8M loans)
+- Implemented time-varying PMMS rate features (refi_incentive)
+- Merged Zillow ZHVI at zip3 level for dynamic LTV computation
+- Debugged column alignment bug (pandas usecols returns file-order, not specified order)
+  → fix: dict-based col_map sorted by file position index
+- Debugged data leakage: current_actual_upb = 0 for prepaid loans
+  → fix: use original_upb in current_ltv formula
+- Debugged MLP double-sigmoid bug (sigmoid in layer + BCEWithLogitsLoss)
+- Dealt with OOM kills from loading 400M+ rows
+  → fix: split into two SLURM jobs (CPU data prep + GPU training)
+- Implemented full sequence-based Transformer (6→64 d_model, 2-layer, 4 heads)
+  with learnable positional embeddings, mean pooling, BCEWithLogitsLoss + pos_weight
+- Achieved best AUC: Transformer 0.8431 > XGBoost 0.8306 = LightGBM 0.8306
+  > MLP 0.8289 > RF 0.8174 > LR 0.8074
+- Multiple SLURM job submissions, debugging, monitoring across many iterations
+- Communication with Prof. Gupta about findings and next steps
+- GitHub commits to tiwari-adarsh0830/mortgage-prepayment
+
+------------------------------------------------------------
+SESSION 2 — RA_2 Chat (approx. late April – early May 2026)
+Estimated hours: 22 hrs
+------------------------------------------------------------
+
+Tasks completed:
+- Read and internalized Prof. Gupta's Apr 29 email with next steps
+- Wrote train_zip3.py: added zip3 as raw covariate to all static models
+  (XGBoost, LightGBM, LR, RF, MLP)
+- Debugged file path errors (data/ vs data/raw/, .txt vs .csv)
+- Rewrote slow row-by-row ZHVI apply loop → vectorized pandas merge
+- zip3 results: XGBoost +0.006, LightGBM +0.006, LR/RF/MLP flat/negative
+- Wrote segmentation_analysis.py: Transformer vs XGBoost AUC across loan buckets
+  (credit score, LTV, loan age, refi incentive, vintage)
+- Reconstructed missing test_loan_ids.npy by replaying train/test split logic
+  (~99.8% overlap with original)
+- Segmentation results: Transformer wins every bucket; biggest gaps:
+  oldest loans (+0.024), near-zero refi incentive (+0.018)
+- Drafted and sent email to Prof. Gupta summarizing findings
+- Multiple SLURM job submissions and debugging
+- Payment admin: coordinated with Michael Jules (mjules@stern.nyu.edu) on grant processing
+
+------------------------------------------------------------
+SESSION 3 — RA_3 Chat (approx. May 19–25, 2026)
+Estimated hours: 45 hrs
+------------------------------------------------------------
+
+Tasks completed:
+- Attended May 19 meeting with Prof. Gupta; took notes on updated directions:
+  interpretability, OAS, diffusion model for rates, Bloomberg/ICE validation
+- Read and summarized 4 papers:
+  * arxiv 2410.18897 — DDPM + wavelet for synthetic financial time series
+  * arxiv 2511.17892 — HJM no-arbitrage neural yield curve (AER penalty)
+  * arxiv 2006.11239 — Ho et al. original DDPM
+  * arxiv 2011.13456 — DDPM variant
+- Implemented SHAP interpretability (GradientExplainer) on Transformer
+  Results: loan_age(0.040) > credit_score(0.031) ≈ refi_incentive(0.029)
+           > orig_ltv(0.025) ≈ current_ltv(0.024) > upb(0.007)
+  Peak activation month 28; burnout signal at loan_age month 28
+  Plots saved locally
+- Implemented synthetic rate paths (Hull-White calibrated to PMMS data)
+  a=0.001 (near random walk), theta=4.55%, sigma=1.01
+  Peak hazard months: 2 (strong refi), 10 (at-money), 20 (no refi)
+  Plots saved locally
+- Trained DDPM rate simulation on full PMMS history
+  Outputs saved in /outputs/
+- Designed and wrote hazard model training script (train_hazard.py):
+  discrete-time survival model, random timestep sampling, HazardSampler class
+- Rewrote prepare_sequences.py to fix train save bug and add prepay_timestep arrays
+- Multiple SLURM job submissions and monitoring
+- Coordinated with David Fu (new RA, Columbia) on Bloomberg data pull / literature
+
+------------------------------------------------------------
+SESSION 4 — Current Chat (May 25–26, 2026)
+Estimated hours: 15 hrs
+------------------------------------------------------------
+
+Tasks completed:
+- Diagnosed prepare_sequences job 9554254 cancelled due to time limit
+- Debugged SLURM partition issues (cpu_short/cpu_long/cpu_prem all rejecting)
+  → root cause: account torch_pr_932_general has no partition association
+  → fix: submit without --partition flag, lands on 'cs' partition
+- Resubmitted prepare job (9569295), completed successfully:
+  train_seq (3,917,876×33×6), test_seq (979,469×33×6), prepay_timestep arrays saved
+- Fixed evaluate_hazard function:
+  → added return_per_timestep mode to Transformer forward()
+  → implemented survival CDF: score = 1 - prod(1 - h_t) over active timesteps
+- Diagnosed AUC=0.48 (below random):
+  → pos_weight=2796 was destabilizing training
+  → fix: pos_weight = avg_seq_len (~29)
+- Diagnosed AUC still stuck at 0.53:
+  → mask convention bug: True=real in data, but model was treating as True=padding
+  → fix: invert mask inside forward() before passing to transformer encoder
+  → fix: corrected active mask in evaluate_hazard
+- Bumped STEPS_PER_EPOCH 2000→10000, N_EPOCHS 20→30
+- Submitted hazard training job 9621004 (currently running)
+- Created run_hazard.sbatch
+
+========================================================
+TOTAL ESTIMATED HOURS THROUGH SESSION 4: ~127 hrs
+========================================================
+
+Notes:
+- GitHub commit history (tiwari-adarsh0830/mortgage-prepayment) provides
+  corroborating timestamps for all code work
+- SLURM job IDs on record: 6686984, 7437227, 9554254, 9569295,
+  9574051, 9574676, 9575149, 9621004
+- All HPC work on NYU Torch cluster under account torch_pr_932_general2026-05-26 | ~13hrs | Hazard model debugging and training: partition fix (no --partition), prepare_sequences job (9569295 ok), fixed evaluate_hazard survival CDF, fixed pos_weight (2796->29->1.0 with oversampling), fixed mask convention bug (True=real vs padding in sampler+forward+eval), fixed ReduceLROnPlateau verbose arg, fixed scheduler.step(auc) ordering bug, added 50% prepaid oversampling in HazardSampler, added resume-from-checkpoint logic, bumped STEPS_PER_EPOCH 2000->10000 N_EPOCHS 30->50. Jobs: 9554254(timeout), 9569295(prepare-ok), 9574051(auc0.48), 9574676(auc0.53), 9575149(auc0.53-maskfix), 9621004(auc0.5428), 9622791(crashed-verbose), 9624297(crashed-auc-unbound), 9624384(auc0.7958-breakthrough), 9625641(auc0.7958-resumed). Final best hazard AUC: 0.7958. GitHub pushed: 92f10f6
+2026-05-27 | ~4hrs | OAS engine completed (job 9626801): mean price 57.81% of par. Gupta feedback: use risk-free curve (Treasury/SOFR) for discounting not PMMS, need risk-neutral Q paths anchored to today's term structure (conditional DDPM or drift correction). Meeting scheduled Friday June 6 10:30am
+2026-05-27 | ~5hrs | Risk-neutral rate paths: bootstrapped Treasury zero curve, forward-rate drift correction on DDPM paths, PMMS-Treasury spread separation (1.89%), terminal value fix in OAS engine. OAS prices improved: mean 57.81%->81.78%, median 97.60%. Jobs: 9674440(risk_neutral), 9674536(oas_v2). GitHub: c496da2
+2026-05-27 | session end | Total today ~5hrs. Risk-neutral paths + OAS engine v2 complete. Ready for Friday June 6 meeting with Gupta. Waiting on Bloomberg/ICE prices from Gupta.
+2026-05-28 | ~10hrs | Added DTI/loan_purpose/property_type features (6->9), rebuilt sequences (job 9962503), retrained hazard model AUC 0.7939->0.8181 (jobs 9967652, 9996792). Trained conditional DDPM (job 9962528, start=6.18%). Applied drift correction to conditional paths (jobs 10005352, 10012818). Updated OAS engine: conditional paths, cashflow matrix saving. OAS solver with brentq. Median OAS price 99.06%. GitHub committed.
