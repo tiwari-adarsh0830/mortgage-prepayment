@@ -204,8 +204,7 @@ def main():
     # Also apply drift correction to conditional DDPM paths
     cond_path = os.path.join(OUTPUTS, 'ddpm_conditional_paths.npy')
     if os.path.exists(cond_path):
-        print("
---- Processing Conditional DDPM Paths ---")
+        print("--- Processing Conditional DDPM Paths ---")
         cond_paths = np.load(cond_path)[:, :MAX_SEQ]  # (1000, 33)
         cond_treasury, cond_shifts = apply_drift_correction(cond_paths, forward_rates)
         cond_pmms = cond_treasury + spread

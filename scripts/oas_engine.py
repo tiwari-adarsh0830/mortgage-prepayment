@@ -161,8 +161,8 @@ def main():
     print("Loading sequences and rate paths...")
     test_seq   = np.load(os.path.join(SEQ_DIR, 'test_seq.npy'),  mmap_mode='r')
     test_mask  = np.load(os.path.join(SEQ_DIR, 'test_mask.npy'), mmap_mode='r')
-    treasury_paths = np.load(os.path.join(OUTPUTS, 'treasury_rate_paths.npy'))  # (1000, 33)
-    pmms_paths     = np.load(os.path.join(OUTPUTS, 'pmms_rate_paths_rn.npy'))    # (1000, 33)
+    treasury_paths = np.load(os.path.join(OUTPUTS, 'treasury_cond_paths.npy'))  # (1000, 33)
+    pmms_paths     = np.load(os.path.join(OUTPUTS, 'pmms_cond_paths.npy'))    # (1000, 33)
     treasury_paths = treasury_paths[:N_PATHS, :MAX_SEQ]
     pmms_paths     = pmms_paths[:N_PATHS, :MAX_SEQ]
 
