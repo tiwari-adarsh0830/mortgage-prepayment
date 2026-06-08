@@ -30,7 +30,7 @@ DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Training config
 BATCH_SIZE  = 2048
-N_EPOCHS    = 30
+N_EPOCHS    = 50
 LR          = 1e-3
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP   = 1.0
