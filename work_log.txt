@@ -134,3 +134,4 @@ Notes:
 Fri Jun 12 12:32:26 EDT 2026: Stage 2 DER betas (time-varying), Stage 3 Fama-MacBeth regression. PM lambda_x significant (t=-2.35, p=0.028). DM lambda_x correct sign but not significant due to compressed CPR. 4 hrs.
 2026-06-12: Bobst Bloomberg terminal - pulled FNCL 2.5-6.5 TBA prices, UST 5yr/10yr yields, TBA roll snapshot. 4 hrs.
 2026-06-12: Bloomberg data cleaning + 32nds conversion, stage2 DER betas (time-varying), stage3 Fama-MacBeth regression. 2.5 hrs.
+2026-06-12: Identified and fixed realized_cpr bug (UPB-based detection). Downloaded 2022Q1-Q4 vintages. CPR v4 resubmitted with 13 vintages. README updated. 2.5 hrs.
