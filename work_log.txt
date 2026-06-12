@@ -4,11 +4,8 @@ Project: Mortgage Prepayment Risk — NYU Stern / Prof. Arpit Gupta
 ========================================================
 
 ------------------------------------------------------------
-SESSION 1 — RA_1 Chat (approx. early-mid April 2026)
-Estimated hours: 45 hrs
+SESSION 1 — Early-Mid April 2026 | 45 hrs
 ------------------------------------------------------------
-
-Tasks completed:
 - Read and understood Fannie Mae Single-Family Loan Performance Data schema
   (109 cols, pipe-delimited, no header, MMYYYY date format, zip3 prefix)
 - Set up NYU Torch HPC environment: conda env, scratch directory, SLURM account
@@ -32,11 +29,8 @@ Tasks completed:
 - GitHub commits to tiwari-adarsh0830/mortgage-prepayment
 
 ------------------------------------------------------------
-SESSION 2 — RA_2 Chat (approx. late April – early May 2026)
-Estimated hours: 22 hrs
+SESSION 2 — Late April – Early May 2026 | 22 hrs
 ------------------------------------------------------------
-
-Tasks completed:
 - Read and internalized Prof. Gupta's Apr 29 email with next steps
 - Wrote train_zip3.py: added zip3 as raw covariate to all static models
   (XGBoost, LightGBM, LR, RF, MLP)
@@ -46,92 +40,133 @@ Tasks completed:
 - Wrote segmentation_analysis.py: Transformer vs XGBoost AUC across loan buckets
   (credit score, LTV, loan age, refi incentive, vintage)
 - Reconstructed missing test_loan_ids.npy by replaying train/test split logic
-  (~99.8% overlap with original)
 - Segmentation results: Transformer wins every bucket; biggest gaps:
   oldest loans (+0.024), near-zero refi incentive (+0.018)
 - Drafted and sent email to Prof. Gupta summarizing findings
-- Multiple SLURM job submissions and debugging
 - Payment admin: coordinated with Michael Jules (mjules@stern.nyu.edu) on grant processing
 
 ------------------------------------------------------------
-SESSION 3 — RA_3 Chat (approx. May 19–25, 2026)
-Estimated hours: 45 hrs
+SESSION 3 — May 19–25, 2026 | 45 hrs
 ------------------------------------------------------------
-
-Tasks completed:
-- Attended May 19 meeting with Prof. Gupta; took notes on updated directions:
+- Attended May 19 meeting with Prof. Gupta; noted updated directions:
   interpretability, OAS, diffusion model for rates, Bloomberg/ICE validation
 - Read and summarized 4 papers:
+  * Ho et al. — DDPM (arxiv 2006.11239)
+  * arxiv 2011.13456 — DDPM variant
   * arxiv 2410.18897 — DDPM + wavelet for synthetic financial time series
   * arxiv 2511.17892 — HJM no-arbitrage neural yield curve (AER penalty)
-  * arxiv 2006.11239 — Ho et al. original DDPM
-  * arxiv 2011.13456 — DDPM variant
 - Implemented SHAP interpretability (GradientExplainer) on Transformer
   Results: loan_age(0.040) > credit_score(0.031) ≈ refi_incentive(0.029)
            > orig_ltv(0.025) ≈ current_ltv(0.024) > upb(0.007)
   Peak activation month 28; burnout signal at loan_age month 28
-  Plots saved locally
 - Implemented synthetic rate paths (Hull-White calibrated to PMMS data)
-  a=0.001 (near random walk), theta=4.55%, sigma=1.01
-  Peak hazard months: 2 (strong refi), 10 (at-money), 20 (no refi)
-  Plots saved locally
+  a=0.001, theta=4.55%, sigma=1.01
 - Trained DDPM rate simulation on full PMMS history
-  Outputs saved in /outputs/
 - Designed and wrote hazard model training script (train_hazard.py):
   discrete-time survival model, random timestep sampling, HazardSampler class
 - Rewrote prepare_sequences.py to fix train save bug and add prepay_timestep arrays
-- Multiple SLURM job submissions and monitoring
-- Coordinated with David Fu (new RA, Columbia) on Bloomberg data pull / literature
 
 ------------------------------------------------------------
-SESSION 4 — Current Chat (May 25–26, 2026)
-Estimated hours: 15 hrs
+SESSION 4 — May 26, 2026 | 15 hrs
 ------------------------------------------------------------
-
-Tasks completed:
 - Diagnosed prepare_sequences job 9554254 cancelled due to time limit
-- Debugged SLURM partition issues (cpu_short/cpu_long/cpu_prem all rejecting)
-  → root cause: account torch_pr_932_general has no partition association
-  → fix: submit without --partition flag, lands on 'cs' partition
+- Debugged SLURM partition issues → fix: submit without --partition flag
 - Resubmitted prepare job (9569295), completed successfully:
-  train_seq (3,917,876×33×6), test_seq (979,469×33×6), prepay_timestep arrays saved
-- Fixed evaluate_hazard function:
-  → added return_per_timestep mode to Transformer forward()
-  → implemented survival CDF: score = 1 - prod(1 - h_t) over active timesteps
-- Diagnosed AUC=0.48 (below random):
-  → pos_weight=2796 was destabilizing training
-  → fix: pos_weight = avg_seq_len (~29)
-- Diagnosed AUC still stuck at 0.53:
-  → mask convention bug: True=real in data, but model was treating as True=padding
-  → fix: invert mask inside forward() before passing to transformer encoder
-  → fix: corrected active mask in evaluate_hazard
-- Bumped STEPS_PER_EPOCH 2000→10000, N_EPOCHS 20→30
-- Submitted hazard training job 9621004 (currently running)
-- Created run_hazard.sbatch
-
-========================================================
-TOTAL ESTIMATED HOURS THROUGH SESSION 4: ~127 hrs
+  train_seq (3,917,876×33×6), test_seq (979,469×33×6), prepay_timestep saved
+- Fixed evaluate_hazard: added return_per_timestep mode, survival CDF
+- Diagnosed and fixed AUC=0.48: pos_weight 2796→29→1.0 with oversampling
+- Fixed mask convention bug: True=real throughout, invert inside forward()
+- Added 50% prepaid oversampling in HazardSampler
+- Final best hazard AUC: 0.7958
+- SLURM jobs: 9554254, 9569295, 9574051, 9574676, 9575149, 9621004, 9622791,
+  9624297, 9624384, 9625641
+- GitHub: 92f10f6
 
 ------------------------------------------------------------
-SESSIONS 5–7 — May 26–31, 2026
+SESSION 5 — May 27, 2026 | 9 hrs
 ------------------------------------------------------------
-See dated entries below. Additional ~23 hrs logged.
+- OAS engine completed (job 9626801): mean price 57.81% of par
+- Gupta feedback: use risk-free Treasury curve for discounting, not PMMS;
+  need risk-neutral Q paths anchored to today's term structure
+- Risk-neutral rate paths: bootstrapped Treasury zero curve from FRED par yields
+- Forward-rate drift correction on DDPM paths; PMMS-Treasury spread separation (1.89%)
+- Terminal value fix in OAS engine
+- OAS prices improved: mean 57.81%→81.78%, median 97.60%
+- SLURM jobs: 9674440, 9674536
+- GitHub: c496da2
+
+------------------------------------------------------------
+SESSION 6 — May 28, 2026 | 10 hrs
+------------------------------------------------------------
+- Added DTI/loan_purpose/property_type features (6→9 features)
+- Rebuilt sequences (job 9962503): train 3,917,876×33×9, test 979,432×33×9
+- Retrained hazard model AUC 0.7958→0.8181 (jobs 9967652, 9996792)
+- Trained conditional DDPM (job 9962528): paths start at today's PMMS (6.18%)
+- Applied drift correction to conditional paths (jobs 10005352, 10012818)
+- Updated OAS engine: conditional paths, cashflow matrix saving
+- OAS solver with brentq (±0.1bp); median OAS price 99.06%
+- GitHub committed
+
+------------------------------------------------------------
+SESSION 7 — June 7–8, 2026 | 10 hrs
+------------------------------------------------------------
+- TBA pivot: Prof. Gupta directed shift from OAS → predicting TBA returns at coupon level
+- Checked WRDS (pending approval); ruled out FINRA public portal
+- Read Diep-Eisfeldt-Richardson (NBER w22851) + Gabaix et al. in full
+- Documented DER methodology (docs/DER_methodology_note.md):
+  two-factor model (level x + rate-sensitivity y), Fama-MacBeth cross-section,
+  DM/PM market type classification
+- Key insight: hazard model can replace Bloomberg dealer-survey forecast leg
+- Built Stage 2 coupon-bucket CPR pipeline from hazard model
+  Fixed: wrong DDPM path file, Platt calibration, dead features (loan_purpose/prop_type)
+  Found: one-sided 2020-21 panel compresses CPR spread (0.74–1.46%)
+- Built realized CPR by coupon (Eq. 16): hump-shaped, peaks ~31% CPR at 5% note rate
+  Fixed: +1 column offset bug, OOM/timeout on chunked reads
+- Found free Fannie Mae Data Dynamics as realized-leg validation source
+
+------------------------------------------------------------
+SESSION 8 — June 12, 2026 | 13 hrs
+------------------------------------------------------------
+- Bloomberg terminal at Bobst (4 hrs):
+  Pulled FNCL 2.5–6.5 TBA prices (Jan 2018–May 2026), UST 5yr/10yr yields,
+  TBA roll/drop snapshot (June 2026). 32nds format → 3 pages per coupon.
+- Bloomberg data cleaning (2.5 hrs):
+  Converted 32nds to decimal, verified all 9 coupon HIGHs against Bloomberg header,
+  produced fncl_tba_prices_clean.xlsx, treasury_yields_clean.xlsx, tba_roll_snapshot.xlsx
+- Stage 2 DER betas (time-varying): implemented DER Eq. 5–6, beta_x/beta_y per coupon
+  using that month's PMMS as r_t. All DER Lemma checks pass.
+- Stage 3 Fama-MacBeth (2.5 hrs):
+  Treasury-hedged TBA excess returns computed. Cross-sectional regression per month.
+  PM λ_x = -0.000651, t = -2.35, p = 0.028 (significant, correct sign) ✓
+  DM λ_x = +0.000016 (correct sign, not significant — compressed CPR limitation)
+- Identified and fixed realized_cpr bug (2.5 hrs):
+  v1: wrong column (extra_13 instead of zero_balance_code) + cumulative count
+  v2–v3: col41 = Modification Flag, not prepayment indicator
+  v4 (correct): UPB=0 in last appearance = prepayment month; two-pass chunked reads
+  Smoke test confirmed hump-shaped CPR (peak Dec 2020, drops post-2022) ✓
+- Downloaded 2022Q1–Q4 vintages from Fannie Mae portal; unzipped on HPC
+- Resubmitted CPR v4 job (10677164) with all 13 vintages
+- Updated README with all phases 1–13
+- WRDS account request reply sent
+
 ========================================================
+SLURM JOBS ON RECORD
+========================================================
+6686984, 7437227, 9554254, 9569295, 9574051, 9574676, 9575149,
+9621004, 9622791, 9624297, 9624384, 9625641, 9626801, 9674440,
+9674536, 9962503, 9962528, 9967652, 9996792, 10005352, 10012818,
+10662996 (cpr_v4 first run), 10677164 (cpr_v4 full 13-vintage run)
 
-Notes:
-- GitHub commit history (tiwari-adarsh0830/mortgage-prepayment) provides
-  corroborating timestamps for all code work
-- SLURM job IDs on record: 6686984, 7437227, 9554254, 9569295,
-  9574051, 9574676, 9575149, 9621004
-- All HPC work on NYU Torch cluster under account torch_pr_932_general
-
-2026-05-26 | ~13hrs | Hazard model debugging and training: partition fix (no --partition), prepare_sequences job (9569295 ok), fixed evaluate_hazard survival CDF, fixed pos_weight (2796->29->1.0 with oversampling), fixed mask convention bug (True=real vs padding in sampler+forward+eval), fixed ReduceLROnPlateau verbose arg, fixed scheduler.step(auc) ordering bug, added 50% prepaid oversampling in HazardSampler, added resume-from-checkpoint logic, bumped STEPS_PER_EPOCH 2000->10000 N_EPOCHS 30->50. Jobs: 9554254(timeout), 9569295(prepare-ok), 9574051(auc0.48), 9574676(auc0.53), 9575149(auc0.53-maskfix), 9621004(auc0.5428), 9622791(crashed-verbose), 9624297(crashed-auc-unbound), 9624384(auc0.7958-breakthrough), 9625641(auc0.7958-resumed). Final best hazard AUC: 0.7958. GitHub pushed: 92f10f6
-2026-05-27 | ~4hrs | OAS engine completed (job 9626801): mean price 57.81% of par. Gupta feedback: use risk-free curve (Treasury/SOFR) for discounting not PMMS, need risk-neutral Q paths anchored to today's term structure (conditional DDPM or drift correction). Meeting scheduled Friday June 6 10:30am
-2026-05-27 | ~5hrs | Risk-neutral rate paths: bootstrapped Treasury zero curve, forward-rate drift correction on DDPM paths, PMMS-Treasury spread separation (1.89%), terminal value fix in OAS engine. OAS prices improved: mean 57.81%->81.78%, median 97.60%. Jobs: 9674440(risk_neutral), 9674536(oas_v2). GitHub: c496da2
-2026-05-28 | ~10hrs | Added DTI/loan_purpose/property_type features (6->9), rebuilt sequences (job 9962503), retrained hazard model AUC 0.7939->0.8181 (jobs 9967652, 9996792). Trained conditional DDPM (job 9962528, start=6.18%). Applied drift correction to conditional paths (jobs 10005352, 10012818). Updated OAS engine: conditional paths, cashflow matrix saving. OAS solver with brentq. Median OAS price 99.06%. GitHub committed.
-2026-06-07 | ~6hrs | TBA pivot setup. Checked WRDS (pending approval) + Markit; ruled out FINRA public portal (collateral-type filters only). Read Diep-Eisfeldt-Richardson + Gabaix. Built Stage 2 coupon-bucket CPR pipeline from hazard model: synthetic per-coupon sequences under conditional DDPM paths, per-timestep hazard -> CPR + dCPR/drefi. Fixed wrong path file (ddpm_conditional_paths). Built Platt calibration for 50% oversampling (a=0.53 b=-5.99, mean_pred 0.0004 ~ actual 0.00036). Validated scaling convention. Found: purpose/prop features dead (constant); one-sided 2020-21 refi range compresses cross-sectional CPR spread (0.74-1.46%) -- loan panel alone insufficient for premium/refi regime.
-2026-06-08 | ~4hrs | Read DER (NBER w22851) + Gabaix in full; documented methodology (docs/DER_methodology_note.md): factor construction Eq15-18 (level x + rate-sens y from realized-minus-forecast prepayment, cross-coupon regression), loadings Eq19, Fama-MacBeth prices of risk Eq20 split by DM/PM. Key insight: hazard model can replace dealer-survey forecast leg (AI-forward contribution). Scoped Gupta's data sources: Recursion=pool-level agency data, AD&Co=commercial prepayment model across coupon stack; found free Fannie Data Dynamics (MBS Cohort Analyzer + Float Dashboard) as possible realized-leg/market-type source. Built realized CPR by coupon (realized leg, Eq16): hump-shaped, peaks 5.0% note/31% CPR, collapses to 3-4% for 2023 premium vintage; discount-heavy panel (244M loan-months at 3.0% note). Real spread 1-31% vs model's compressed 0.7-1.5%. Hit + fixed col-alignment (+1 offset) and OOM/timeout before optimized chunked version landed.
-Fri Jun 12 12:32:26 EDT 2026: Stage 2 DER betas (time-varying), Stage 3 Fama-MacBeth regression. PM lambda_x significant (t=-2.35, p=0.028). DM lambda_x correct sign but not significant due to compressed CPR. 4 hrs.
-2026-06-12: Bobst Bloomberg terminal - pulled FNCL 2.5-6.5 TBA prices, UST 5yr/10yr yields, TBA roll snapshot. 4 hrs.
-2026-06-12: Bloomberg data cleaning + 32nds conversion, stage2 DER betas (time-varying), stage3 Fama-MacBeth regression. 2.5 hrs.
-2026-06-12: Identified and fixed realized_cpr bug (UPB-based detection). Downloaded 2022Q1-Q4 vintages. CPR v4 resubmitted with 13 vintages. README updated. 2.5 hrs.
+========================================================
+HOUR SUMMARY
+========================================================
+Session 1:  45 hrs
+Session 2:  22 hrs
+Session 3:  45 hrs
+Session 4:  15 hrs
+Session 5:   9 hrs
+Session 6:  10 hrs
+Session 7:  10 hrs
+Session 8:  13 hrs
+-----------------
+Total:     169 hrs
