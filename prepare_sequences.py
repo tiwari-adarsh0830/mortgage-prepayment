@@ -19,6 +19,7 @@ SAVE_DIR   = '/scratch/at7095/mortgage_prepayment/data/sequences'
 VINTAGES = [
     '2020Q1', '2020Q2', '2020Q3', '2020Q4',
     '2021Q1', '2021Q2', '2021Q3', '2021Q4',
+    '2022Q1', '2022Q2', '2022Q3', '2022Q4',
     '2023Q1'
 ]
 
