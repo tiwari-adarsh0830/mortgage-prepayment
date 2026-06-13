@@ -1,0 +1,23 @@
+{
+  "n_months": 100,
+  "market_type_counts": {
+    "DM": 76,
+    "PM": 24
+  },
+  "wac_proxy": 3.5,
+  "D_mod_used": 6.5,
+  "lambda_x_by_market": {
+    "DM": {
+      "mean": 1.4e-05,
+      "std": 0.000494,
+      "n": 76
+    },
+    "PM": {
+      "mean": -0.000489,
+      "std": 0.001048,
+      "n": 24
+    }
+  },
+  "lambda_y_mean": 0.4164,
+  "note": "Betas are time-varying: recomputed each month using that month PMMS as par rate r_t"
+}
