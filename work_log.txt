@@ -170,3 +170,4 @@ Session 7:  10 hrs
 Session 8:  13 hrs
 -----------------
 Total:     169 hrs
+2026-06-12: Retrained hazard model with 13 vintages (AUC 0.7963). Stage2/3 rerun - PM lambda_x t=-2.28 p=0.032, robust. 2 hrs.
