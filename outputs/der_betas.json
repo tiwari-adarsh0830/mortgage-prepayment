@@ -1,0 +1,101 @@
+[
+  {
+    "coupon": 2.5,
+    "note_rate": 3.25,
+    "mean_cpr": 0.0044,
+    "par_rate_pmms": 6.19,
+    "moneyness_investor": -3.69,
+    "moneyness_borrower": 0.0,
+    "beta_x": 18.930649,
+    "beta_y": 0.0,
+    "security_type": "discount"
+  },
+  {
+    "coupon": 3.0,
+    "note_rate": 3.75,
+    "mean_cpr": 0.0049,
+    "par_rate_pmms": 6.19,
+    "moneyness_investor": -3.19,
+    "moneyness_borrower": 0.0,
+    "beta_x": 13.683235,
+    "beta_y": 0.0,
+    "security_type": "discount"
+  },
+  {
+    "coupon": 3.5,
+    "note_rate": 4.25,
+    "mean_cpr": 0.0056,
+    "par_rate_pmms": 6.19,
+    "moneyness_investor": -2.69,
+    "moneyness_borrower": 0.0,
+    "beta_x": 9.815727,
+    "beta_y": 0.0,
+    "security_type": "discount"
+  },
+  {
+    "coupon": 4.0,
+    "note_rate": 4.75,
+    "mean_cpr": 0.0062,
+    "par_rate_pmms": 6.19,
+    "moneyness_investor": -2.19,
+    "moneyness_borrower": 0.0,
+    "beta_x": 6.960734,
+    "beta_y": 0.0,
+    "security_type": "discount"
+  },
+  {
+    "coupon": 4.5,
+    "note_rate": 5.25,
+    "mean_cpr": 0.0067,
+    "par_rate_pmms": 6.19,
+    "moneyness_investor": -1.69,
+    "moneyness_borrower": 0.0,
+    "beta_x": 4.7651,
+    "beta_y": 0.0,
+    "security_type": "discount"
+  },
+  {
+    "coupon": 5.0,
+    "note_rate": 5.75,
+    "mean_cpr": 0.0074,
+    "par_rate_pmms": 6.19,
+    "moneyness_investor": -1.19,
+    "moneyness_borrower": 0.0,
+    "beta_x": 2.991588,
+    "beta_y": 0.0,
+    "security_type": "discount"
+  },
+  {
+    "coupon": 5.5,
+    "note_rate": 6.25,
+    "mean_cpr": 0.0087,
+    "par_rate_pmms": 6.19,
+    "moneyness_investor": -0.69,
+    "moneyness_borrower": 0.06,
+    "beta_x": 1.534281,
+    "beta_y": 0.000921,
+    "security_type": "discount"
+  },
+  {
+    "coupon": 6.0,
+    "note_rate": 6.75,
+    "mean_cpr": 0.0107,
+    "par_rate_pmms": 6.19,
+    "moneyness_investor": -0.19,
+    "moneyness_borrower": 0.56,
+    "beta_x": 0.370167,
+    "beta_y": 0.002073,
+    "security_type": "discount"
+  },
+  {
+    "coupon": 6.5,
+    "note_rate": 7.25,
+    "mean_cpr": 0.0136,
+    "par_rate_pmms": 6.19,
+    "moneyness_investor": 0.31,
+    "moneyness_borrower": 1.06,
+    "beta_x": -0.522387,
+    "beta_y": -0.005537,
+    "security_type": "premium"
+  }
+]
