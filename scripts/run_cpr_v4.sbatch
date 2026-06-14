@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
-#SBATCH --time=06:00:00
+#SBATCH --time=10:00:00
 #SBATCH --account=torch_pr_932_general
 
 source /share/apps/anaconda3/2025.06/etc/profile.d/conda.sh
