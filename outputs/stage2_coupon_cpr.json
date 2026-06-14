@@ -2,64 +2,64 @@
   {
     "coupon": 2.5,
     "note_rate": 3.25,
-    "mean_cpr": 0.0044,
-    "turnover_cpr_atm": 0.0066,
-    "rate_sens_dcpr_drefi": 0.001
+    "mean_cpr": 0.0112,
+    "turnover_cpr_atm": 0.0177,
+    "rate_sens_dcpr_drefi": 0.0007
   },
   {
     "coupon": 3.0,
     "note_rate": 3.75,
-    "mean_cpr": 0.0049,
-    "turnover_cpr_atm": 0.0066,
-    "rate_sens_dcpr_drefi": 0.0011
+    "mean_cpr": 0.0117,
+    "turnover_cpr_atm": 0.0177,
+    "rate_sens_dcpr_drefi": 0.0015
   },
   {
     "coupon": 3.5,
     "note_rate": 4.25,
-    "mean_cpr": 0.0056,
-    "turnover_cpr_atm": 0.0066,
-    "rate_sens_dcpr_drefi": 0.0013
+    "mean_cpr": 0.0127,
+    "turnover_cpr_atm": 0.0177,
+    "rate_sens_dcpr_drefi": 0.0027
   },
   {
     "coupon": 4.0,
     "note_rate": 4.75,
-    "mean_cpr": 0.0062,
-    "turnover_cpr_atm": 0.0066,
-    "rate_sens_dcpr_drefi": 0.0012
+    "mean_cpr": 0.0144,
+    "turnover_cpr_atm": 0.0177,
+    "rate_sens_dcpr_drefi": 0.0041
   },
   {
     "coupon": 4.5,
     "note_rate": 5.25,
-    "mean_cpr": 0.0067,
-    "turnover_cpr_atm": 0.0066,
-    "rate_sens_dcpr_drefi": 0.0011
+    "mean_cpr": 0.0169,
+    "turnover_cpr_atm": 0.0177,
+    "rate_sens_dcpr_drefi": 0.0057
   },
   {
     "coupon": 5.0,
     "note_rate": 5.75,
-    "mean_cpr": 0.0074,
-    "turnover_cpr_atm": 0.0066,
-    "rate_sens_dcpr_drefi": 0.0019
+    "mean_cpr": 0.0201,
+    "turnover_cpr_atm": 0.0177,
+    "rate_sens_dcpr_drefi": 0.0072
   },
   {
     "coupon": 5.5,
     "note_rate": 6.25,
-    "mean_cpr": 0.0087,
-    "turnover_cpr_atm": 0.0066,
-    "rate_sens_dcpr_drefi": 0.0033
+    "mean_cpr": 0.024,
+    "turnover_cpr_atm": 0.0177,
+    "rate_sens_dcpr_drefi": 0.0083
   },
   {
     "coupon": 6.0,
     "note_rate": 6.75,
-    "mean_cpr": 0.0107,
-    "turnover_cpr_atm": 0.0066,
-    "rate_sens_dcpr_drefi": 0.0049
+    "mean_cpr": 0.0283,
+    "turnover_cpr_atm": 0.0177,
+    "rate_sens_dcpr_drefi": 0.0089
   },
   {
     "coupon": 6.5,
     "note_rate": 7.25,
-    "mean_cpr": 0.0136,
-    "turnover_cpr_atm": 0.0066,
-    "rate_sens_dcpr_drefi": 0.0066
+    "mean_cpr": 0.0329,
+    "turnover_cpr_atm": 0.0177,
+    "rate_sens_dcpr_drefi": 0.0091
   }
 ]
