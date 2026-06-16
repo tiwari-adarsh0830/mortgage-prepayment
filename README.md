@@ -50,32 +50,29 @@ mortgage_prepayment/
 ## Data
 
 ### Fannie Mae Loan Performance Data
-**Source:** https://loanperformancedata.fanniemae.com
-**Format:** Post-October 2020 single-file format, 110 fields, pipe-delimited (`|`), no header row (col0 = empty due to leading pipe).
+Source: https://loanperformancedata.fanniemae.com  
+Format: Pipe-delimited (|), no header row (col0 = empty due to leading pipe).  
+Pre-2020 files: 113 cols. Post-2020 files: 110 cols. Key field positions unchanged.
 
-**Critical column note:** Field positions in the Fannie Mae data dictionary are 1-indexed. In pandas (0-indexed), Field N = col(N-1). The file has a leading pipe so col0 is always empty.
-
-| Vintage | Loans | Prepay Rate | Rate Environment |
-|---------|-------|-------------|-----------------|
-| 2020Q1 | 341,184 | 3.84% | ~3% (COVID low) |
-| 2020Q2 | 617,442 | 1.44% | ~3% |
-| 2020Q3 | 691,357 | 0.83% | ~3% |
-| 2020Q4 | 755,874 | 0.71% | ~3% |
-| 2021Q1 | 705,614 | 0.63% | ~3% |
-| 2021Q2 | 656,891 | 0.70% | ~3% |
-| 2021Q3 | 518,391 | 0.89% | ~3% |
-| 2021Q4 | 505,505 | 0.88% | ~3% |
-| 2023Q1 | 105,087 | 0.71% | ~6.5–7% (high) |
-| **Total** | **4,897,345** | | |
+| Vintage | Loans | Rate Environment |
+|---------|-------|-----------------|
+| 2018Q1–Q4 | ~1.8M | ~4.5–5% |
+| 2019Q1–Q4 | ~2.1M | ~3.5–4.5% |
+| 2020Q1–Q4 | ~2.4M | ~2.7–3.5% (COVID low) |
+| 2021Q1–Q4 | ~2.4M | ~2.7–3.5% |
+| 2022Q1–Q4 | ~4.7M | ~3.5–7% (rising) |
+| 2023Q1 | ~105K | ~6.5–7% (high) |
+| **Total** | **~15.7M unique loans** | **Full rate cycle covered** |
 
 **Sequence data:**
-- Train: 3,917,876 × 33 × 9, Test: 979,432 × 33 × 9
-- Mask convention: True = real timestep throughout; inverted inside `forward()` for PyTorch attention
+- Train: 6,295,960 × 33 × 9
+- Test: 1,573,990 × 33 × 9
+- Mask convention: True = real timestep throughout; inverted inside forward() for PyTorch attention
 
 ### Bloomberg TBA Data (pulled June 2026, Bobst terminal)
-- **FNCL 2.5–6.5 Mtge:** Monthly last price, Jan 2018–May 2026, 32nds converted to decimal
-- **USGG5YR / USGG10YR Index:** Monthly yields, same period
-- **TBA Monitor:** Roll/drop snapshot for UMBS coupons (June 2026, point-in-time)
+- FNCL 2.5–6.5 Mtge: Monthly last price, Jan 2018–May 2026, 32nds converted to decimal
+- USGG5YR / USGG10YR Index: Monthly yields, same period
+- TBA Monitor: Roll/drop snapshot for UMBS coupons (June 2026, point-in-time)
 - Verified against Bloomberg-reported HIGH values — all 9 coupons match exactly
 
 ---
