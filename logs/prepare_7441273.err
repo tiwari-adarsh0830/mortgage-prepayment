@@ -1,2 +1,0 @@
-/opt/slurm/data/slurmd/job7441273/slurm_script: line 13: 3412820 Killed                  python /scratch/at7095/mortgage_prepayment/prepare_sequences.py
-[2026-04-28T23:17:20.435] error: Detected 1 oom_kill event in StepId=7441273.batch. Some of the step tasks have been OOM Killed.

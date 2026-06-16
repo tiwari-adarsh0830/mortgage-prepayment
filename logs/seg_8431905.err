@@ -1,8 +1,0 @@
-Traceback (most recent call last):
-  File "/scratch/at7095/mortgage_prepayment/segmentation_analysis.py", line 326, in <module>
-    main()
-  File "/scratch/at7095/mortgage_prepayment/segmentation_analysis.py", line 312, in main
-    seg_results = auc_by_segment(df_meta, y_test, prob_tf, prob_xgb)
-  File "/scratch/at7095/mortgage_prepayment/segmentation_analysis.py", line 264, in auc_by_segment
-    yt  = y_true[mask.values]
-IndexError: boolean index did not match indexed array along axis 0; size of axis is 979469 but size of corresponding boolean axis is 981055

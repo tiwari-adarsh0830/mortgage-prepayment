@@ -1,4 +1,0 @@
-/opt/slurm/data/slurmd/job7751037/slurm_script: line 15: /share/apps/anaconda3/2021.11/etc/profile.d/conda.sh: No such file or directory
-
-CondaError: Run 'conda init' before 'conda activate'
-

@@ -1,2 +1,0 @@
-/opt/slurm/data/slurmd/job7450105/slurm_script: line 14: 1065877 Killed                  python /scratch/at7095/mortgage_prepayment/train_transformer.py
-[2026-04-29T03:15:22.397] error: Detected 1 oom_kill event in StepId=7450105.batch. Some of the step tasks have been OOM Killed.
