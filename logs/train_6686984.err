@@ -1,3 +1,0 @@
-/opt/slurm/data/slurmd/job6686984/slurm_script: line 11: /scratch/at7095/conda_envs/miniconda/bin/activate: No such file or directory
-/opt/slurm/data/slurmd/job6686984/slurm_script: line 13: 3667678 Killed                  python /scratch/at7095/mortgage_prepayment/train.py
-[2026-04-19T22:20:43.531] error: Detected 1 oom_kill event in StepId=6686984.batch. Some of the step tasks have been OOM Killed.

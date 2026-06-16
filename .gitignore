@@ -5,3 +5,5 @@ data/
 __pycache__/
 *.pyc
 outputs/
+logs/
+work_log.txt

@@ -1,9 +1,0 @@
-Device: cuda
-Loading sequences...
-train_seq: (3917876, 33, 6), prepay: (3917876,)
-test_seq:  (979469, 33, 6),  labels: (979469,)
-
-Building hazard sampler...
-  HazardSampler: 3,917,876 valid loans out of 3,917,876
-  Prepaid loans: 40,716 (1.04%)
-pos_weight: 1.0 (n_prepaid=40,716, avg_seq=29.1)
