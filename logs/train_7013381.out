@@ -1,0 +1,84 @@
+Loading PMMS monthly rates...
+  -> 660 monthly rate observations loaded
+Loading ZHVI MSA lookup...
+  -> 74134 MSA-period observations loaded
+Loading 2020Q1...
+  -> 682,396 loans | prepay rate: 3.56% | avg current_ltv: 59.2
+Loading 2020Q2...
+  -> 1,234,893 loans | prepay rate: 1.32% | avg current_ltv: 55.9
+Loading 2020Q3...
+  -> 1,382,684 loans | prepay rate: 0.75% | avg current_ltv: 53.4
+Loading 2020Q4...
+  -> 1,511,742 loans | prepay rate: 0.64% | avg current_ltv: 52.6
+Loading 2021Q1...
+  -> 1,411,294 loans | prepay rate: 0.58% | avg current_ltv: 52.4
+Loading 2021Q2...
+  -> 1,313,838 loans | prepay rate: 0.66% | avg current_ltv: 55.4
+Loading 2021Q3...
+  -> 1,036,821 loans | prepay rate: 0.81% | avg current_ltv: 58.0
+Loading 2021Q4...
+  -> 1,011,004 loans | prepay rate: 0.81% | avg current_ltv: 58.5
+Loading 2023Q1...
+  -> 210,167 loans | prepay rate: 0.68% | avg current_ltv: 71.5
+
+Total loans across all vintages: 9,794,839
+Overall prepay rate: 0.97%
+
+Prepay rate by vintage:
+vintage
+2020Q1    3.56
+2020Q2    1.32
+2020Q3    0.75
+2020Q4    0.64
+2021Q1    0.58
+2021Q2    0.66
+2021Q3    0.81
+2021Q4    0.81
+2023Q1    0.68
+
+Training Logistic Regression...
+  AUC: 0.8074
+
+Logistic Regression Coefficients:
+  refi_incentive: 0.8878 ✅
+  borrower_credit_score: -0.8011 ❌
+  original_ltv: 0.5944 ✅
+  current_ltv: -0.0817 ❌
+  original_upb: 0.2242 ✅
+  loan_age_months: 1.0003 ✅
+
+Training Random Forest...
+  AUC: 0.8174
+
+Random Forest Feature Importances:
+  borrower_credit_score: 0.4573
+  loan_age_months: 0.2068
+  original_ltv: 0.1439
+  refi_incentive: 0.1398
+  current_ltv: 0.0435
+  original_upb: 0.0087
+
+Training XGBoost...
+  AUC: 0.8306
+
+Training LightGBM...
+  AUC: 0.8306
+
+Training MLP...
+  Epoch 5/20 done
+  Epoch 10/20 done
+  Epoch 15/20 done
+  Epoch 20/20 done
+  AUC: 0.8289
+
+==================================================
+MODEL COMPARISON — Multi-Vintage + Dynamic LTV
+==================================================
+  XGBoost                   AUC: 0.8306
+  LightGBM                  AUC: 0.8306
+  MLP                       AUC: 0.8289
+  Random Forest             AUC: 0.8174
+  Logistic Regression       AUC: 0.8074
+==================================================
+
+Results saved to /scratch/at7095/mortgage_prepayment/outputs/results_dynamic_ltv.json

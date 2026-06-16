@@ -1,0 +1,12 @@
+/opt/slurm/data/slurmd/job7763340/slurm_script: line 15: /share/apps/anaconda3/2021.11/etc/profile.d/conda.sh: No such file or directory
+
+CondaError: Run 'conda init' before 'conda activate'
+
+Traceback (most recent call last):
+  File "/scratch/at7095/mortgage_prepayment/segmentation_analysis.py", line 331, in <module>
+    main()
+  File "/scratch/at7095/mortgage_prepayment/segmentation_analysis.py", line 302, in main
+    prob_tf = transformer_predict(test_seq, test_mask, model_path)
+  File "/scratch/at7095/mortgage_prepayment/segmentation_analysis.py", line 109, in transformer_predict
+    model.load_state_dict(checkpoint["model_state_dict"])
+KeyError: 'model_state_dict'

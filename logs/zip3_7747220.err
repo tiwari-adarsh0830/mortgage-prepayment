@@ -1,0 +1,5 @@
+/opt/slurm/data/slurmd/job7747220/slurm_script: line 15: /share/apps/anaconda3/2021.11/etc/profile.d/conda.sh: No such file or directory
+
+CondaError: Run 'conda init' before 'conda activate'
+
+[2026-05-01T15:50:51.352] error: *** JOB 7747220 ON cs608 CANCELLED AT 2026-05-01T15:50:51 DUE to SIGNAL Terminated ***

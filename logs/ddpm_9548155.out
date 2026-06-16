@@ -1,0 +1,33 @@
+Job started: Mon May 25 01:39:14 EDT 2026
+Device: cuda
+Training windows: (627, 33)
+Rate change mean=-0.0017, std=0.2728
+Starting rate: 6.1775%
+Model parameters: 181,729
+
+Training DDPM for 500 epochs...
+  Epoch 50/500  loss=0.86836
+  Epoch 100/500  loss=0.63992
+  Epoch 150/500  loss=0.57916
+  Epoch 200/500  loss=0.56666
+  Epoch 250/500  loss=0.55339
+  Epoch 300/500  loss=0.54897
+  Epoch 350/500  loss=0.53601
+  Epoch 400/500  loss=0.53980
+  Epoch 450/500  loss=0.53539
+  Epoch 500/500  loss=0.52772
+Model saved.
+Training loss plot saved.
+
+Generating 1000 rate paths...
+Rate paths saved: (1000, 34)
+Fan chart saved.
+Distribution comparison saved.
+
+── Generated path stats at month 33 ──
+  median=6.004%  p10=4.057%  p90=8.413%
+
+── Rate change distribution comparison ──
+  Real:      mean=-0.0017  std=0.2728  min=-2.0650  max=2.2432
+  Generated: mean=-0.0020  std=0.2332  min=-0.9709  max=1.2545
+Job finished: Mon May 25 01:39:59 EDT 2026

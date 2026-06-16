@@ -1,0 +1,37 @@
+Using device: cuda
+Loading sequences from disk...
+  Train: (3917876, 33, 6) | Test: (979469, 33, 6)
+  Train prepay rate: 1.06%
+  Test prepay rate:  1.06%
+
+Model parameters: 104,641
+
+Training Transformer...
+  Epoch 01/20 | loss: 1.0164 | AUC: 0.8299 [best]
+  Epoch 02/20 | loss: 1.0043 | AUC: 0.8370 [best]
+  Epoch 03/20 | loss: 0.9990 | AUC: 0.8380 [best]
+  Epoch 04/20 | loss: 0.9965 | AUC: 0.8385 [best]
+  Epoch 05/20 | loss: 0.9942 | AUC: 0.8390 [best]
+  Epoch 06/20 | loss: 0.9866 | AUC: 0.8418 [best]
+  Epoch 07/20 | loss: 0.9854 | AUC: 0.8422 [best]
+  Epoch 08/20 | loss: 0.9852 | AUC: 0.8399
+  Epoch 09/20 | loss: 0.9856 | AUC: 0.8416
+  Epoch 10/20 | loss: 0.9856 | AUC: 0.8414
+  Epoch 11/20 | loss: 0.9822 | AUC: 0.8428 [best]
+  Epoch 12/20 | loss: 0.9818 | AUC: 0.8430 [best]
+  Epoch 13/20 | loss: 0.9822 | AUC: 0.8422
+  Epoch 14/20 | loss: 0.9832 | AUC: 0.8431 [best]
+  Epoch 15/20 | loss: 0.9831 | AUC: 0.8420
+  Epoch 16/20 | loss: 0.9815 | AUC: 0.8428
+  Epoch 17/20 | loss: 0.9818 | AUC: 0.8422
+  Epoch 18/20 | loss: 0.9812 | AUC: 0.8428
+  Epoch 19/20 | loss: 0.9817 | AUC: 0.8423
+  Epoch 20/20 | loss: 0.9831 | AUC: 0.8421
+
+==================================================
+TRANSFORMER RESULT
+==================================================
+  Best AUC: 0.8431
+==================================================
+
+Results saved to /scratch/at7095/mortgage_prepayment/outputs/results_transformer.json

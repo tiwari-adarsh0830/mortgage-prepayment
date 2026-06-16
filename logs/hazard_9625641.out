@@ -1,0 +1,36 @@
+Device: cuda
+Loading sequences...
+train_seq: (3917876, 33, 6), prepay: (3917876,)
+test_seq:  (979469, 33, 6),  labels: (979469,)
+
+Building hazard sampler...
+  HazardSampler: 3,917,876 valid loans out of 3,917,876
+  Prepaid loans: 40,716 (1.04%)
+pos_weight: 1.0 (n_prepaid=40,716, avg_seq=29.1)
+Resuming from checkpoint...
+  Loaded epoch 9 AUC=0.7958
+
+Training for 30 epochs × 10000 steps (start=10)...
+Epoch 10/30  loss=0.29106  auc=0.7800  t=192s
+Epoch 11/30  loss=0.29057  auc=0.7862  t=129s
+Epoch 12/30  loss=0.29020  auc=0.7793  t=130s
+Epoch 13/30  loss=0.29004  auc=0.7752  t=130s
+Epoch 14/30  loss=0.28981  auc=0.7575  t=129s
+Epoch 15/30  loss=0.28984  auc=0.7610  t=130s
+Epoch 16/30  loss=0.28976  auc=0.7803  t=130s
+Epoch 17/30  loss=0.28955  auc=0.7663  t=129s
+Epoch 18/30  loss=0.28818  auc=0.7708  t=129s
+Epoch 19/30  loss=0.28786  auc=0.7605  t=126s
+Epoch 20/30  loss=0.28775  auc=0.7702  t=122s
+Epoch 21/30  loss=0.28748  auc=0.7502  t=122s
+Epoch 22/30  loss=0.28712  auc=0.7562  t=122s
+Epoch 23/30  loss=0.28707  auc=0.7648  t=122s
+Epoch 24/30  loss=0.28583  auc=0.7720  t=122s
+Epoch 25/30  loss=0.28562  auc=0.7727  t=122s
+Epoch 26/30  loss=0.28539  auc=0.7688  t=121s
+Epoch 27/30  loss=0.28517  auc=0.7533  t=121s
+Epoch 28/30  loss=0.28487  auc=0.7621  t=122s
+Epoch 29/30  loss=0.28477  auc=0.7591  t=122s
+Epoch 30/30  loss=0.28354  auc=0.7685  t=122s
+
+Done. Best AUC: 0.7958

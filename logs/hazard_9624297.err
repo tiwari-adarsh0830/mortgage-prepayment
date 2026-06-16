@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/scratch/at7095/mortgage_prepayment/scripts/train_hazard.py", line 278, in <module>
+    main()
+  File "/scratch/at7095/mortgage_prepayment/scripts/train_hazard.py", line 242, in main
+    scheduler.step(auc)
+UnboundLocalError: local variable 'auc' referenced before assignment

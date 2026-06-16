@@ -1,0 +1,74 @@
+Device: cuda
+Loading sequences...
+train_seq: (3917726, 33, 9), prepay: (3917726,)
+test_seq:  (979432, 33, 9),  labels: (979432,)
+
+Building hazard sampler...
+  HazardSampler: 3,917,726 valid loans out of 3,917,726
+  Prepaid loans: 40,703 (1.04%)
+pos_weight: 1.0 (n_prepaid=40,703, avg_seq=29.1)
+
+Training for 50 epochs × 10000 steps (start=1)...
+Epoch  1/50  loss=0.29591  auc=0.7958  t=263s
+  → New best AUC: 0.7958 — saved.
+Epoch  2/50  loss=0.29217  auc=0.7797  t=168s
+Epoch  3/50  loss=0.29141  auc=0.7589  t=169s
+Epoch  4/50  loss=0.29040  auc=0.7843  t=168s
+Epoch  5/50  loss=0.29024  auc=0.7834  t=168s
+Epoch  6/50  loss=0.29000  auc=0.7956  t=168s
+Epoch  7/50  loss=0.28963  auc=0.7789  t=168s
+Epoch  8/50  loss=0.28811  auc=0.7969  t=168s
+  → New best AUC: 0.7969 — saved.
+Epoch  9/50  loss=0.28763  auc=0.7968  t=168s
+Epoch 10/50  loss=0.28723  auc=0.7918  t=168s
+Epoch 11/50  loss=0.28656  auc=0.7883  t=168s
+Epoch 12/50  loss=0.28617  auc=0.7764  t=169s
+Epoch 13/50  loss=0.28569  auc=0.7806  t=169s
+Epoch 14/50  loss=0.28539  auc=0.7851  t=169s
+Epoch 15/50  loss=0.28340  auc=0.7882  t=169s
+Epoch 16/50  loss=0.28293  auc=0.7897  t=168s
+Epoch 17/50  loss=0.28258  auc=0.7906  t=168s
+Epoch 18/50  loss=0.28231  auc=0.7842  t=168s
+Epoch 19/50  loss=0.28203  auc=0.7942  t=168s
+Epoch 20/50  loss=0.28204  auc=0.7953  t=168s
+Epoch 21/50  loss=0.28046  auc=0.7880  t=168s
+Epoch 22/50  loss=0.28030  auc=0.7973  t=168s
+  → New best AUC: 0.7973 — saved.
+Epoch 23/50  loss=0.28030  auc=0.7975  t=168s
+  → New best AUC: 0.7975 — saved.
+Epoch 24/50  loss=0.28042  auc=0.8022  t=168s
+  → New best AUC: 0.8022 — saved.
+Epoch 25/50  loss=0.28062  auc=0.7950  t=168s
+Epoch 26/50  loss=0.28053  auc=0.7989  t=168s
+Epoch 27/50  loss=0.28075  auc=0.8034  t=168s
+  → New best AUC: 0.8034 — saved.
+Epoch 28/50  loss=0.28106  auc=0.8028  t=168s
+Epoch 29/50  loss=0.28109  auc=0.8033  t=168s
+Epoch 30/50  loss=0.28132  auc=0.8080  t=168s
+  → New best AUC: 0.8080 — saved.
+Epoch 31/50  loss=0.28143  auc=0.8111  t=168s
+  → New best AUC: 0.8111 — saved.
+Epoch 32/50  loss=0.28156  auc=0.8099  t=168s
+Epoch 33/50  loss=0.28182  auc=0.8138  t=168s
+  → New best AUC: 0.8138 — saved.
+Epoch 34/50  loss=0.28207  auc=0.8107  t=167s
+Epoch 35/50  loss=0.28239  auc=0.8055  t=168s
+Epoch 36/50  loss=0.28256  auc=0.8068  t=168s
+Epoch 37/50  loss=0.28290  auc=0.8091  t=168s
+Epoch 38/50  loss=0.28281  auc=0.8134  t=168s
+Epoch 39/50  loss=0.28321  auc=0.8118  t=168s
+Epoch 40/50  loss=0.28179  auc=0.8157  t=168s
+  → New best AUC: 0.8157 — saved.
+Epoch 41/50  loss=0.28192  auc=0.8181  t=168s
+  → New best AUC: 0.8181 — saved.
+Epoch 42/50  loss=0.28235  auc=0.8134  t=168s
+Epoch 43/50  loss=0.28244  auc=0.8163  t=168s
+Epoch 44/50  loss=0.28298  auc=0.8162  t=168s
+Epoch 45/50  loss=0.28330  auc=0.8141  t=168s
+Epoch 46/50  loss=0.28382  auc=0.8117  t=168s
+Epoch 47/50  loss=0.28442  auc=0.8062  t=168s
+Epoch 48/50  loss=0.28309  auc=0.8054  t=168s
+Epoch 49/50  loss=0.28346  auc=0.8019  t=168s
+Epoch 50/50  loss=0.28360  auc=0.8019  t=168s
+
+Done. Best AUC: 0.8181
