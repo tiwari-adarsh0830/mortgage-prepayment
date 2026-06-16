@@ -159,7 +159,7 @@ DM result correct sign but insignificant — attributed to compressed CPR cross-
 | File | Description |
 |------|-------------|
 | `transformer_best.pt` | Binary classifier (AUC 0.8431) |
-| `hazard_best.pt` | Discrete hazard model (AUC 0.8181) |
+| `hazard_best.pt` | Discrete hazard model (AUC 0.7999, 21 vintages) |
 | `ddpm_conditional.pt` | Conditional DDPM checkpoint |
 | `pmms_cond_paths.npy` | PMMS rate paths (refi incentive) |
 | `treasury_cond_paths.npy` | Treasury paths (discounting) |
@@ -169,7 +169,7 @@ DM result correct sign but insignificant — attributed to compressed CPR cross-
 | `der_betas.json` | DER β_x, β_y per coupon (time-varying) |
 | `stage3_lambda_ts.csv` | Monthly λ_x, λ_y from Fama-MacBeth |
 | `stage3_excess_returns.csv` | Treasury-hedged TBA excess returns |
-| `realized_cpr_by_coupon_v4.csv` | Correct monthly realized CPR by coupon (in progress) |
+| `realized_cpr_by_coupon_v5.csv` | Realized CPR v5 (global cross-file detection, 21 vintages, 2018-2025) |
 
 ---
 
@@ -201,6 +201,9 @@ ssh at7095@login.torch.hpc.nyu.edu
 | realized_cpr fix (v4) | UPB=0 in last appearance = prepayment month; two-pass chunked |
 | TBA beta time-invariant | Beta_x/y must use that month's PMMS as r_t, not current PMMS |
 | SLURM partition rejection | Submit without --partition flag |
+| ZHVI coverage gap (2018 loans) | Rebuilt zhvi_zip3.csv to 2015+ (was 2019+); 2019+ values unchanged |
+| realized_cpr cross-file bug (v4) | Global Pass 0 across all files finds true last appearance per loan |
+| Calibrate/forecast on login node | Login node kills heavy CPU jobs; use SLURM run_calibrate.sbatch or nohup |
 
 ---
 
@@ -212,3 +215,37 @@ ssh at7095@login.torch.hpc.nyu.edu
 5. arxiv 2410.18897 — DDPM + wavelet for synthetic financial time series
 6. arxiv 2511.17892 — HJM no-arbitrage neural yield curve
 7. Fuster et al. — "Predictably Unequal?" — SSRN 3072038
+
+### Phase 14 — Full Vintage Expansion + Forecast Validation (June 13-15, 2026)
+
+**Data expanded to 21 vintages (2018Q1–2023Q1):**
+- Downloaded 2018Q1–Q4, 2019Q1–Q4, 2022Q1–Q4 from capitalmarkets.fanniemae.com
+- Fixed ZHVI coverage gap: zhvi_zip3.csv only covered 2019+, causing 2018 loans to silently drop (NaN current_ltv). Rebuilt to cover 2015–2026; 2019+ values byte-identical to original (max diff = 0.0000)
+- Sequences rebuilt: train 6,295,960×33×9, test 1,573,990×33×9
+- Hazard model retrained: AUC 0.7999 (best at epoch 3, then overfits on larger dataset)
+- Platt recalibration: a=0.4934, b=−4.840
+
+**Forecast vs. realized CPR validation (core contribution):**
+- Built time-varying forecast CPR: ran hazard model with each historical month's actual PMMS as refi incentive
+- Before 2018-19 vintages: model underestimated premium-regime CPR by 4-7x
+- After expansion: model tracks realized CPR across full rate cycle
+  - Peak 2020-21 (premium): FNCL 4.5% forecast 4.6% vs realized 4.5% — near exact
+  - Trough 2022-23 (discount): FNCL 6.5% forecast 2.7% vs realized 2.7% — exact
+- Root cause of old gap: model needed 2018-19 loans (their first 33 months cover the 2020-21 refi boom)
+- Files: forecast_cpr_timeseries.csv, forecast_vs_realized_cpr.csv
+
+**Updated Fama-MacBeth results (21-vintage model):**
+| Market | Months | λ_x mean | t-stat | p-value |
+|--------|--------|----------|--------|---------|
+| Discount (DM) | 76 | +0.000016 | 0.20 | 0.84 |
+| Premium (PM) | 24 | −0.000639 | −2.15 | **0.042** |
+
+PM result robust across all three model versions (9/13/21-vintage). DM insignificance is structural — in current rate environment all 9 coupons are discount, insufficient sign variation in beta_x to identify lambda_x.
+
+**Realized CPR bug history:**
+- v1: wrong column (cumulative flag) → monotonically increasing CPR
+- v2-3: col41 = Modification Flag (Y/N), not prepayment
+- v4: UPB=0 in last appearance per file → cross-file bug (Dec 2018 spikes for multi-file loans)
+- v5 (current): global cross-file Pass 0 finds true last appearance per loan across all 21 files; remaining Dec 2018 artifact under investigation (early-month UPB reporting lag)
+
+---
