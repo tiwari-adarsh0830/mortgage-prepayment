@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/scratch/at7095/mortgage_prepayment/prepare_sequences.py", line 348, in <module>
+    main()
+  File "/scratch/at7095/mortgage_prepayment/prepare_sequences.py", line 253, in main
+    scaler.partial_fit(df[FEATURE_COLS].dropna())
+  File "/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/sklearn/base.py", line 1365, in wrapper
+    return fit_method(estimator, *args, **kwargs)
+  File "/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/sklearn/preprocessing/_data.py", line 943, in partial_fit
+    X = validate_data(
+  File "/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/sklearn/utils/validation.py", line 2954, in validate_data
+    out = check_array(X, input_name="X", **check_params)
+  File "/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/sklearn/utils/validation.py", line 1128, in check_array
+    raise ValueError(
+ValueError: Found array with 0 sample(s) (shape=(0, 9)) while a minimum of 1 is required by StandardScaler.

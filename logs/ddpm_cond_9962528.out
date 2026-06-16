@@ -1,0 +1,60 @@
+Device: cuda
+Training windows: (627, 33)
+Rate change: mean=-0.0017, std=0.2728
+Start rates: mean=7.7420%, std=3.2621%
+Today's rate: 6.1775%
+
+Today's rate: 6.1775% (normalized: -0.4796)
+Model parameters: 646,049
+
+Training conditional DDPM for 2000 epochs...
+  Epoch 50/2000  loss=0.80314
+  Epoch 100/2000  loss=0.58585
+  Epoch 150/2000  loss=0.54797
+  Epoch 200/2000  loss=0.53921
+  Epoch 250/2000  loss=0.52035
+  Epoch 300/2000  loss=0.51934
+  Epoch 350/2000  loss=0.51231
+  Epoch 400/2000  loss=0.51580
+  Epoch 450/2000  loss=0.50427
+  Epoch 500/2000  loss=0.49066
+  Epoch 550/2000  loss=0.49436
+  Epoch 600/2000  loss=0.48592
+  Epoch 650/2000  loss=0.48685
+  Epoch 700/2000  loss=0.48297
+  Epoch 750/2000  loss=0.48743
+  Epoch 800/2000  loss=0.48625
+  Epoch 850/2000  loss=0.48932
+  Epoch 900/2000  loss=0.47437
+  Epoch 950/2000  loss=0.48869
+  Epoch 1000/2000  loss=0.47247
+  Epoch 1050/2000  loss=0.46691
+  Epoch 1100/2000  loss=0.47713
+  Epoch 1150/2000  loss=0.46778
+  Epoch 1200/2000  loss=0.46552
+  Epoch 1250/2000  loss=0.45559
+  Epoch 1300/2000  loss=0.45507
+  Epoch 1350/2000  loss=0.46354
+  Epoch 1400/2000  loss=0.46293
+  Epoch 1450/2000  loss=0.45123
+  Epoch 1500/2000  loss=0.44798
+  Epoch 1550/2000  loss=0.44916
+  Epoch 1600/2000  loss=0.44748
+  Epoch 1650/2000  loss=0.45468
+  Epoch 1700/2000  loss=0.44131
+  Epoch 1750/2000  loss=0.44598
+  Epoch 1800/2000  loss=0.45354
+  Epoch 1850/2000  loss=0.44479
+  Epoch 1900/2000  loss=0.45174
+  Epoch 1950/2000  loss=0.44387
+  Epoch 2000/2000  loss=0.44662
+Model saved.
+
+Generating 1000 paths conditioned on 6.18%...
+Rate paths saved: (1000, 34)
+Fan chart saved.
+
+── Generated path stats ──
+  Start:  6.177% (should be 6.177%)
+  Month 12: median=6.150%
+  Month 33: median=6.308%  p10=4.795%  p90=7.889%

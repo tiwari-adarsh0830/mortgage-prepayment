@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/scratch/at7095/mortgage_prepayment/train.py", line 316, in <module>
+    main()
+  File "/scratch/at7095/mortgage_prepayment/train.py", line 212, in main
+    X_train, X_test, y_train, y_test = train_test_split(
+  File "/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/sklearn/utils/_param_validation.py", line 218, in wrapper
+    return func(*args, **kwargs)
+  File "/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/sklearn/model_selection/_split.py", line 2919, in train_test_split
+    n_train, n_test = _validate_shuffle_split(
+  File "/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/sklearn/model_selection/_split.py", line 2499, in _validate_shuffle_split
+    raise ValueError(
+ValueError: With n_samples=0, test_size=0.2 and train_size=None, the resulting train set will be empty. Adjust any of the aforementioned parameters.

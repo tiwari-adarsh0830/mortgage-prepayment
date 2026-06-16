@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/scratch/at7095/mortgage_prepayment/scripts/train_hazard.py", line 278, in <module>
+    main()
+  File "/scratch/at7095/mortgage_prepayment/scripts/train_hazard.py", line 208, in main
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max',
+TypeError: ReduceLROnPlateau.__init__() got an unexpected keyword argument 'verbose'

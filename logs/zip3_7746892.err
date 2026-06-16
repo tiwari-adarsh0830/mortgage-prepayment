@@ -1,0 +1,16 @@
+/opt/slurm/data/slurmd/job7746892/slurm_script: line 15: /share/apps/anaconda3/2021.11/etc/profile.d/conda.sh: No such file or directory
+
+CondaError: Run 'conda init' before 'conda activate'
+
+Traceback (most recent call last):
+  File "/scratch/at7095/mortgage_prepayment/train_zip3.py", line 290, in <module>
+    main()
+  File "/scratch/at7095/mortgage_prepayment/train_zip3.py", line 230, in main
+    df_all = pd.concat(all_frames, ignore_index=True)
+  File "/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/pandas/core/reshape/concat.py", line 382, in concat
+    op = _Concatenator(
+  File "/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/pandas/core/reshape/concat.py", line 445, in __init__
+    objs, keys = self._clean_keys_and_objs(objs, keys)
+  File "/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/pandas/core/reshape/concat.py", line 507, in _clean_keys_and_objs
+    raise ValueError("No objects to concatenate")
+ValueError: No objects to concatenate

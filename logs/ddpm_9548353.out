@@ -1,0 +1,63 @@
+Job started: Mon May 25 01:51:56 EDT 2026
+Device: cuda
+Training windows: (627, 33)
+Rate change mean=-0.0017, std=0.2728
+Starting rate: 6.1775%
+Model parameters: 608,993
+
+Training DDPM for 2000 epochs...
+  Epoch 50/2000  loss=0.78336
+  Epoch 100/2000  loss=0.59119
+  Epoch 150/2000  loss=0.55439
+  Epoch 200/2000  loss=0.53939
+  Epoch 250/2000  loss=0.51938
+  Epoch 300/2000  loss=0.52144
+  Epoch 350/2000  loss=0.51307
+  Epoch 400/2000  loss=0.51957
+  Epoch 450/2000  loss=0.50790
+  Epoch 500/2000  loss=0.49932
+  Epoch 550/2000  loss=0.49741
+  Epoch 600/2000  loss=0.48677
+  Epoch 650/2000  loss=0.49094
+  Epoch 700/2000  loss=0.48577
+  Epoch 750/2000  loss=0.49116
+  Epoch 800/2000  loss=0.49515
+  Epoch 850/2000  loss=0.48902
+  Epoch 900/2000  loss=0.47618
+  Epoch 950/2000  loss=0.48522
+  Epoch 1000/2000  loss=0.47303
+  Epoch 1050/2000  loss=0.46586
+  Epoch 1100/2000  loss=0.47864
+  Epoch 1150/2000  loss=0.46897
+  Epoch 1200/2000  loss=0.46885
+  Epoch 1250/2000  loss=0.46263
+  Epoch 1300/2000  loss=0.45766
+  Epoch 1350/2000  loss=0.46696
+  Epoch 1400/2000  loss=0.46269
+  Epoch 1450/2000  loss=0.45417
+  Epoch 1500/2000  loss=0.45223
+  Epoch 1550/2000  loss=0.45251
+  Epoch 1600/2000  loss=0.45570
+  Epoch 1650/2000  loss=0.45881
+  Epoch 1700/2000  loss=0.44595
+  Epoch 1750/2000  loss=0.45231
+  Epoch 1800/2000  loss=0.45750
+  Epoch 1850/2000  loss=0.44554
+  Epoch 1900/2000  loss=0.45471
+  Epoch 1950/2000  loss=0.45017
+  Epoch 2000/2000  loss=0.45093
+Model saved.
+Training loss plot saved.
+
+Generating 1000 rate paths...
+Rate paths saved: (1000, 34)
+Fan chart saved.
+Distribution comparison saved.
+
+── Generated path stats at month 33 ──
+  median=6.078%  p10=4.088%  p90=8.093%
+
+── Rate change distribution comparison ──
+  Real:      mean=-0.0017  std=0.2728  min=-2.0650  max=2.2432
+  Generated: mean=-0.0033  std=0.2025  min=-1.2941  max=1.4838
+Job finished: Mon May 25 01:52:48 EDT 2026

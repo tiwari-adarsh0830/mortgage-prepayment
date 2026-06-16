@@ -1,0 +1,54 @@
+Job started: Mon May 25 02:12:44 EDT 2026
+train_labels: 3,917,876 loans
+test_labels:  979,469 loans
+test_loan_ids: 981,055
+
+Collecting all loan IDs from raw vintages...
+Total unique loan IDs in raw data: 9,810,549
+Reconstructed train_loan_ids: 8,829,494 (saved)
+  train_seq has 3,917,876 rows — difference is due to subsampling in pipeline
+
+Recovering prepay timesteps for 9,810,549 loans...
+  Loading 2020Q1...
+  Prepaid loans found so far: 25,820
+  Loading 2020Q2...
+  Prepaid loans found so far: 43,214
+  Loading 2020Q3...
+  Prepaid loans found so far: 54,346
+  Loading 2020Q4...
+  Prepaid loans found so far: 64,645
+  Loading 2021Q1...
+  Prepaid loans found so far: 73,269
+  Loading 2021Q2...
+  Prepaid loans found so far: 82,459
+  Loading 2021Q3...
+  Prepaid loans found so far: 91,516
+  Loading 2021Q4...
+  Prepaid loans found so far: 100,186
+  Loading 2023Q1...
+  Prepaid loans found so far: 101,640
+
+Saved train_prepay_timestep.npy shape=(8829494,)
+Saved test_prepay_timestep.npy  shape=(981055,)
+
+── Test sanity check (first 979,469 aligned rows) ──
+  Prepaid loans:       10,385
+  With timestep >= 0:  116
+  With timestep == -1: 10,269
+  Timestep distribution (prepaid):
+    t=-1: 10,269
+    t= 0: 13
+    t= 1: 35
+    t= 2: 24
+    t= 3: 21
+    t= 4: 6
+    t= 6: 1
+    t= 7: 3
+    t= 8: 1
+    t= 9: 1
+    t=12: 1
+    t=13: 1
+    t=14: 1
+    t=15: 1
+    t=18: 1
+Job finished: Mon May 25 03:07:50 EDT 2026
