@@ -13,7 +13,7 @@ import json
 import time
 
 BASE      = "/scratch/at7095/mortgage_prepayment"
-SEQ_DIR   = os.path.join(BASE, "data/sequences")
+SEQ_DIR   = os.path.join(BASE, "data/sequences_extended")
 OUTPUTS   = os.path.join(BASE, "outputs")
 
 TRAIN_SEQ    = os.path.join(SEQ_DIR, "train_seq.npy")
@@ -218,7 +218,7 @@ def main():
 
     # Resume disabled — retraining with new 9-feature input
     # (old checkpoint has 6-feature weights, incompatible)
-    ckpt_path = os.path.join(OUTPUTS, 'hazard_best.pt')
+    ckpt_path = os.path.join(OUTPUTS, 'hazard_best_extended.pt')
     # if os.path.exists(ckpt_path): ... (disabled)
 
     print(f"\nTraining for {N_EPOCHS} epochs × {STEPS_PER_EPOCH} steps (start={start_epoch})...", flush=True)
@@ -269,10 +269,10 @@ def main():
                 'config': {'n_heads': 4, 'n_layers': 2, 'd_model': 64, 'dropout': 0.1},
                 'epoch': epoch,
                 'auc':   auc,
-            }, os.path.join(OUTPUTS, 'hazard_best.pt'))
+            }, os.path.join(OUTPUTS, 'hazard_best_extended.pt'))
             print(f"  → New best AUC: {best_auc:.4f} — saved.", flush=True)
 
-    with open(os.path.join(OUTPUTS, 'results_hazard.json'), 'w') as f:
+    with open(os.path.join(OUTPUTS, 'results_hazard_extended.json'), 'w') as f:
         json.dump({'best_auc': best_auc, 'history': results}, f, indent=2)
 
     print(f"\nDone. Best AUC: {best_auc:.4f}", flush=True)
