@@ -21,7 +21,7 @@ df = pd.read_csv(RAW)
 # Identify date columns (YYYY-MM-DD format)
 date_cols = [c for c in df.columns if c[:4].isdigit() and '-' in c]
 # Keep only 2015 onwards (covers all loan origination dates we'll see)
-date_cols = [c for c in date_cols if int(c[:4]) >= 2015]
+date_cols = [c for c in date_cols if int(c[:4]) >= 2000]
 print(f"Date columns 2015+: {len(date_cols)} ({date_cols[0]} to {date_cols[-1]})", flush=True)
 
 # RegionName is the zip code

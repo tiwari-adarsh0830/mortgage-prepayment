@@ -2,14 +2,14 @@
 Calibrate hazard model for the 50% prepaid oversampling.
 Fits Platt scaling sigmoid(a*logit + b) mapping model logit -> true per-timestep
 hazard, on a representative (un-rebalanced) sample of real test loans.
-Saves outputs/hazard_calibration.json and prints a reliability check.
+Saves outputs/hazard_calibration_extended.json and prints a reliability check.
 """
 import numpy as np, torch, torch.nn as nn, os, json
 from sklearn.linear_model import LogisticRegression
 
 BASE="/scratch/at7095/mortgage_prepayment"
-SEQ=os.path.join(BASE,"data/sequences"); OUT=os.path.join(BASE,"outputs")
-CKPT=os.path.join(OUT,"hazard_best.pt")
+SEQ=os.path.join(BASE,"data/sequences_extended"); OUT=os.path.join(BASE,"outputs")
+CKPT=os.path.join(OUT,"hazard_best_extended.pt")
 MAX_SEQ,N_FEATURES=33,9
 DEVICE=torch.device("cuda" if torch.cuda.is_available() else "cpu")
 N_SAMPLE=150000            # uniform subsample of test loans (preserves true base rate)
@@ -93,7 +93,7 @@ def main():
 
     json.dump({"a":a,"b":b,"note":"calibrated_SMM=sigmoid(a*logit+b)",
                "sample":len(idx),"calib_rate":float(Y.mean())},
-              open(os.path.join(OUT,"hazard_calibration.json"),"w"),indent=2)
-    print("Saved outputs/hazard_calibration.json")
+              open(os.path.join(OUT,"hazard_calibration_extended.json"),"w"),indent=2)
+    print("Saved outputs/hazard_calibration_extended.json")
 
 if __name__=="__main__": main()

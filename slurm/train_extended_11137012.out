@@ -1,0 +1,12 @@
+Device: cpu
+Loading sequences...
+train_seq: (5558998, 33, 9), prepay: (5558998,)
+test_seq:  (1389750, 33, 9),  labels: (1389750,)
+
+Building hazard sampler...
+  HazardSampler: 5,558,998 valid loans out of 5,558,998
+  Prepaid loans: 136,012 (2.45%)
+pos_weight: 1.0 (n_prepaid=136,012, avg_seq=28.2)
+
+Training for 50 epochs × 10000 steps (start=1)...
+[2026-06-19T09:39:18.146] error: *** JOB 11137012 ON cs639 CANCELLED AT 2026-06-19T09:39:18 DUE to SIGNAL Terminated ***

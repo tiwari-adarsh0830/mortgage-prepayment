@@ -1,0 +1,71 @@
+Device: cuda
+Loading sequences...
+train_seq: (5558998, 33, 9), prepay: (5558998,)
+test_seq:  (1389750, 33, 9),  labels: (1389750,)
+
+Building hazard sampler...
+  HazardSampler: 5,558,998 valid loans out of 5,558,998
+  Prepaid loans: 136,012 (2.45%)
+pos_weight: 1.0 (n_prepaid=136,012, avg_seq=28.2)
+
+Training for 50 epochs × 10000 steps (start=1)...
+/scratch/at7095/conda_envs/mortgage_env/lib/python3.10/site-packages/torch/nn/modules/transformer.py:531: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+  output = torch._nested_tensor_from_mask(
+Epoch  1/50  loss=0.14887  auc=0.7483  t=311s
+  → New best AUC: 0.7483 — saved.
+Epoch  2/50  loss=0.14275  auc=0.7218  t=154s
+Epoch  3/50  loss=0.14167  auc=0.7196  t=154s
+Epoch  4/50  loss=0.14160  auc=0.7281  t=154s
+Epoch  5/50  loss=0.14127  auc=0.7235  t=154s
+Epoch  6/50  loss=0.14115  auc=0.7289  t=155s
+Epoch  7/50  loss=0.14134  auc=0.7462  t=155s
+Epoch  8/50  loss=0.14070  auc=0.7498  t=156s
+  → New best AUC: 0.7498 — saved.
+Epoch  9/50  loss=0.14058  auc=0.7568  t=177s
+  → New best AUC: 0.7568 — saved.
+Epoch 10/50  loss=0.14059  auc=0.7586  t=177s
+  → New best AUC: 0.7586 — saved.
+Epoch 11/50  loss=0.14046  auc=0.7553  t=178s
+Epoch 12/50  loss=0.14056  auc=0.7513  t=177s
+Epoch 13/50  loss=0.14053  auc=0.7479  t=178s
+Epoch 14/50  loss=0.14054  auc=0.7587  t=177s
+  → New best AUC: 0.7587 — saved.
+Epoch 15/50  loss=0.14044  auc=0.7494  t=178s
+Epoch 16/50  loss=0.14053  auc=0.7518  t=177s
+Epoch 17/50  loss=0.14044  auc=0.7412  t=176s
+Epoch 18/50  loss=0.14047  auc=0.7728  t=176s
+  → New best AUC: 0.7728 — saved.
+Epoch 19/50  loss=0.14048  auc=0.7469  t=176s
+Epoch 20/50  loss=0.14042  auc=0.7381  t=176s
+Epoch 21/50  loss=0.14038  auc=0.7214  t=176s
+Epoch 22/50  loss=0.14040  auc=0.7409  t=176s
+Epoch 23/50  loss=0.14020  auc=0.7429  t=177s
+Epoch 24/50  loss=0.14047  auc=0.7442  t=176s
+Epoch 25/50  loss=0.14008  auc=0.7478  t=176s
+Epoch 26/50  loss=0.14002  auc=0.7277  t=165s
+Epoch 27/50  loss=0.14005  auc=0.7373  t=154s
+Epoch 28/50  loss=0.14002  auc=0.7365  t=153s
+Epoch 29/50  loss=0.14010  auc=0.7474  t=153s
+Epoch 30/50  loss=0.14001  auc=0.7340  t=153s
+Epoch 31/50  loss=0.13990  auc=0.7490  t=153s
+Epoch 32/50  loss=0.13982  auc=0.7440  t=153s
+Epoch 33/50  loss=0.13979  auc=0.7468  t=153s
+Epoch 34/50  loss=0.13994  auc=0.7368  t=153s
+Epoch 35/50  loss=0.13990  auc=0.7386  t=153s
+Epoch 36/50  loss=0.13996  auc=0.7485  t=154s
+Epoch 37/50  loss=0.13959  auc=0.7425  t=153s
+Epoch 38/50  loss=0.13968  auc=0.7366  t=154s
+Epoch 39/50  loss=0.13982  auc=0.7361  t=153s
+Epoch 40/50  loss=0.13978  auc=0.7323  t=153s
+Epoch 41/50  loss=0.13971  auc=0.7422  t=153s
+Epoch 42/50  loss=0.13987  auc=0.7401  t=153s
+Epoch 43/50  loss=0.13966  auc=0.7408  t=153s
+Epoch 44/50  loss=0.13972  auc=0.7412  t=153s
+Epoch 45/50  loss=0.13952  auc=0.7397  t=153s
+Epoch 46/50  loss=0.13972  auc=0.7448  t=153s
+Epoch 47/50  loss=0.13949  auc=0.7428  t=153s
+Epoch 48/50  loss=0.13959  auc=0.7393  t=153s
+Epoch 49/50  loss=0.13966  auc=0.7424  t=153s
+Epoch 50/50  loss=0.13958  auc=0.7407  t=153s
+
+Done. Best AUC: 0.7728
