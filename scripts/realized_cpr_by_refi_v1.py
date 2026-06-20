@@ -22,6 +22,8 @@ import pandas as pd
 import numpy as np
 import glob
 import os
+import sys
+import argparse
 from collections import defaultdict
 
 BASE = "/scratch/at7095/mortgage_prepayment"
@@ -35,7 +37,7 @@ COL_RATE  = 7
 COL_UPB   = 11
 COL_AGE   = 15    # loan_age, field 16 -> 0-indexed 15
 CHUNK     = 2_000_000
-MAX_AGE   = 33
+MAX_AGE   = 33   # default; overridable via --max-age
 
 # Refi-incentive bins (percentage points). Edges chosen to span the
 # diagnostic sweep (-2 .. +3) used in diag_raw_hazard.py.
@@ -161,16 +163,30 @@ def run_cohort(name, vintages, pmms):
 
 
 def main():
+    global MAX_AGE
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--max-age', type=int, default=33,
+                    help='cap on loan_age (months) for the at-risk/prepay window')
+    ap.add_argument('--cohorts', type=str, default='pre2020,boom',
+                    help='comma-separated subset of cohort names to run')
+    ap.add_argument('--tag', type=str, default='',
+                    help='suffix appended to the output CSV filename')
+    args = ap.parse_args()
+    MAX_AGE = args.max_age
+    selected = [c.strip() for c in args.cohorts.split(',') if c.strip()]
+    cohorts_to_run = {k: v for k, v in COHORTS.items() if k in selected}
+    print(f"Running cohorts={list(cohorts_to_run)}  MAX_AGE={MAX_AGE}", flush=True)
+
     pmms = load_pmms()
     all_rows = []
-    for name, vintages in COHORTS.items():
+    for name, vintages in cohorts_to_run.items():
         all_rows += run_cohort(name, vintages, pmms)
 
     out = pd.DataFrame(all_rows)
     # order refi_bin as categorical for clean output
     out['refi_bin'] = pd.Categorical(out['refi_bin'], categories=BIN_LBL, ordered=True)
     out = out.sort_values(['cohort', 'refi_bin']).reset_index(drop=True)
-    path = os.path.join(OUT, "realized_cpr_by_refi_v1.csv")
+    path = os.path.join(OUT, f"realized_cpr_by_refi_v1{args.tag}.csv")
     out.to_csv(path, index=False)
     print(f"\nSaved: {path}", flush=True)
 
