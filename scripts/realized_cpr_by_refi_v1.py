@@ -5,7 +5,7 @@ restricted to each loan's first 33 months (the model's training window).
 Purpose: show whether the refi-incentive -> prepayment S-curve is present in
 the data each model trained on. Reuses the validated v5 prepay detection
 (global last appearance; UPB=0 at global last month => prepaid) so the
-prepayment definition is identical to what advisor already accepted.
+prepayment definition is identical to what the advisor already accepted.
 
 refi_incentive (per loan-month) = original_note_rate - PMMS_30yr[that month]
   positive  => borrower rate ABOVE market => incentive to refinance => high CPR
