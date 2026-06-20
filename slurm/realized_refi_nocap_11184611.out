@@ -1,0 +1,83 @@
+Running cohorts=['pre2020']  MAX_AGE=200
+
+=== Cohort 'pre2020': 28 files ===
+  Pass 0: global last appearance per loan...
+    [1/28] 2013Q1.csv 63,834,084 rows
+    [2/28] 2013Q2.csv 59,357,736 rows
+    [3/28] 2013Q3.csv 49,333,486 rows
+    [4/28] 2013Q4.csv 28,484,281 rows
+    [5/28] 2014Q1.csv 17,884,976 rows
+    [6/28] 2014Q2.csv 20,587,058 rows
+    [7/28] 2014Q3.csv 25,366,522 rows
+    [8/28] 2014Q4.csv 26,249,438 rows
+    [9/28] 2015Q1.csv 29,594,312 rows
+    [10/28] 2015Q2.csv 34,938,526 rows
+    [11/28] 2015Q3.csv 33,537,234 rows
+    [12/28] 2015Q4.csv 28,085,043 rows
+    [13/28] 2016Q1.csv 25,909,620 rows
+    [14/28] 2016Q2.csv 35,319,151 rows
+    [15/28] 2016Q3.csv 44,367,669 rows
+    [16/28] 2016Q4.csv 46,980,454 rows
+    [17/28] 2017Q1.csv 29,768,027 rows
+    [18/28] 2017Q2.csv 27,216,358 rows
+    [19/28] 2017Q3.csv 30,278,063 rows
+    [20/28] 2017Q4.csv 28,166,492 rows
+    [21/28] 2018Q1.csv 23,218,185 rows
+    [22/28] 2018Q2.csv 19,764,254 rows
+    [23/28] 2018Q3.csv 19,768,447 rows
+    [24/28] 2018Q4.csv 15,388,602 rows
+    [25/28] 2019Q1.csv 11,583,612 rows
+    [26/28] 2019Q2.csv 14,118,594 rows
+    [27/28] 2019Q3.csv 25,573,444 rows
+    [28/28] 2019Q4.csv 27,530,400 rows
+  Pass 0 done: 13,945,487 loans, 1,666,679 prepaid (11.95%)
+  Pass 1: aggregating by refi-incentive bin (age<=33)...
+    [1/28] 2013Q1.csv
+    [2/28] 2013Q2.csv
+    [3/28] 2013Q3.csv
+    [4/28] 2013Q4.csv
+    [5/28] 2014Q1.csv
+    [6/28] 2014Q2.csv
+    [7/28] 2014Q3.csv
+    [8/28] 2014Q4.csv
+    [9/28] 2015Q1.csv
+    [10/28] 2015Q2.csv
+    [11/28] 2015Q3.csv
+    [12/28] 2015Q4.csv
+    [13/28] 2016Q1.csv
+    [14/28] 2016Q2.csv
+    [15/28] 2016Q3.csv
+    [16/28] 2016Q4.csv
+    [17/28] 2017Q1.csv
+    [18/28] 2017Q2.csv
+    [19/28] 2017Q3.csv
+    [20/28] 2017Q4.csv
+    [21/28] 2018Q1.csv
+    [22/28] 2018Q2.csv
+    [23/28] 2018Q3.csv
+    [24/28] 2018Q4.csv
+    [25/28] 2019Q1.csv
+    [26/28] 2019Q2.csv
+    [27/28] 2019Q3.csv
+    [28/28] 2019Q4.csv
+
+Saved: /scratch/at7095/mortgage_prepayment/outputs/realized_cpr_by_refi_v1_nocap.csv
+
+=== Realized CPR by refi-incentive bin (age<=33) ===
+
+Cohort: pre2020
+refi_bin  n_atrisk  n_prepay      cpr
+   <-1.5 159927183      2369 0.000178
+-1.5..-1  50883023     11670 0.002749
+-1..-0.5  97489759     47498 0.005831
+ -0.5..0 139689338    103096 0.008821
+  0..0.5 148915225    215644 0.017239
+  0.5..1 123134811    107312 0.010408
+  1..1.5  68569031     25199 0.004401
+  1.5..2  29948548      1992 0.000798
+      >2  12947509        40 0.000037
+
+Cohort: boom
+Empty DataFrame
+Columns: [refi_bin, n_atrisk, n_prepay, cpr]
+Index: []
