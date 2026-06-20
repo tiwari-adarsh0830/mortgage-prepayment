@@ -38,9 +38,15 @@ mortgage_prepayment/
 │   ├── stage2_coupon_cpr.py            # CPR extraction by coupon bucket
 │   ├── stage2_der_betas.py             # DER beta_x, beta_y computation (Eq. 5-6)
 │   ├── stage3_der_regression_v2.py     # Fama-MacBeth cross-sectional regression
-│   ├── realized_cpr_v4.py              # Realized CPR by coupon by month (CORRECT)
-│   └── run_cpr_v4.sbatch               # SLURM job for realized CPR
-├── prepare_sequences.py            # Data pipeline: raw CSV → padded sequences
+│   ├── realized_cpr_v5.py              # Realized CPR by coupon (global 3-pass; current)
+│   ├── realized_cpr_v4.py              # superseded by v5 (cross-file last-appearance bug)
+│   ├── realized_cpr_by_refi_v1.py      # Realized CPR by refi-incentive bin (Phase 15)
+│   ├── diag_raw_hazard.py              # refi-incentive sweep, single model (Phase 15)
+│   ├── diag_panels_2_3.py             # refi sweep + distribution, both models (Phase 15)
+│   └── check_schema_2013_2017.py       # schema validation for added vintages
+├── prepare_sequences.py            # Data pipeline: raw CSV → padded sequences (production)
+├── prepare_sequences_extended.py   # 2013–2019 train + 2020–2021 OOS holdout (Phase 15)
+├── ARCHIVE_GUIDE.md                # Archive layout + reproduction path
 ├── work_log.txt                    # Hourly work log
 └── README.md
 ```
@@ -50,24 +56,30 @@ mortgage_prepayment/
 ## Data
 
 ### Fannie Mae Loan Performance Data
-Source: https://loanperformancedata.fanniemae.com  
-Format: Pipe-delimited (|), no header row (col0 = empty due to leading pipe).  
-Pre-2020 files: 113 cols. Post-2020 files: 110 cols. Key field positions unchanged.
+Source: https://capitalmarkets.fanniemae.com/credit-risk-transfer/single-family-credit-risk-transfer/fannie-mae-single-family-loan-performance-data
+(portal blocks server-side downloads via Cloudflare; download manually in browser, then transfer to HPC.)
+Format: Pipe-delimited (|), no header row (col0 = empty due to leading pipe).
+Vintages 2013Q1–2023Q1 all carry 113 columns with identical key field positions; categorical codes (loan_purpose R/P/C, property_type SF/PU/CO/MH, DTI) populated throughout.
 
-| Vintage | Loans | Rate Environment |
-|---------|-------|-----------------|
-| 2018Q1–Q4 | ~1.8M | ~4.5–5% |
-| 2019Q1–Q4 | ~2.1M | ~3.5–4.5% |
-| 2020Q1–Q4 | ~2.4M | ~2.7–3.5% (COVID low) |
-| 2021Q1–Q4 | ~2.4M | ~2.7–3.5% |
-| 2022Q1–Q4 | ~4.7M | ~3.5–7% (rising) |
-| 2023Q1 | ~105K | ~6.5–7% (high) |
-| **Total** | **~15.7M unique loans** | **Full rate cycle covered** |
+| Vintage | Rate Environment | Use |
+|---------|------------------|-----|
+| 2013Q1–2017Q4 | ~3.5–4.5% (post-crisis, stable) | Pre-2020 extension (Phase 15) |
+| 2018Q1–Q4 | ~4.5–5% | Production train |
+| 2019Q1–Q4 | ~3.5–4.5% | Production train |
+| 2020Q1–Q4 | ~2.7–3.5% (COVID low) | Production train / Phase 15 OOS holdout |
+| 2021Q1–Q4 | ~2.7–3.5% | Production train / Phase 15 OOS holdout |
+| 2022Q1–Q4 | ~3.5–7% (rising) | Production train |
+| 2023Q1 | ~6.5–7% (high) | Production train |
+
+The production hazard model uses 21 vintages (2018Q1–2023Q1, ~15.7M unique loans).
+Phase 15 adds 2013Q1–2017Q4 for the pre-2020 training experiment.
 
 **Sequence data:**
-- Train: 6,295,960 × 33 × 9
-- Test: 1,573,990 × 33 × 9
+- Production (21-vintage): train 6,295,960 × 33 × 9, test 1,573,990 × 33 × 9
+- Extended (2013–2019, Phase 15): train 5,558,998, test 1,389,750 (2.54% prepay)
+- OOS holdout (2020–2021, Phase 15): 9,584,630 loans (1.07% prepay)
 - Mask convention: True = real timestep throughout; inverted inside forward() for PyTorch attention
+- Sequence arrays are not tracked in git (~29GB); regenerate via prepare_sequences*.py
 
 ### Bloomberg TBA Data (pulled June 2026, Bobst terminal)
 - FNCL 2.5–6.5 Mtge: Monthly last price, Jan 2018–May 2026, 32nds converted to decimal
@@ -87,8 +99,19 @@ Pre-2020 files: 113 cols. Post-2020 files: 110 cols. Key field positions unchang
 | `original_upb` | Original unpaid principal balance |
 | `loan_age_months` | Age in months |
 | `dti` | Debt-to-income at origination |
-| `loan_purpose_enc` | N=0 (purchase), Y=1 (refi/cash-out) |
-| `property_type_enc` | P=0 (PUD), R=1 (row), C=2 (condo) |
+| `loan_purpose_enc` | **Inactive** — see note below |
+| `property_type_enc` | **Inactive** — see note below |
+
+> **Note on the two categorical features (known issue).** In `prepare_sequences.py`,
+> `loan_purpose` is mapped with `{'N':0,'Y':1}` and `property_type` with
+> `{'P':0,'R':1,'C':2}`. The raw Fannie data actually uses `loan_purpose` codes
+> R/P/C and `property_type` codes SF/PU/CO/MH, so neither mapping matches — both
+> resolve to the `.fillna(0)` default and are effectively constant zero. The
+> diagnostics treat them as dead (`DEAD_COLS=[7,8]`), and all reported results
+> were produced with these two features inert. **Fix opportunity:** remap to the
+> real codes (loan_purpose R/P/C → 0/1/2; property_type SF/PU/CO/MH → 0/1/2/3)
+> and retrain to add two genuinely live features. Net effect on current results
+> is nil since the model never used them.
 
 ---
 
@@ -138,7 +161,7 @@ where $\beta^i_x = \frac{r_t - c^i}{(r_t + \phi^i)(\phi^i + c^i)}$ and $\beta^i_
 - Treasury-hedged excess return: TBA total return minus duration-matched UST return (D_mod = 6.5yr blended)
 - Market type: DM = PMMS > 3.5% (WAC proxy), PM = PMMS < 3.5%
 
-**Fama-MacBeth results (100 months, Jan 2019–May 2026):**
+**Fama-MacBeth results — 13-vintage model (superseded; see Phase 14 for current 21-vintage figures):**
 
 | Market | Months | λ_x mean | t-stat | p-value | Sign correct? |
 |--------|--------|----------|--------|---------|---------------|
@@ -147,26 +170,30 @@ where $\beta^i_x = \frac{r_t - c^i}{(r_t + \phi^i)(\phi^i + c^i)}$ and $\beta^i_
 
 DER prediction confirmed in PM (2020–21): λ_x < 0 when market is premium-heavy.
 DM result correct sign but insignificant — attributed to compressed CPR cross-section from one-sided loan panel.
+The current production figures (21-vintage model) are in Phase 14 below: PM λ_x = −0.000639, t = −2.15, p = 0.042.
 
 **Known limitation:** Fannie Mae panel (2020Q1–2023Q1) is discount-heavy (rates only rose). Hazard model CPR spread: 0.74–1.46% vs realized 1–39%. Full DM identification requires earlier vintages spanning the 2020–21 premium regime.
 
 ---
 
 ## Key Files (outputs/)
+Tracked in git (models + result tables):
 | File | Description |
 |------|-------------|
-| `transformer_best.pt` | Binary classifier (AUC 0.8431) |
-| `hazard_best.pt` | Discrete hazard model (AUC 0.7999, 21 vintages) |
-| `ddpm_conditional.pt` | Conditional DDPM checkpoint |
-| `pmms_cond_paths.npy` | PMMS rate paths (refi incentive) |
-| `treasury_cond_paths.npy` | Treasury paths (discounting) |
-| `oas_cashflows.npy` | Cashflow matrix (1000 × 1000 × 33) |
-| `oas_spreads.npy` | OAS spreads per loan |
-| `stage2_coupon_cpr.json` | Hazard model CPR by coupon bucket |
-| `der_betas.json` | DER β_x, β_y per coupon (time-varying) |
+| `hazard_best.pt` | Production hazard model (AUC 0.7999, 21 vintages) |
+| `hazard_best_extended.pt` | Phase 15 pre-2020 model (AUC 0.7728, 2013–2019) |
+| `hazard_calibration.json` / `_extended.json` | Platt coefficients (a, b) per model |
+| `der_betas.csv` | DER β_x, β_y per coupon (time-varying) |
 | `stage3_lambda_ts.csv` | Monthly λ_x, λ_y from Fama-MacBeth |
 | `stage3_excess_returns.csv` | Treasury-hedged TBA excess returns |
-| `realized_cpr_by_coupon_v5.csv` | Realized CPR v5 (global cross-file detection, 21 vintages, 2018-2025) |
+| `stage3_robustness_orthog.csv` | Orthogonalized-λ_y robustness check |
+| `forecast_cpr_timeseries.csv` / `forecast_vs_realized_cpr.csv` | Forecast vs realized CPR |
+| `realized_cpr_by_coupon_v5.csv` | Realized CPR by coupon (global 3-pass, 2018–2025) |
+| `realized_cpr_by_refi_v1.csv` / `_nocap.csv` | Phase 15 realized CPR by refi-incentive bin |
+| `forecast_vs_realized_cpr_2020.png` | Headline forecast-vs-realized plot |
+
+Not tracked (large; regenerable): `*_seq.npy`, `oas_cashflows.npy`, DDPM/OAS path arrays.
+JSON variants of some tables (`der_betas.json`, `stage2_coupon_cpr.json`) also exist; the CSVs are the primary form.
 
 ---
 
