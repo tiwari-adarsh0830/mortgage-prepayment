@@ -8,7 +8,7 @@ Step 4: Excess return = TBA return - Treasury return.
 Step 5: Fama-MacBeth cross-sectional regression each month:
           R^e_{c,t} = lambda_x_t * beta_x_c + lambda_y_t * beta_y_c + eps_{c,t}
 Step 6: Classify each month as discount market (DM) or premium market (PM)
-          using PMMS vs WAC=3.5% proxy (per Gupta/Float Dashboard).
+          using PMMS vs WAC=3.5% proxy (per advisor/Float Dashboard).
 Step 7: Report lambda_x and lambda_y means by market type.
           DER prediction: lambda_x > 0 in DM, lambda_x < 0 in PM.
 
@@ -107,7 +107,7 @@ print(f"\nTBA returns panel: {len(tba_ret)} obs, {tba_ret['Date'].nunique()} mon
 #
 # For duration D_mod: use average of 5yr and 10yr duration as proxy
 # D_mod(5yr UST) ≈ 4.5 years, D_mod(10yr UST) ≈ 8.5 years
-# Use 7yr proxy (midpoint) as Gupta confirmed 5+10 hedge
+# Use 7yr proxy (midpoint) as advisor confirmed 5+10 hedge
 # More precisely: compute from the yield data directly
 # Duration ≈ (1 - 1/(1+y/2)^(2n)) / y  for annual coupon bond
 # For simplicity use D_mod = 6.5 years (mid-point 5+10yr average)

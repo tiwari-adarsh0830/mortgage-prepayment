@@ -7,7 +7,7 @@ For each sampled loan x rate path:
   - Compute monthly cashflows (scheduled P+I adjusted for prepayments)
   - Discount at path rates -> price
 Average across paths = model fair price per loan.
-OAS = spread s such that discounting at (r_t + s) matches market price (pending from Gupta).
+OAS = spread s such that discounting at (r_t + s) matches market price (pending from advisor).
 
 Note: per-loan orig_rate recovered from refi_incentive at t=0 + PMMS mean 2020-2021.
 Per-loan orig_rate recovered from refi_incentive at t=0 + PMMS mean.
@@ -242,7 +242,7 @@ def main():
         'n_loans':      N_LOANS_SAMPLE,
         'n_paths':      N_PATHS,
         'annual_coupon': 'per_loan_recovered',
-        'note': 'Prices as % of par. OAS pending market price data from Gupta.'
+        'note': 'Prices as % of par. OAS pending market price data from advisor.'
     }
     np.save(os.path.join(OUTPUTS, 'oas_loan_prices.npy'),  loan_prices)
     np.save(os.path.join(OUTPUTS, 'oas_cashflows.npy'),    loan_cashflows)
@@ -251,7 +251,7 @@ def main():
         json.dump(results, f, indent=2)
 
     print(f"\nSaved: oas_loan_prices.npy, oas_results.json")
-    print("Next step: plug in market prices from Gupta to compute OAS spread.")
+    print("Next step: plug in market prices from advisor to compute OAS spread.")
 
 
 if __name__ == "__main__":

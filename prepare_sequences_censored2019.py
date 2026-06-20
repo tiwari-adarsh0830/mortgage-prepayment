@@ -10,7 +10,7 @@ Why calendar censoring (not vintage filtering): a 2018-2019 ORIGINATION still ha
 2020-21 refi boom inside the training sequences -> the model learns the boom and
 "forecasting" it is not out-of-sample. Censoring by reporting month guarantees the
 model sees ZERO 2020+ data, so forecasting 2020-21 is a genuine OOS test
-(Gupta option b: "trained only on pre-2020 data").
+(advisor option b: "trained only on pre-2020 data").
 
 Labels are also censored: a loan that prepaid in 2021 has no prepay event within
 its <=2019 sequence, so it is correctly labeled non-prepaid as of Dec 2019.

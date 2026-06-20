@@ -3,7 +3,7 @@ Hazard Model Training — PRE-2020 (out-of-sample validation)
 -----------------------------------------------------------
 Identical architecture/config to train_hazard.py, but trains ONLY on
 2018Q1-2019Q4 sequences. The model never sees the 2020-21 refi boom.
-Used to forecast CPR into 2020-21 as a clean out-of-sample test (Gupta option b).
+Used to forecast CPR into 2020-21 as a clean out-of-sample test (advisor option b).
 
 Reads:  data/sequences_pre2020/
 Writes: outputs/hazard_pre2020_best.pt, outputs/results_hazard_pre2020.json

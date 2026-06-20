@@ -7,7 +7,7 @@ Mirrors stage2_forecast_cpr_v2.py exactly, with three swaps:
   - calibration -> hazard_pre2020_calibration.json (Platt on <=2019 holdout)
 
 The model never saw a 2020+ observation. Forecasting 2020-21 CPR is therefore a
-genuine out-of-sample test (Gupta option b). Note PMMS fell to ~2.7% in 2020-21
+genuine out-of-sample test (advisor option b). Note PMMS fell to ~2.7% in 2020-21
 vs 3.6-4.9% in the 2018-19 training window, so the model EXTRAPOLATES the
 refi-incentive -> prepay relationship beyond its training range.
 
