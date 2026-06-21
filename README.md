@@ -310,3 +310,48 @@ Old model: correct monotonic S-curve. New model: collapses to ~0 exactly where p
 **New scripts:** prepare_sequences_extended.py, diag_raw_hazard.py, diag_panels_2_3.py, realized_cpr_by_refi_v1.py, check_schema_2013_2017.py
 
 ---
+
+## Phase 16 — Rolling t→t+1 Estimation + Equity×Incentive Diagnostic (June 20, 2026)
+
+Implements the rolling real-time OOS design (advisor, June 20): train through Dec Y,
+forecast Jan–Dec Y+1, roll forward. Directly addresses the equity×rate-incentive
+interaction advisor flagged (high-leverage post-GFC loans did not refinance; low-leverage
+2020–21 loans did).
+
+### Equity×incentive diagnostic (`scripts/diag_equity_incentive.py`)
+Confirms the transformer learned the equity gate on refinancing. Sweeping rate
+incentive (−2 to +4pp) × current LTV (30–130) on the production model, holding all
+else at median:
+- LTV=80: monthly prepay hazard rises 0.22% → 17.35% as incentive goes 0 → +3pp (S-curve fires)
+- LTV=120 (underwater): same +3pp incentive only reaches 6.87%, with a much flatter curve
+- current_ltv is a live, time-varying model feature (index 3 of 9, ZHVI-adjusted each month)
+- Caveat: LTV>100 is ~0.1% of the 2013–2023 panel (2009–2012 underwater cohort absent),
+  so the underwater corner is extrapolation; the interaction is well-identified for LTV 60–100.
+- Output: `outputs/diag_equity_incentive.png`, `.csv`
+
+### Rolling pipeline (`prepare_sequences_rolling.py`, `train_hazard_rolling.py`, `forecast_rolling_cpr.py`)
+- Calendar-truncated, expanding-window prep per cutoff year; per-cutoff scaler + Platt calibration.
+- Train through Dec Y on GPU array; forecast Jan–Dec Y+1 CPR vs realized per coupon.
+
+### Key finding — the t→t+1 design only has signal from cutoff_2020 onward
+Calendar-censoring at any cutoff ≤ Dec 2019 yields a training set with 0.00% prepay events.
+Quantified: cutoff_2019 across 13.9M loans → 0.00% prepay. Every prepayment in the 2013–2023
+panel occurs in the 2020–21 refi boom. This is the same regime-concentration result from the
+June 17 analysis, now measured at cutoff level. Usable cutoffs:
+- cutoff_2020 (~0.5–1.0% prepay) → forecast 2021
+- cutoff_2021 (1.47% prepay)     → forecast 2022
+- cutoff_2022                    → forecast 2023
+- cutoff_2023                    → forecast 2024
+
+### Bug fixes vs production pipeline (all in rolling scripts)
+- MMYYYY→YYYYMM sort: Fannie's MMYYYY int is non-monotone across years (Dec-2018=122018 > Jan-2019=12019),
+  which ordered sequences January-first across years. Fixed via `mmyyyy_to_yyyymm()`.
+- Dead categoricals: `loan_purpose_enc`/`property_type_enc` were all-zero from wrong code maps.
+  Fixed to R/C/P and SF/PU/CO/MH.
+- Prepay-label lookahead: labels now derived only from rows within the cutoff window.
+- Pass-2 scaler speedup: sampled fit (50k train rows/vintage) replaces full re-read; ~2hr → ~5min.
+
+### Diagnostics added
+`scripts/diag_zbc_column.py`, `scripts/diag_prepay_vanish.py` — confirmed zero_balance_code is
+at col 106 across all vintages and isolated the 0% prepay to the cutoff filter (genuine
+regime concentration, not a column/label bug).
