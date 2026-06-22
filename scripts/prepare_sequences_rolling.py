@@ -368,151 +368,235 @@ def main():
     zhvi_df    = load_zhvi()
 
     # ── Pass 1: loan ID discovery → train/test split ──────────────────────────
-    print('\nPass 1: loan ID discovery...', flush=True)
-    info_chunks = []
-    for v in ALL_VINTAGES:
-        df = load_vintage_filtered(v, pmms_rates, zhvi_df, cutoff_ym,
-                                   keep_ids=None, sample_frac=args.sample_frac)
-        if df is None or df.empty:
-            continue
-        info_chunks.append(df.groupby('loan_id')['prepaid'].first().reset_index())
-        del df; gc.collect()
+    # RESUME GUARD: if the splits already exist on disk (a prior run completed
+    # Pass 1 before timing out in Pass 3), load them instead of re-scanning all
+    # vintages. This makes the job restartable and avoids redoing the ~1.5hr scan.
+    train_split_path = os.path.join(SAVE_DIR, 'train_loan_ids_split.npy')
+    test_split_path  = os.path.join(SAVE_DIR, 'test_loan_ids_split.npy')
 
-    if not info_chunks:
-        raise RuntimeError('No data loaded — verify vintage paths and cutoff_year.')
+    if os.path.exists(train_split_path) and os.path.exists(test_split_path):
+        train_ids = np.load(train_split_path, allow_pickle=True)
+        test_ids  = np.load(test_split_path,  allow_pickle=True)
+        train_id_set = set(train_ids.tolist())
+        test_id_set  = set(test_ids.tolist())
+        print(f'\nPass 1: SKIPPED — loaded existing splits '
+              f'(train={len(train_ids):,}, test={len(test_ids):,})', flush=True)
+    else:
+        print('\nPass 1: loan ID discovery...', flush=True)
+        info_chunks = []
+        for v in ALL_VINTAGES:
+            df = load_vintage_filtered(v, pmms_rates, zhvi_df, cutoff_ym,
+                                       keep_ids=None, sample_frac=args.sample_frac)
+            if df is None or df.empty:
+                continue
+            info_chunks.append(df.groupby('loan_id')['prepaid'].first().reset_index())
+            del df; gc.collect()
 
-    loan_info = (pd.concat(info_chunks, ignore_index=True)
-                   .groupby('loan_id')['prepaid'].max()
-                   .reset_index())
-    del info_chunks; gc.collect()
+        if not info_chunks:
+            raise RuntimeError('No data loaded — verify vintage paths and cutoff_year.')
 
-    loan_ids  = loan_info['loan_id'].values
-    labels_1p = loan_info['prepaid'].values
-    print(f'\nTotal loans: {len(loan_ids):,} | Prepay rate: {labels_1p.mean()*100:.2f}%',
-          flush=True)
+        loan_info = (pd.concat(info_chunks, ignore_index=True)
+                       .groupby('loan_id')['prepaid'].max()
+                       .reset_index())
+        del info_chunks; gc.collect()
 
-    train_ids, test_ids = train_test_split(
-        loan_ids, test_size=0.2, random_state=42, stratify=labels_1p
-    )
-    train_id_set = set(train_ids.tolist())
-    test_id_set  = set(test_ids.tolist())
-    print(f'Train: {len(train_ids):,} | Test: {len(test_ids):,}', flush=True)
+        loan_ids  = loan_info['loan_id'].values
+        labels_1p = loan_info['prepaid'].values
+        print(f'\nTotal loans: {len(loan_ids):,} | Prepay rate: {labels_1p.mean()*100:.2f}%',
+              flush=True)
 
-    np.save(os.path.join(SAVE_DIR, 'train_loan_ids_split.npy'), train_ids)
-    np.save(os.path.join(SAVE_DIR, 'test_loan_ids_split.npy'),  test_ids)
-    del loan_info; gc.collect()
+        train_ids, test_ids = train_test_split(
+            loan_ids, test_size=0.2, random_state=42, stratify=labels_1p
+        )
+        train_id_set = set(train_ids.tolist())
+        test_id_set  = set(test_ids.tolist())
+        print(f'Train: {len(train_ids):,} | Test: {len(test_ids):,}', flush=True)
+
+        np.save(train_split_path, train_ids)
+        np.save(test_split_path,  test_ids)
+        del loan_info; gc.collect()
 
     # ── Pass 2: fit scaler on a SAMPLE of train loans ────────────────────────
     # Full re-read of all vintages is extremely slow (billions of rows).
     # StandardScaler statistics are stable at 5-10% sample size for 10M+ loans.
     # We read each vintage with a hard cap of SCALER_ROWS_PER_VINTAGE rows from
     # train IDs, then stop. This cuts Pass 2 from ~2hrs to ~5min.
+    # RESUME GUARD: skip if scaler.pkl already exists from a prior run.
+    scaler_path = os.path.join(SAVE_DIR, 'scaler.pkl')
+    _skip_pass2 = os.path.exists(scaler_path)
     SCALER_ROWS_PER_VINTAGE = 50_000
-    print('\nPass 2: fitting scaler (sampled, fast)...', flush=True)
-    scaler = StandardScaler()
-    n_scaler_rows = 0
-    for v in ALL_VINTAGES:
-        path = os.path.join(DATA_DIR, f'{v}.csv')
-        if not os.path.exists(path):
-            continue
-        rows = []
-        for chunk in pd.read_csv(
-            path, sep='|', header=None,
-            usecols=_USECOLS, low_memory=False, chunksize=500_000,
-        ):
-            chunk.columns = _COLNAMES
-            chunk = chunk[chunk['loan_id'].isin(train_id_set)]
-            if chunk.empty:
-                continue
-            rows.append(chunk)
-            if sum(len(r) for r in rows) >= SCALER_ROWS_PER_VINTAGE:
-                break
-        if not rows:
-            continue
-        sample = pd.concat(rows, ignore_index=True).head(SCALER_ROWS_PER_VINTAGE)
-        del rows; gc.collect()
 
-        # Minimal feature engineering for scaler fit
-        sample['monthly_reporting_period'] = pd.to_numeric(
-            sample['monthly_reporting_period'], errors='coerce')
-        sample = sample[sample['monthly_reporting_period'].notna()].copy()
-        sample['yyyymm'] = sample['monthly_reporting_period'].astype(int).apply(
-            mmyyyy_to_yyyymm)
-        sample = sample[sample['yyyymm'] <= cutoff_ym]
-        if sample.empty:
-            continue
-
-        sample['market_rate']    = sample['monthly_reporting_period'].map(pmms_rates)
-        sample['refi_incentive'] = sample['original_interest_rate'] - sample['market_rate']
-        sample['zip3']           = pd.to_numeric(sample['zip3'], errors='coerce')
-        sample['origination_date'] = pd.to_numeric(sample['origination_date'], errors='coerce')
-
-        sample = sample.merge(
-            zhvi_df.rename(columns={'reporting_period': 'origination_date', 'zhvi': 'zhvi_orig'}),
-            on=['zip3', 'origination_date'], how='left')
-        sample = sample.merge(
-            zhvi_df.rename(columns={'reporting_period': 'monthly_reporting_period', 'zhvi': 'zhvi_now'}),
-            on=['zip3', 'monthly_reporting_period'], how='left')
-        sample['original_home_value'] = sample['original_upb'] / (
-            (sample['original_ltv'] / 100).replace(0, np.nan))
-        sample['price_appreciation'] = sample['zhvi_now'] / sample['zhvi_orig'].replace(0, np.nan)
-        sample['current_ltv'] = (
-            sample['original_upb'] /
-            (sample['original_home_value'] * sample['price_appreciation']).replace(0, np.nan)
-        ) * 100
-        sample['loan_age_months'] = sample['loan_age'].astype(float)
-        sample['dti']             = pd.to_numeric(sample['dti'], errors='coerce')
-        sample['loan_purpose_enc']  = sample['loan_purpose'].map(
-            {'R': 0, 'C': 1, 'P': 2}).fillna(0).astype(float)
-        sample['property_type_enc'] = sample['property_type'].map(
-            {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3}).fillna(0).astype(float)
-
-        valid = sample[FEATURE_COLS].dropna()
-        if len(valid) > 0:
-            scaler.partial_fit(valid)
-            n_scaler_rows += len(valid)
-            print(f'  {v}: +{len(valid):,} rows  (total={n_scaler_rows:,})', flush=True)
-        del sample, valid; gc.collect()
-
-    with open(os.path.join(SAVE_DIR, 'scaler.pkl'), 'wb') as f:
-        pickle.dump(scaler, f)
-    print(f'  Scaler saved. Total rows used: {n_scaler_rows:,}', flush=True)
-
-    def _build_and_save(split_name: str, id_set: set):
-        seq_list, mask_list, lbl_list, pt_list, id_list = [], [], [], [], []
+    if _skip_pass2:
+        with open(scaler_path, 'rb') as f:
+            scaler = pickle.load(f)
+        print('\nPass 2: SKIPPED — loaded existing scaler.pkl', flush=True)
+    else:
+        print('\nPass 2: fitting scaler (sampled, fast)...', flush=True)
+        scaler = StandardScaler()
+        n_scaler_rows = 0
         for v in ALL_VINTAGES:
-            df = load_vintage_filtered(v, pmms_rates, zhvi_df, cutoff_ym,
-                                       keep_ids=id_set)
-            if df is None or df.empty:
+            path = os.path.join(DATA_DIR, f'{v}.csv')
+            if not os.path.exists(path):
                 continue
-            seq, mask, lbl, pt, lids = build_sequences(df, scaler)
-            seq_list.append(seq); mask_list.append(mask)
-            lbl_list.append(lbl); pt_list.append(pt); id_list.append(lids)
-            del df, seq, mask, lbl, pt, lids; gc.collect()
+            rows = []
+            for chunk in pd.read_csv(
+                path, sep='|', header=None,
+                usecols=_USECOLS, low_memory=False, chunksize=500_000,
+            ):
+                chunk.columns = _COLNAMES
+                chunk = chunk[chunk['loan_id'].isin(train_id_set)]
+                if chunk.empty:
+                    continue
+                rows.append(chunk)
+                if sum(len(r) for r in rows) >= SCALER_ROWS_PER_VINTAGE:
+                    break
+            if not rows:
+                continue
+            sample = pd.concat(rows, ignore_index=True).head(SCALER_ROWS_PER_VINTAGE)
+            del rows; gc.collect()
 
-        if not seq_list:
-            raise RuntimeError(f'No sequences built for {split_name}')
+            # Minimal feature engineering for scaler fit
+            sample['monthly_reporting_period'] = pd.to_numeric(
+                sample['monthly_reporting_period'], errors='coerce')
+            sample = sample[sample['monthly_reporting_period'].notna()].copy()
+            sample['yyyymm'] = sample['monthly_reporting_period'].astype(int).apply(
+                mmyyyy_to_yyyymm)
+            sample = sample[sample['yyyymm'] <= cutoff_ym]
+            if sample.empty:
+                continue
 
-        out_seq  = np.concatenate(seq_list,  axis=0)
-        out_mask = np.concatenate(mask_list, axis=0)
-        out_lbl  = np.concatenate(lbl_list,  axis=0)
-        out_pt   = np.concatenate(pt_list,   axis=0)
-        out_ids  = np.concatenate(id_list,   axis=0)
+            sample['market_rate']    = sample['monthly_reporting_period'].map(pmms_rates)
+            sample['refi_incentive'] = sample['original_interest_rate'] - sample['market_rate']
+            sample['zip3']           = pd.to_numeric(sample['zip3'], errors='coerce')
+            sample['origination_date'] = pd.to_numeric(sample['origination_date'], errors='coerce')
+
+            sample = sample.merge(
+                zhvi_df.rename(columns={'reporting_period': 'origination_date', 'zhvi': 'zhvi_orig'}),
+                on=['zip3', 'origination_date'], how='left')
+            sample = sample.merge(
+                zhvi_df.rename(columns={'reporting_period': 'monthly_reporting_period', 'zhvi': 'zhvi_now'}),
+                on=['zip3', 'monthly_reporting_period'], how='left')
+            sample['original_home_value'] = sample['original_upb'] / (
+                (sample['original_ltv'] / 100).replace(0, np.nan))
+            sample['price_appreciation'] = sample['zhvi_now'] / sample['zhvi_orig'].replace(0, np.nan)
+            sample['current_ltv'] = (
+                sample['original_upb'] /
+                (sample['original_home_value'] * sample['price_appreciation']).replace(0, np.nan)
+            ) * 100
+            sample['loan_age_months'] = sample['loan_age'].astype(float)
+            sample['dti']             = pd.to_numeric(sample['dti'], errors='coerce')
+            sample['loan_purpose_enc']  = sample['loan_purpose'].map(
+                {'R': 0, 'C': 1, 'P': 2}).fillna(0).astype(float)
+            sample['property_type_enc'] = sample['property_type'].map(
+                {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3}).fillna(0).astype(float)
+
+            valid = sample[FEATURE_COLS].dropna()
+            if len(valid) > 0:
+                scaler.partial_fit(valid)
+                n_scaler_rows += len(valid)
+                print(f'  {v}: +{len(valid):,} rows  (total={n_scaler_rows:,})', flush=True)
+            del sample, valid; gc.collect()
+
+        with open(scaler_path, 'wb') as f:
+            pickle.dump(scaler, f)
+        print(f'  Scaler saved. Total rows used: {n_scaler_rows:,}', flush=True)
+
+    # ── Pass 3: build train + test sequences in a SINGLE read of each vintage ─
+    # The old design read every vintage file TWICE (once for train, once for
+    # test) — ~30 multi-GB files read twice = the dominant cost (~6h, timed out).
+    # Here we read each vintage ONCE, split its rows into train/test by loan ID
+    # in memory, and append per-vintage shards to disk. Per-vintage shard files
+    # double as a resume checkpoint: if the job is killed, completed vintages are
+    # skipped on rerun, so a restart only processes what's left.
+    shard_dir = os.path.join(SAVE_DIR, '_shards')
+    os.makedirs(shard_dir, exist_ok=True)
+
+    # Final-output resume guard: if both seq arrays already exist, nothing to do.
+    if (os.path.exists(os.path.join(SAVE_DIR, 'train_seq.npy')) and
+            os.path.exists(os.path.join(SAVE_DIR, 'test_seq.npy'))):
+        print('\nPass 3/4: SKIPPED — train_seq.npy and test_seq.npy already exist',
+              flush=True)
+        print(f'\nDone. cutoff={args.cutoff_year} | dir={SAVE_DIR}', flush=True)
+        return
+
+    print('\nPass 3: building train+test sequences (single read per vintage)...',
+          flush=True)
+
+    def _shard_done(v):
+        return os.path.exists(os.path.join(shard_dir, f'{v}_train_seq.npy')) or \
+               os.path.exists(os.path.join(shard_dir, f'{v}_empty.flag'))
+
+    for v in ALL_VINTAGES:
+        if _shard_done(v):
+            print(f'  {v}: shard exists — skip', flush=True)
+            continue
+
+        df = load_vintage_filtered(v, pmms_rates, zhvi_df, cutoff_ym, keep_ids=None)
+        if df is None or df.empty:
+            # mark empty so rerun doesn't retry a vintage with no in-window rows
+            open(os.path.join(shard_dir, f'{v}_empty.flag'), 'w').close()
+            continue
+
+        for split_name, id_set in (('train', train_id_set), ('test', test_id_set)):
+            sub = df[df['loan_id'].isin(id_set)]
+            if sub.empty:
+                continue
+            seq, mask, lbl, pt, lids = build_sequences(sub, scaler)
+            sp = os.path.join(shard_dir, f'{v}_{split_name}')
+            np.save(f'{sp}_seq.npy',  seq)
+            np.save(f'{sp}_mask.npy', mask)
+            np.save(f'{sp}_lbl.npy',  lbl)
+            np.save(f'{sp}_pt.npy',   pt)
+            np.save(f'{sp}_ids.npy',  lids)
+            del sub, seq, mask, lbl, pt, lids; gc.collect()
+        # mark vintage complete even if only one split had rows
+        if not _shard_done(v):
+            open(os.path.join(shard_dir, f'{v}_empty.flag'), 'w').close()
+        del df; gc.collect()
+        print(f'  {v}: shard written', flush=True)
+
+    # ── Pass 4: concatenate per-vintage shards into final arrays ──────────────
+    print('\nPass 4: concatenating shards...', flush=True)
+
+    def _concat_split(split_name):
+        comp = {'seq': [], 'mask': [], 'lbl': [], 'pt': [], 'ids': []}
+        for v in ALL_VINTAGES:
+            sp = os.path.join(shard_dir, f'{v}_{split_name}')
+            if not os.path.exists(f'{sp}_seq.npy'):
+                continue
+            comp['seq'].append(np.load(f'{sp}_seq.npy'))
+            comp['mask'].append(np.load(f'{sp}_mask.npy'))
+            comp['lbl'].append(np.load(f'{sp}_lbl.npy'))
+            comp['pt'].append(np.load(f'{sp}_pt.npy'))
+            comp['ids'].append(np.load(f'{sp}_ids.npy', allow_pickle=True))
+        if not comp['seq']:
+            raise RuntimeError(f'No shards found for {split_name}')
+
+        out_seq  = np.concatenate(comp['seq'],  axis=0)
+        out_mask = np.concatenate(comp['mask'], axis=0)
+        out_lbl  = np.concatenate(comp['lbl'],  axis=0)
+        out_pt   = np.concatenate(comp['pt'],   axis=0)
+        out_ids  = np.concatenate(comp['ids'],  axis=0)
 
         p = os.path.join(SAVE_DIR, split_name)
-        np.save(f'{p}_seq.npy',              out_seq)
-        np.save(f'{p}_mask.npy',             out_mask)
-        np.save(f'{p}_labels.npy',           out_lbl)
-        np.save(f'{p}_prepay_timestep.npy',  out_pt)
-        np.save(f'{p}_loan_ids.npy',         out_ids)
+        # write to .tmp then rename → atomic, so a kill mid-write never leaves
+        # a truncated file the resume guard would wrongly trust.
+        np.save(f'{p}_seq.tmp.npy',             out_seq)
+        np.save(f'{p}_mask.npy',                out_mask)
+        np.save(f'{p}_labels.npy',              out_lbl)
+        np.save(f'{p}_prepay_timestep.npy',     out_pt)
+        np.save(f'{p}_loan_ids.npy',            out_ids)
+        os.replace(f'{p}_seq.tmp.npy', f'{p}_seq.npy')  # atomic last step
         print(f'  {split_name}: shape={out_seq.shape}  prepay={out_lbl.mean()*100:.2f}%',
               flush=True)
+        del out_seq, out_mask, out_lbl, out_pt, out_ids, comp; gc.collect()
 
-    print('\nPass 3: building train sequences...', flush=True)
-    _build_and_save('train', train_id_set)
+    _concat_split('train')
+    _concat_split('test')
 
-    print('\nPass 4: building test sequences...', flush=True)
-    _build_and_save('test', test_id_set)
+    # cleanup shards once final arrays are written
+    import shutil
+    shutil.rmtree(shard_dir, ignore_errors=True)
 
     print(f'\nDone. cutoff={args.cutoff_year} | dir={SAVE_DIR}', flush=True)
 

@@ -355,3 +355,14 @@ June 17 analysis, now measured at cutoff level. Usable cutoffs:
 `scripts/diag_zbc_column.py`, `scripts/diag_prepay_vanish.py` — confirmed zero_balance_code is
 at col 106 across all vintages and isolated the 0% prepay to the cutoff filter (genuine
 regime concentration, not a column/label bug).
+
+## Phase 16 (cont.) — Rolling forecast completion + pipeline hardening (June 21–22, 2026)
+
+Recovered and completed the rolling t→t+1 pipeline after a series of SLURM/memory issues. Key fixes:
+- **cutoff ≤ 2019 has zero prepay signal** (confirmed: cutoff_2019 = 13.9M loans, 0.00% prepay; all prepayments are in the 2020–21 boom). Rolling estimation runs cutoffs 2020–2021: cutoff_2020 (0.90% prepay) → forecast 2021; cutoff_2021 (1.47%) → forecast 2022.
+- **Trained AUCs**: cutoff_2020 = 0.7006, cutoff_2021 = 0.7159 (below production 0.7999). Likely depressed by the first-33-month window vs full-cutoff-window label mismatch in the eval set — the model trains on in-window-33 positives but eval labels count any in-window prepay. Forecast-vs-realized CPR is the primary metric, not AUC.
+- **Pipeline hardening**: (1) resume guards skip completed passes (loan-IDs, scaler, train/test sequence shards) so timed-out jobs restart where they stopped; (2) single-read prep — each vintage read once, train+test built together, per-vintage shard checkpoints (was 2× full reads, ~6h → ~3h); (3) forecast load_panel pre-filters vintages by origination window (skips files that can't contribute), and writes CPR output incrementally per month to avoid end-of-run OOM.
+
+### SLURM operational notes
+- `--time=4:00:00` routes to `cpu_short` (backfill, fast scheduling) but caps at 4h — too short for full sequence-building passes. Use `--time=8:00:00` on general partitions for full prep (Pass 1–4 ≈ 5–6h); short walltime only for jobs provably under ~3h.
+- FairShare was 1.0 throughout (not deprioritized); walltime, not priority, governed scheduling.
