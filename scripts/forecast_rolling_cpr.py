@@ -1,34 +1,26 @@
 """
-forecast_rolling_cpr.py — Rolling t→t+1 CPR forecaster.
+forecast_rolling_cpr.py — Rolling t→t+1 CPR forecast (GPU, test-set, no raw panel).
 
-For a model trained through Dec CUTOFF_YEAR, produces actual-loan-level
-CPR forecasts for each month in Jan {Y+1} through Dec {Y+1}, and compares
-against realized CPR derived from zero_balance_code_actual in the raw panel.
+DESIGN (addresses every prior failure mode):
+  * Inference runs on the ALREADY-BUILT test_seq.npy from prep — no CSV reading,
+    no panel, no merge, no concat.  -> cannot OOM on the inference side.
+  * Test set only (held-out loans) — correct OOS population AND ~4x less data.
+  * Runs on GPU if available (the model is a Transformer; CPU is the wrong tool).
+  * ONE minimal raw pass (4 columns) filtered to forecast-year months + test
+    loan IDs, aggregated incrementally into dict/set — never holds raw rows.
+  * Vectorized last-timestep gather; progress logged by batch counter.
 
-Design notes:
-  - Loads raw vintage data once for the forecast window (last 33 months of
-    history per loan through Dec Y+1), builds an in-memory panel.
-  - For each forecast month t:
-      input  = each active loan's feature sequence for the 33 months ending at t
-      output = per-timestep hazard h_t at the last real position
-    This matches the training objective: model sees history through t and
-    predicts P(prepay at t | survived to t-1).
-  - Coupon bucket: FNCL coupon ≈ note_rate - 0.5, rounded to nearest 0.5%.
-  - CPR from SMM: CPR = 1 - (1 - SMM)^12
+Methodology:
+  forecast population = test loans active during the forecast year (cutoff_year+1)
+  CPR_forecast(coupon) = mean over loans of [1-(1-h_t)^12] * 100
+  CPR_realized(coupon) = (# loans that prepaid in the year) / (# active) * 100
 
 Usage:
-    python forecast_rolling_cpr.py --cutoff_year 2018
-
-Output (to outputs/rolling/cutoff_{Y}/):
-    rolling_cpr_forecast.csv — columns: forecast_yyyymm, coupon, forecast_cpr,
-                                         realized_cpr, n_loans_forecast,
-                                         n_loans_realized
+  python forecast_rolling_cpr.py --cutoff_year 2020
 """
 
 import argparse
-import json
 import os
-import pickle
 import gc
 
 import numpy as np
@@ -36,74 +28,64 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
-BASE = '/scratch/at7095/mortgage_prepayment'
-
-DATA_DIR  = os.path.join(BASE, 'data/raw')
-PMMS_PATH = os.path.join(BASE, 'data/pmms_monthly.csv')
-ZHVI_PATH = os.path.join(BASE, 'data/zhvi_zip3.csv')
+BASE     = '/scratch/at7095/mortgage_prepayment'
+DATA_DIR = os.path.join(BASE, 'data/raw')
 
 MAX_SEQ    = 33
 N_FEATURES = 9
 DEVICE     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-FEATURE_COLS = [
-    'refi_incentive', 'borrower_credit_score', 'original_ltv',
-    'current_ltv', 'original_upb', 'loan_age_months',
-    'dti', 'loan_purpose_enc', 'property_type_enc',
-]
-
-# Same column schema as prepare_sequences_rolling.py
+# ── Fannie column schema (file-position +1 for leading pipe) ─────────────────
 _BASE_COLS = [
-    'loan_id', 'monthly_reporting_period', 'channel', 'seller_name', 'servicer_name',
-    'master_servicer', 'original_interest_rate', 'current_interest_rate', 'original_upb',
-    'issuance_upb', 'current_actual_upb', 'original_loan_term', 'origination_date',
-    'first_payment_date', 'loan_age', 'remaining_months_to_legal_maturity',
-    'remaining_months_to_maturity', 'maturity_date', 'original_ltv', 'original_cltv',
-    'number_of_borrowers', 'dti', 'borrower_credit_score', 'coborrower_credit_score',
-    'first_time_homebuyer', 'loan_purpose', 'property_type', 'number_of_units',
-    'occupancy_status', 'property_state', 'msa', 'zip', 'mortgage_insurance_percentage',
-    'product_type', 'prepayment_penalty', 'interest_only',
-    'first_principal_and_interest_payment_date', 'months_to_amortization',
-    'current_loan_delinquency_status', 'loan_holdback', 'loan_holdback_effective_date',
-    'zero_balance_code', 'zero_balance_effective_date', 'last_paid_installment_date',
-    'foreclosure_date', 'disposition_date', 'foreclosure_costs',
-    'property_preservation_repair_costs', 'asset_recovery_costs', 'misc_holding_expenses',
-    'associated_taxes', 'net_sales_proceeds', 'credit_enhancement_proceeds',
-    'repurchase_make_whole_proceeds', 'other_foreclosure_proceeds',
-    'non_interest_bearing_upb', 'principal_forgiveness_amount',
-    'repurchase_make_whole_proceedings_flag', 'foreclosure_principal_write_off_amount',
-    'servicing_activity_indicator', 'current_deferred_upb', 'loan_due_date',
-    'mi_recoveries', 'net_proceeds', 'total_expenses', 'legal_costs',
-    'maintenance_preservation_costs', 'taxes_insurance', 'misc_expenses',
-    'actual_loss', 'modification_flag', 'step_modification_flag',
-    'payment_deferral', 'estimated_ltv', 'zero_balance_removal_upb',
-    'delinquent_accrued_interest', 'disaster_related_assistance',
-    'borrower_assistance_status', 'month_borrower_paid_through_date',
-    'high_balance_loan', 'property_inspection_waiver', 'business_purpose_loan',
-    'hi_ltv_refi_option', 'relief_refi', 'hltv_relief_refi',
-    'unverified_income', 'loan_holdback_indicator', 'mi_type', 'relocation_mortgage',
-    'high_ltv_refi_original_ltv', 'alternative_delinquency_resolution',
-    'alternative_delinquency_resolution_count', 'total_deferral_amount',
+    'loan_id','monthly_reporting_period','channel','seller_name','servicer_name',
+    'master_servicer','original_interest_rate','current_interest_rate','original_upb',
+    'issuance_upb','current_actual_upb','original_loan_term','origination_date',
+    'first_payment_date','loan_age','remaining_months_to_legal_maturity',
+    'remaining_months_to_maturity','maturity_date','original_ltv','original_cltv',
+    'number_of_borrowers','dti','borrower_credit_score','coborrower_credit_score',
+    'first_time_homebuyer','loan_purpose','property_type','number_of_units',
+    'occupancy_status','property_state','msa','zip','mortgage_insurance_percentage',
+    'product_type','prepayment_penalty','interest_only',
+    'first_principal_and_interest_payment_date','months_to_amortization',
+    'current_loan_delinquency_status','loan_holdback','loan_holdback_effective_date',
+    'zero_balance_code','zero_balance_effective_date','last_paid_installment_date',
+    'foreclosure_date','disposition_date','foreclosure_costs',
+    'property_preservation_repair_costs','asset_recovery_costs','misc_holding_expenses',
+    'associated_taxes','net_sales_proceeds','credit_enhancement_proceeds',
+    'repurchase_make_whole_proceeds','other_foreclosure_proceeds',
+    'non_interest_bearing_upb','principal_forgiveness_amount',
+    'repurchase_make_whole_proceedings_flag','foreclosure_principal_write_off_amount',
+    'servicing_activity_indicator','current_deferred_upb','loan_due_date',
+    'mi_recoveries','net_proceeds','total_expenses','legal_costs',
+    'maintenance_preservation_costs','taxes_insurance','misc_expenses',
+    'actual_loss','modification_flag','step_modification_flag',
+    'payment_deferral','estimated_ltv','zero_balance_removal_upb',
+    'delinquent_accrued_interest','disaster_related_assistance',
+    'borrower_assistance_status','month_borrower_paid_through_date',
+    'high_balance_loan','property_inspection_waiver','business_purpose_loan',
+    'hi_ltv_refi_option','relief_refi','hltv_relief_refi',
+    'unverified_income','loan_holdback_indicator','mi_type','relocation_mortgage',
+    'high_ltv_refi_original_ltv','alternative_delinquency_resolution',
+    'alternative_delinquency_resolution_count','total_deferral_amount',
 ]
 _ALL_COLS = _BASE_COLS + [f'extra_{i}' for i in range(1, 17)]
-_COL_MAP  = dict(sorted({
-    _ALL_COLS.index('loan_id') + 1:                   'loan_id',
-    _ALL_COLS.index('monthly_reporting_period') + 1:  'monthly_reporting_period',
-    _ALL_COLS.index('original_interest_rate') + 1:    'original_interest_rate',
-    _ALL_COLS.index('borrower_credit_score') + 1:     'borrower_credit_score',
-    _ALL_COLS.index('original_ltv') + 1:              'original_ltv',
-    _ALL_COLS.index('original_upb') + 1:              'original_upb',
-    _ALL_COLS.index('loan_age') + 1:                  'loan_age',
-    _ALL_COLS.index('origination_date') + 1:          'origination_date',
-    _ALL_COLS.index('zip') + 1:                       'zip3',
-    _ALL_COLS.index('extra_13') + 1:                  'zero_balance_code_actual',
-    _ALL_COLS.index('dti') + 1:                       'dti',
-    _ALL_COLS.index('loan_purpose') + 1:              'loan_purpose',
-    _ALL_COLS.index('property_type') + 1:             'property_type',
+
+# 4 columns only: loan_id, reporting month, note rate (for coupon), zbc (realized)
+_RAW_COL_MAP = dict(sorted({
+    _ALL_COLS.index('loan_id') + 1:                  'loan_id',
+    _ALL_COLS.index('monthly_reporting_period') + 1: 'monthly_reporting_period',
+    _ALL_COLS.index('original_interest_rate') + 1:   'original_interest_rate',
+    _ALL_COLS.index('extra_13') + 1:                 'zero_balance_code_actual',
 }.items()))
 
+ALL_VINTAGES = [
+    '2013Q1','2013Q2','2013Q3','2013Q4','2014Q1','2014Q2','2014Q3','2014Q4',
+    '2015Q1','2015Q2','2015Q3','2015Q4','2016Q1','2016Q2','2016Q3','2016Q4',
+    '2017Q1','2017Q2','2017Q3','2017Q4','2018Q1','2018Q2','2018Q3','2018Q4',
+    '2019Q1','2019Q2','2019Q3','2019Q4','2020Q1','2020Q2','2020Q3','2020Q4',
+    '2021Q1','2021Q2','2021Q3','2021Q4','2022Q1','2022Q2','2022Q3','2022Q4','2023Q1',
+]
 
-# ── Date helpers ──────────────────────────────────────────────────────────────
 
 def mmyyyy_to_yyyymm(v: int) -> int:
     s = str(int(v))
@@ -112,24 +94,7 @@ def mmyyyy_to_yyyymm(v: int) -> int:
     return int(s[2:]) * 100 + int(s[:2])
 
 
-def forecast_months(cutoff_year: int) -> list[int]:
-    """Return 12 YYYYMM values for Jan..Dec of cutoff_year+1."""
-    y = cutoff_year + 1
-    return [y * 100 + m for m in range(1, 13)]
-
-
-def yyyymm_window_start(cutoff_year: int) -> int:
-    """Earliest YYYYMM to load: need up to 33 months of history before Jan Y+1."""
-    y = cutoff_year + 1
-    # 33 months before Jan Y+1 is roughly Apr Y-2
-    start_month = 1 - 33  # offset
-    start_y = y + (start_month - 1) // 12
-    start_m = ((start_month - 1) % 12) + 1
-    return start_y * 100 + start_m
-
-
-# ── Model ─────────────────────────────────────────────────────────────────────
-
+# ── Model (identical architecture to training) ───────────────────────────────
 class PrepaymentTransformer(nn.Module):
     def __init__(self, input_dim=N_FEATURES, d_model=64, n_heads=4, n_layers=2,
                  dim_ff=256, max_seq=MAX_SEQ, dropout=0.1):
@@ -140,15 +105,14 @@ class PrepaymentTransformer(nn.Module):
               dim_feedforward=dim_ff, dropout=dropout, batch_first=True)
         self.transformer = nn.TransformerEncoder(enc, num_layers=n_layers)
         self.classifier  = nn.Sequential(
-            nn.Linear(d_model, 32), nn.ReLU(), nn.Dropout(dropout), nn.Linear(32, 1)
-        )
+            nn.Linear(d_model, 32), nn.ReLU(), nn.Dropout(dropout), nn.Linear(32, 1))
 
     def forward(self, x, mask=None, return_per_timestep=False):
         B, T, _ = x.shape
-        pos      = torch.arange(T, device=x.device).unsqueeze(0).expand(B, -1)
-        out      = self.input_proj(x) + self.pos_embedding(pos)
-        pad_mask = ~mask if mask is not None else None
-        out      = self.transformer(out, src_key_padding_mask=pad_mask)
+        pos  = torch.arange(T, device=x.device).unsqueeze(0).expand(B, -1)
+        out  = self.input_proj(x) + self.pos_embedding(pos)
+        pmask = ~mask if mask is not None else None
+        out  = self.transformer(out, src_key_padding_mask=pmask)
         if return_per_timestep:
             return self.classifier(out).squeeze(-1)
         if mask is not None:
@@ -160,358 +124,175 @@ class PrepaymentTransformer(nn.Module):
 
 
 def load_model(cutoff_year: int) -> PrepaymentTransformer:
-    ckpt_path = os.path.join(BASE, f'outputs/rolling/cutoff_{cutoff_year}/hazard_best.pt')
-    ckpt = torch.load(ckpt_path, map_location=DEVICE)
+    path = os.path.join(BASE, f'outputs/rolling/cutoff_{cutoff_year}/hazard_best.pt')
+    ckpt = torch.load(path, map_location=DEVICE)
     cfg  = ckpt.get('config', {})
-    model = PrepaymentTransformer(
-        input_dim=cfg.get('input_dim', N_FEATURES),
-        d_model=cfg.get('d_model',   64),
-        n_heads=cfg.get('n_heads',   4),
-        n_layers=cfg.get('n_layers', 2),
-        dim_ff=cfg.get('dim_ff',     256),
-        dropout=cfg.get('dropout',   0.1),
+    m = PrepaymentTransformer(
+        input_dim=cfg.get('input_dim', N_FEATURES), d_model=cfg.get('d_model', 64),
+        n_heads=cfg.get('n_heads', 4), n_layers=cfg.get('n_layers', 2),
+        dim_ff=cfg.get('dim_ff', 256), dropout=cfg.get('dropout', 0.1),
     ).to(DEVICE)
-    model.load_state_dict(ckpt['model_state'])
+    m.load_state_dict(ckpt['model_state'])
+    m.eval()
+    print(f'Loaded model cutoff={cutoff_year} AUC={ckpt.get("auc","?"):.4f} '
+          f'device={DEVICE}', flush=True)
+    return m
+
+
+# ── Step 1: inference on prep TEST sequences (mmap, GPU, vectorized) ──────────
+def infer_test_set(cutoff_year: int, model, batch_size: int = 8192):
+    seq_dir = os.path.join(BASE, f'data/sequences_rolling/cutoff_{cutoff_year}')
+    seqs  = np.load(os.path.join(seq_dir, 'test_seq.npy'),       mmap_mode='r')
+    masks = np.load(os.path.join(seq_dir, 'test_mask.npy'),      mmap_mode='r')
+    ids   = np.load(os.path.join(seq_dir, 'test_loan_ids.npy'),  allow_pickle=True)
+    n = len(seqs)
+    print(f'Test set: {n:,} loans  ({seqs.shape})', flush=True)
+
+    h_vals = np.zeros(n, dtype=np.float32)
+    n_batches = (n + batch_size - 1) // batch_size
     model.eval()
-    print(f'Loaded model: cutoff={cutoff_year} | AUC={ckpt.get("auc", "?"):.4f}',
-          flush=True)
-    return model
+    with torch.no_grad():
+        for b, i in enumerate(range(0, n, batch_size)):
+            sb = np.ascontiguousarray(seqs[i:i+batch_size])
+            mb = np.ascontiguousarray(masks[i:i+batch_size])
+            bs = torch.from_numpy(sb).to(DEVICE)
+            bm = torch.from_numpy(mb).to(DEVICE)
+            logits = model(bs, mask=bm, return_per_timestep=True)   # (B, T)
+            h_pt   = torch.sigmoid(logits)                          # (B, T)
+            # last real timestep per loan = mask.sum(1)-1, vectorized gather
+            seq_len = bm.sum(dim=1).clamp(min=1)                    # (B,)
+            last_t  = (seq_len - 1).long()                         # (B,)
+            rows    = torch.arange(bs.shape[0], device=DEVICE)
+            h_last  = h_pt[rows, last_t]                            # (B,)
+            h_vals[i:i+len(h_last)] = h_last.cpu().numpy()
+            if b % 50 == 0 or b == n_batches - 1:
+                print(f'  inference batch {b+1}/{n_batches} '
+                      f'({i+len(h_last):,}/{n:,})', flush=True)
+    print(f'  h_t mean={h_vals.mean():.5f}  max={h_vals.max():.4f}', flush=True)
+    return ids, h_vals
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# ── Step 2: single raw pass for coupon + realized (4 cols, Y+1 + test filter) ─
+def read_coupon_and_realized(cutoff_year: int, test_id_set: set):
+    """One pass over raw files. Keep only forecast-year rows for test loans.
 
-ALL_VINTAGES = [
-    '2013Q1', '2013Q2', '2013Q3', '2013Q4',
-    '2014Q1', '2014Q2', '2014Q3', '2014Q4',
-    '2015Q1', '2015Q2', '2015Q3', '2015Q4',
-    '2016Q1', '2016Q2', '2016Q3', '2016Q4',
-    '2017Q1', '2017Q2', '2017Q3', '2017Q4',
-    '2018Q1', '2018Q2', '2018Q3', '2018Q4',
-    '2019Q1', '2019Q2', '2019Q3', '2019Q4',
-    '2020Q1', '2020Q2', '2020Q3', '2020Q4',
-    '2021Q1', '2021Q2', '2021Q3', '2021Q4',
-    '2022Q1', '2022Q2', '2022Q3', '2022Q4',
-    '2023Q1',
-]
-
-
-def _vintage_in_window(vintage: str, win_start: int, win_end: int) -> bool:
-    """Skip vintages whose first-33-month sequence cannot reach the forecast window.
-
-    The model was trained on each loan's FIRST 33 months. For consistency at
-    inference, we only use loans whose first-33-month window overlaps the forecast
-    period. A loan originated in YYYYQ# has its first 33 months ending at roughly
-    orig + 32 months. For that to include any forecast month >= win_start:
-        orig + 32 >= win_start  →  orig >= win_start - 32
-
-    This cuts the file reads to only vintages originated within ~3 years of the
-    forecast window start (e.g. 2018Q1–2021Q4 for a 2021 forecast), vs the old
-    design that read all 37 vintage files regardless.
+    Returns:
+      coupon_map  : {loan_id: original_interest_rate}
+      active_set  : test loans appearing in any forecast-year month
+      prepaid_set : test loans with zbc==1 in any forecast-year month
     """
-    year = int(vintage[:4])
-    q    = int(vintage[5])
-    orig_yyyymm = year * 100 + (q - 1) * 3 + 1
+    fy       = cutoff_year + 1
+    ym_start = fy * 100 + 1
+    ym_end   = fy * 100 + 12
 
-    # First 33-month window ends at orig + 32 months (approx)
-    end_year  = year + (((q - 1) * 3 + 32) // 12)
-    end_month = (((q - 1) * 3 + 32) % 12) + 1
-    first_window_end = end_year * 100 + end_month
+    coupon_map  = {}
+    active_set  = set()
+    prepaid_set = set()
 
-    # Skip if the vintage's first window ends before our forecast starts,
-    # or if the vintage originates after our forecast window ends.
-    if first_window_end < win_start:
-        return False
-    if orig_yyyymm > win_end:
-        return False
-    return True
+    # Only vintages whose loans could still be active in the forecast year:
+    # originated on or before the cutoff year (test set was built ≤ Dec cutoff).
+    relevant = [v for v in ALL_VINTAGES if int(v[:4]) <= cutoff_year]
+    print(f'Raw pass over {len(relevant)} vintages for FY {fy} '
+          f'[{ym_start}-{ym_end}]...', flush=True)
 
-
-def load_panel(cutoff_year: int, pmms_rates: dict, zhvi_df: pd.DataFrame,
-               scaler) -> pd.DataFrame:
-    """Load raw data for the forecast window, skipping irrelevant vintage files.
-
-    OLD: read all 37 vintage files → filter to window → slow (1hr+)
-    NEW: pre-filter vintages by origination year → read only ~6-8 files → fast (<5min)
-    """
-    win_start = yyyymm_window_start(cutoff_year)
-    win_end   = (cutoff_year + 1) * 100 + 12
-
-    relevant = [v for v in ALL_VINTAGES if _vintage_in_window(v, win_start, win_end)]
-    print(f'Loading panel for YYYYMM [{win_start}, {win_end}]...', flush=True)
-    print(f'  Relevant vintages ({len(relevant)}): {relevant}', flush=True)
-
-    chunks = []
     for vintage in relevant:
         path = os.path.join(DATA_DIR, f'{vintage}.csv')
         if not os.path.exists(path):
             continue
-        print(f'  Reading {vintage}...', flush=True)
         for chunk in pd.read_csv(
             path, sep='|', header=None,
-            usecols=list(_COL_MAP.keys()), low_memory=False, chunksize=500_000,
+            usecols=list(_RAW_COL_MAP.keys()), low_memory=False, chunksize=1_000_000,
         ):
-            chunk.columns = list(_COL_MAP.values())
+            chunk.columns = list(_RAW_COL_MAP.values())
+            # filter to test loans first (hash membership) — biggest cut
+            chunk = chunk[chunk['loan_id'].isin(test_id_set)]
+            if chunk.empty:
+                del chunk; continue
             chunk['monthly_reporting_period'] = pd.to_numeric(
-                chunk['monthly_reporting_period'], errors='coerce'
-            )
-            chunk = chunk[chunk['monthly_reporting_period'].notna()].copy()
-            chunk['yyyymm'] = chunk['monthly_reporting_period'].astype(int).apply(
-                mmyyyy_to_yyyymm
-            )
-            chunk = chunk[
-                (chunk['yyyymm'] >= win_start) & (chunk['yyyymm'] <= win_end)
-            ]
-            if not chunk.empty:
-                chunks.append(chunk)
+                chunk['monthly_reporting_period'], errors='coerce')
+            chunk = chunk[chunk['monthly_reporting_period'].notna()]
+            chunk['yyyymm'] = chunk['monthly_reporting_period'].astype(np.int64).map(
+                mmyyyy_to_yyyymm)
+            chunk = chunk[(chunk['yyyymm'] >= ym_start) & (chunk['yyyymm'] <= ym_end)]
+            if chunk.empty:
+                del chunk; continue
+            chunk['zero_balance_code_actual'] = pd.to_numeric(
+                chunk['zero_balance_code_actual'], errors='coerce')
+
+            active_set.update(chunk['loan_id'].tolist())
+            # coupon: one rate per loan (first seen)
+            for lid, rate in zip(chunk['loan_id'].values,
+                                 chunk['original_interest_rate'].values):
+                if lid not in coupon_map:
+                    coupon_map[lid] = rate
+            prepaid_set.update(
+                chunk.loc[chunk['zero_balance_code_actual'] == 1.0, 'loan_id'].tolist())
             del chunk; gc.collect()
+        print(f'  {vintage}: active={len(active_set):,} prepaid={len(prepaid_set):,}',
+              flush=True)
 
-    if not chunks:
-        raise RuntimeError(f'No panel data loaded for cutoff_year={cutoff_year}')
-
-    panel = pd.concat(chunks, ignore_index=True)
-    del chunks; gc.collect()
-
-    # ── Feature engineering ───────────────────────────────────────────────────
-    panel['zip3']                     = pd.to_numeric(panel['zip3'],                     errors='coerce')
-    panel['origination_date']         = pd.to_numeric(panel['origination_date'],         errors='coerce')
-    panel['zero_balance_code_actual'] = pd.to_numeric(panel['zero_balance_code_actual'], errors='coerce')
-
-    panel['market_rate']    = panel['monthly_reporting_period'].map(pmms_rates)
-    panel['refi_incentive'] = panel['original_interest_rate'] - panel['market_rate']
-
-    panel = panel.merge(
-        zhvi_df.rename(columns={'reporting_period': 'origination_date', 'zhvi': 'zhvi_orig'}),
-        on=['zip3', 'origination_date'], how='left',
-    )
-    panel = panel.merge(
-        zhvi_df.rename(columns={'reporting_period': 'monthly_reporting_period', 'zhvi': 'zhvi_now'}),
-        on=['zip3', 'monthly_reporting_period'], how='left',
-    )
-    panel['original_home_value'] = panel['original_upb'] / (
-        (panel['original_ltv'] / 100).replace(0, np.nan)
-    )
-    panel['price_appreciation'] = panel['zhvi_now'] / panel['zhvi_orig'].replace(0, np.nan)
-    panel['current_ltv']        = (
-        panel['original_upb'] /
-        (panel['original_home_value'] * panel['price_appreciation']).replace(0, np.nan)
-    ) * 100
-    panel['loan_age_months'] = panel['loan_age'].astype(float)
-    panel['dti']             = pd.to_numeric(panel['dti'], errors='coerce')
-
-    panel['loan_purpose_enc']  = panel['loan_purpose'].map(
-        {'R': 0, 'C': 1, 'P': 2}
-    ).fillna(0).astype(float)
-    panel['property_type_enc'] = panel['property_type'].map(
-        {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3}
-    ).fillna(0).astype(float)
-
-    panel['coupon'] = (
-        ((panel['original_interest_rate'] - 0.5) * 2).round() / 2
-    )
-
-    panel = panel.sort_values(['loan_id', 'yyyymm']).reset_index(drop=True)
-    print(f'Panel: {len(panel):,} rows | {panel["loan_id"].nunique():,} loans | '
-          f'{panel["yyyymm"].min()}–{panel["yyyymm"].max()}', flush=True)
-    return panel
+    print(f'Done raw pass. active={len(active_set):,} '
+          f'prepaid={len(prepaid_set):,} coupons={len(coupon_map):,}', flush=True)
+    return coupon_map, active_set, prepaid_set
 
 
+# ── Step 3: aggregate to coupon-level CPR ────────────────────────────────────
+def aggregate(loan_ids, h_vals, coupon_map, active_set, prepaid_set):
+    df = pd.DataFrame({'loan_id': loan_ids, 'h_t': h_vals})
+    # restrict to loans active in the forecast year
+    df = df[df['loan_id'].isin(active_set)].copy()
+    df['note_rate'] = df['loan_id'].map(coupon_map)
+    df = df.dropna(subset=['note_rate'])
+    df['coupon']    = ((df['note_rate'] - 0.5) * 2).round() / 2
+    df['realized']  = df['loan_id'].isin(prepaid_set).astype(int)
+    # per-loan annual prepay prob from monthly hazard
+    df['annual_pp'] = 1.0 - (1.0 - df['h_t'].clip(0, 1 - 1e-7)) ** 12
 
-# ── Per-month inference ───────────────────────────────────────────────────────
-
-def infer_month(
-    model: PrepaymentTransformer,
-    panel: pd.DataFrame,
-    scaler,
-    forecast_yyyymm: int,
-    batch_size: int = 2048,
-) -> pd.DataFrame:
-    """For one forecast month, extract loan sequences, run inference.
-
-    For each loan with a row at forecast_yyyymm:
-      - Build sequence from the last min(loan_history_len, 33) rows ending AT
-        forecast_yyyymm (inclusive). The model was trained to predict P(prepay
-        at t | sequence through t), so we include month t's features as input.
-      - Run return_per_timestep=True, take h at the last real position.
-      - 'realized' = 1 if zero_balance_code_actual==1 at that month.
-
-    Returns DataFrame: loan_id, coupon, h_t (forecast hazard), realized
-    """
-    # Active loans at this month
-    active = panel[panel['yyyymm'] == forecast_yyyymm].copy()
-    if active.empty:
-        return pd.DataFrame()
-
-    loan_ids = active['loan_id'].values
-    print(f'  {forecast_yyyymm}: {len(loan_ids):,} active loans', flush=True)
-
-    # Build sequence for each loan: last MAX_SEQ rows ending at forecast_yyyymm
-    # We slice from the full panel — group by loan_id, take rows ≤ forecast_yyyymm
-    panel_sub  = panel[
-        (panel['loan_id'].isin(set(loan_ids))) &
-        (panel['yyyymm'] <= forecast_yyyymm)
-    ].copy()
-
-    # For each loan, keep last MAX_SEQ rows (chronological — panel is sorted)
-    panel_sub['rev_rank'] = panel_sub.groupby('loan_id').cumcount(ascending=False)
-    panel_sub = panel_sub[panel_sub['rev_rank'] < MAX_SEQ].copy()
-
-    # Drop rows with NaN features
-    valid_feat = panel_sub.dropna(subset=FEATURE_COLS)
-    loan_ids_valid = valid_feat['loan_id'].unique()
-
-    # Scale features
-    feats_scaled = scaler.transform(valid_feat[FEATURE_COLS].values)
-    valid_feat   = valid_feat.copy()
-    valid_feat[FEATURE_COLS] = feats_scaled
-
-    # Build padded arrays
-    n = len(loan_ids_valid)
-    id_to_idx = {lid: i for i, lid in enumerate(loan_ids_valid)}
-    valid_feat['_idx'] = valid_feat['loan_id'].map(id_to_idx)
-
-    # Timestep within last MAX_SEQ: compute from rev_rank (rev_rank 0 = most recent)
-    # We want timestep 0 = oldest in this window, so timestep = MAX_SEQ - 1 - rev_rank
-    # But actual sequence length per loan might be < MAX_SEQ.
-    seq_lens = valid_feat.groupby('loan_id')['rev_rank'].max() + 1  # n_months per loan
-    valid_feat['_seq_len'] = valid_feat['loan_id'].map(seq_lens)
-    valid_feat['_ts']      = (valid_feat['_seq_len'] - 1 - valid_feat['rev_rank']).astype(int)
-
-    sequences = np.zeros((n, MAX_SEQ, N_FEATURES), dtype=np.float32)
-    masks     = np.zeros((n, MAX_SEQ), dtype=bool)
-
-    idx_arr = valid_feat['_idx'].values
-    ts_arr  = valid_feat['_ts'].values
-    sequences[idx_arr, ts_arr, :] = valid_feat[FEATURE_COLS].values.astype(np.float32)
-    masks[idx_arr, ts_arr]        = True
-
-    # ── Batch inference ───────────────────────────────────────────────────────
-    h_values = np.zeros(n, dtype=np.float32)
-    model.eval()
-    with torch.no_grad():
-        for i in range(0, n, batch_size):
-            bs = torch.tensor(sequences[i:i+batch_size], device=DEVICE)
-            bm = torch.tensor(masks[i:i+batch_size],     device=DEVICE)
-            logits_pt = model(bs, mask=bm, return_per_timestep=True)  # (B, T)
-            h_pt      = torch.sigmoid(logits_pt).cpu().numpy()        # (B, T)
-            active_m  = masks[i:i+batch_size]                         # (B, T) bool
-
-            # Take hazard at the LAST real timestep per loan
-            # last_t[j] = index of last True in masks[j]
-            seq_len_batch = active_m.sum(axis=1)                       # (B,)
-            last_t        = (seq_len_batch - 1).clip(min=0)           # (B,)
-            for j, lt in enumerate(last_t):
-                h_values[i + j] = h_pt[j, lt]
-
-    # ── Realized prepayment ───────────────────────────────────────────────────
-    realized_map = dict(
-        active.set_index('loan_id')['zero_balance_code_actual'].eq(1.0)
-    )
-    coupon_map = dict(active.set_index('loan_id')['coupon'])
-
-    result = pd.DataFrame({
-        'loan_id':       loan_ids_valid,
-        'coupon':        [coupon_map.get(lid, np.nan) for lid in loan_ids_valid],
-        'h_t':           h_values,
-        'realized':      [int(realized_map.get(lid, False)) for lid in loan_ids_valid],
-        'forecast_yyyymm': forecast_yyyymm,
-    })
-    return result
-
-
-# ── Aggregation ───────────────────────────────────────────────────────────────
-
-def smm_to_cpr(smm: float) -> float:
-    """Monthly single-month mortality to annualised CPR."""
-    return (1.0 - (1.0 - smm) ** 12) * 100.0
-
-
-def aggregate_cpr(df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate per-loan hazard rates to coupon-level CPR.
-
-    CPR_c = (1 - prod_{i in c}(1 - h_{i,t})^{1/n_c})^12 * 100
-    Equivalently, SMM_c = 1 - exp(mean(log(1 - h_{i,t}))) ≈ mean(h_{i,t}) for small h.
-    We use the log-mean of survival probabilities for consistency with the
-    chain-rule derivation (avoids arithmetic-mean overestimation at high h).
-    """
-    results = []
-    for coupon, grp in df.groupby('coupon'):
-        h        = grp['h_t'].values.clip(0, 1 - 1e-7)
-        n        = len(h)
-        # Geometric-mean survival → pool SMM
-        log_surv = np.mean(np.log(1.0 - h))
-        smm      = 1.0 - np.exp(log_surv)
-        cpr      = smm_to_cpr(smm)
-
-        n_real    = grp['realized'].sum()
-        smm_real  = n_real / n  # realized monthly prepay rate
-        cpr_real  = smm_to_cpr(smm_real)
-
-        results.append({
+    rows = []
+    for coupon, g in df.groupby('coupon'):
+        n = len(g)
+        rows.append({
             'coupon':            coupon,
-            'forecast_cpr':      cpr,
-            'realized_cpr':      cpr_real,
-            'n_loans_forecast':  n,
-            'n_loans_realized':  int(n_real),
+            'forecast_cpr':      round(g['annual_pp'].mean() * 100, 4),
+            'realized_cpr':      round(g['realized'].mean()  * 100, 4),
+            'n_loans':           n,
+            'n_prepaid':         int(g['realized'].sum()),
         })
-    return pd.DataFrame(results)
+    return pd.DataFrame(rows).sort_values('coupon').reset_index(drop=True)
 
-
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--cutoff_year', type=int, required=True)
-    parser.add_argument('--batch_size',  type=int, default=2048)
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--cutoff_year', type=int, required=True)
+    ap.add_argument('--batch_size',  type=int, default=8192)
+    args = ap.parse_args()
 
-    OUT_DIR = os.path.join(BASE, f'outputs/rolling/cutoff_{args.cutoff_year}')
-    os.makedirs(OUT_DIR, exist_ok=True)
+    out_dir  = os.path.join(BASE, f'outputs/rolling/cutoff_{args.cutoff_year}')
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, 'rolling_cpr_forecast.csv')
 
-    # ── Load model + scaler ───────────────────────────────────────────────────
+    print(f'=== Rolling forecast cutoff={args.cutoff_year} '
+          f'→ FY{args.cutoff_year+1} | device={DEVICE} ===', flush=True)
+
     model = load_model(args.cutoff_year)
 
-    scaler_path = os.path.join(
-        BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}/scaler.pkl'
-    )
-    with open(scaler_path, 'rb') as f:
-        scaler = pickle.load(f)
-    print(f'Loaded scaler: {scaler_path}', flush=True)
+    print('\n[1/3] Inference on test sequences...', flush=True)
+    loan_ids, h_vals = infer_test_set(args.cutoff_year, model, args.batch_size)
 
-    # ── Load auxiliary data ───────────────────────────────────────────────────
-    pmms = pd.read_csv(PMMS_PATH)
-    pmms['reporting_period'] = pmms['reporting_period'].astype(int)
-    pmms_rates = dict(zip(pmms['reporting_period'], pmms['rate_30yr']))
+    test_id_set = set(loan_ids.tolist())
 
-    zhvi_df = pd.read_csv(ZHVI_PATH)
-    zhvi_df['zip3']             = zhvi_df['zip3'].astype(int)
-    zhvi_df['reporting_period'] = zhvi_df['reporting_period'].astype(int)
+    print('\n[2/3] Raw pass for coupon + realized...', flush=True)
+    coupon_map, active_set, prepaid_set = read_coupon_and_realized(
+        args.cutoff_year, test_id_set)
 
-    # ── Load raw panel for forecast window ────────────────────────────────────
-    panel = load_panel(args.cutoff_year, pmms_rates, zhvi_df, scaler)
-
-    # ── Forecast each month ───────────────────────────────────────────────────
-    f_months = forecast_months(args.cutoff_year)
-    print(f'\nForecast months: {f_months[0]}–{f_months[-1]}', flush=True)
-
-    all_rows = []
-    for fym in f_months:
-        loan_df = infer_month(model, panel, scaler, fym, batch_size=args.batch_size)
-        if loan_df.empty:
-            print(f'  {fym}: no active loans — skipping', flush=True)
-            continue
-        agg = aggregate_cpr(loan_df)
-        agg['forecast_yyyymm'] = fym
-        all_rows.append(agg)
-
-    out_path = os.path.join(OUT_DIR, 'rolling_cpr_forecast.csv')
-    write_header = True
-    for row_df in all_rows:
-        row_df.to_csv(out_path, mode='a', header=write_header, index=False)
-        write_header = False
+    print('\n[3/3] Aggregating to coupon-level CPR...', flush=True)
+    result = aggregate(loan_ids, h_vals, coupon_map, active_set, prepaid_set)
+    result['cutoff_year']   = args.cutoff_year
+    result['forecast_year'] = args.cutoff_year + 1
+    result.to_csv(out_path, index=False)
 
     print(f'\nSaved: {out_path}', flush=True)
-    summary = pd.read_csv(out_path)
-    print(summary.groupby('coupon')[['forecast_cpr', 'realized_cpr']].mean().round(2))
+    print(result.to_string(index=False), flush=True)
 
 
 if __name__ == '__main__':
