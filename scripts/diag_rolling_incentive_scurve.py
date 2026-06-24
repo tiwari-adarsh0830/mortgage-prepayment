@@ -63,6 +63,14 @@ MODELS = {
         ckpt=os.path.join(OUT,  "rolling/cutoff_2021/hazard_best.pt"),
         scaler=os.path.join(BASE, "data/sequences_rolling/cutoff_2021/scaler.pkl"),
         dead_cols=[]),
+    "cutoff_2022": dict(
+        ckpt=os.path.join(OUT,  "rolling/cutoff_2022/hazard_best.pt"),
+        scaler=os.path.join(BASE, "data/sequences_rolling/cutoff_2022/scaler.pkl"),
+        dead_cols=[]),
+    "cutoff_2023": dict(
+        ckpt=os.path.join(OUT,  "rolling/cutoff_2023/hazard_best.pt"),
+        scaler=os.path.join(BASE, "data/sequences_rolling/cutoff_2023/scaler.pkl"),
+        dead_cols=[]),
 }
 
 # Representative loan (matches REP used in the forecast scripts).
@@ -199,7 +207,7 @@ def main():
     plt.close()
 
     # ── (2) Age × incentive heatmap (per-timestep) to separate burnout ────────
-    keys_for_age = [k for k in ("production", "cutoff_2021") if k in loaded]
+    keys_for_age = [k for k in ("production","cutoff_2021","cutoff_2022","cutoff_2023") if k in loaded]
     fig, axes = plt.subplots(1, len(keys_for_age), figsize=(6*len(keys_for_age), 5),
                              squeeze=False)
     for ax, key in zip(axes[0], keys_for_age):
@@ -220,7 +228,7 @@ def main():
     plt.close(fig)
 
     # ── (3) Incentive × current-LTV heatmap (equity gate) ─────────────────────
-    keys_for_eq = [k for k in ("production", "cutoff_2021") if k in loaded]
+    keys_for_eq = [k for k in ("production","cutoff_2021","cutoff_2022","cutoff_2023") if k in loaded]
     fig, axes = plt.subplots(1, len(keys_for_eq), figsize=(6*len(keys_for_eq), 5),
                              squeeze=False)
     for ax, key in zip(axes[0], keys_for_eq):
