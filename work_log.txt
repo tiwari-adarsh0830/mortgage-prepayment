@@ -315,3 +315,23 @@ Session 16 — June 22, 2026 (4 hrs active, 210 total)
 - Job 11540828 queued on l40s_publ GPU, pending QOSGrpGRES (GPU slot wait)
 - Sent email to advisor confirming current_ltv in model + equity x incentive
   diagnostic result (heatmap attached); noted 200hr milestone
+
+Session 16 (cont.) — June 23, 2026
+- Forecast jobs 11540828_4/5 COMPLETED (ExitCode 0, ~1h20m on GPU)
+- Results: forecast CPR systematically 5-15x higher than realized
+  e.g. FNCL 3.0: forecast 36.4% vs realized 1.88%; FNCL 4.0: 45.4% vs 5.3%
+- Diagnosis: model scores h_t at Dec-2020 peak conditions, annualizes as
+  1-(1-h)^12 — overstates 2021 CPR because rates rose through 2021 and boom
+  faded. Not a bug: correct result of single-endpoint scoring without
+  time-varying features in forecast year. Motivates per-month t->t+1 design.
+
+Session 17 — June 23, 2026 (1 hr active, 211 total)
+- Rolling CPR forecast complete: jobs 11540828_4/5 COMPLETED (ExitCode 0)
+- cutoff_2020 → FY2021: forecast 10-20x above realized across all coupons
+  (e.g. FNCL 3.0: forecast 36.4% vs realized 1.88%; FNCL 4.0: 45.4% vs 5.3%)
+- Diagnosis: model scores h_t at Dec-2020 peak, annualizes as 1-(1-h)^12;
+  overestimates because 2021 rates rose and boom faded — correct behavior of
+  single-endpoint score without time-varying features in forecast year
+- This quantifies exactly why per-month t->t+1 with updated features is needed
+- Final forecast_rolling_cpr.py architecture: GPU, test-set only, mmap sequences,
+  vectorized last-timestep gather, 4-col raw pass for coupon+realized
