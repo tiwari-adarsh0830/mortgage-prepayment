@@ -74,6 +74,18 @@ MODELS = {
         "calib":  os.path.join(OUT,  "rolling/cutoff_2021/hazard_calibration.json"),
         "dead_cols": [],
     },
+    "cutoff_2022": {
+        "ckpt":   os.path.join(OUT,  "rolling/cutoff_2022/hazard_best.pt"),
+        "scaler": os.path.join(BASE, "data/sequences_rolling/cutoff_2022/scaler.pkl"),
+        "calib":  os.path.join(OUT,  "rolling/cutoff_2022/hazard_calibration.json"),
+        "dead_cols": [],
+    },
+    "cutoff_2023": {
+        "ckpt":   os.path.join(OUT,  "rolling/cutoff_2023/hazard_best.pt"),
+        "scaler": os.path.join(BASE, "data/sequences_rolling/cutoff_2023/scaler.pkl"),
+        "calib":  os.path.join(OUT,  "rolling/cutoff_2023/hazard_calibration.json"),
+        "dead_cols": [],
+    },
 }
 
 MAX_SEQ    = 33
@@ -94,6 +106,10 @@ def get_model_key(date: pd.Timestamp) -> str:
         return "cutoff_2020"
     elif pd.Timestamp("2022-01-01") <= date <= pd.Timestamp("2022-12-01"):
         return "cutoff_2021"
+    elif pd.Timestamp("2023-01-01") <= date <= pd.Timestamp("2023-12-01"):
+        return "cutoff_2022"
+    elif pd.Timestamp("2024-01-01") <= date <= pd.Timestamp("2024-12-01"):
+        return "cutoff_2023"
     else:
         return "production"
 
@@ -233,13 +249,13 @@ def main():
 
     pmms_hist = pmms_df[
         (pmms_df["date"] >= pd.Timestamp("2020-01-01")) &
-        (pmms_df["date"] <= pd.Timestamp("2022-12-01"))
+        (pmms_df["date"] <= pd.Timestamp("2024-12-01"))
     ].reset_index(drop=True)
 
     print(f"\nForecasting {len(pmms_hist)} months "
           f"({pmms_hist['date'].min().date()} -> {pmms_hist['date'].max().date()})",
           flush=True)
-    print("OOS: 2021 (cutoff_2020), 2022 (cutoff_2021); 2020 = production baseline",
+    print("OOS: 2021(cutoff_2020) 2022(cutoff_2021) 2023(cutoff_2022) 2024(cutoff_2023); 2020 = production baseline",
           flush=True)
 
     rows = []
@@ -304,6 +320,8 @@ def main():
     block("2020 baseline (production, in-sample)", "2020-01-01", "2020-12-31")
     block("2021 OOS (cutoff_2020 model)",          "2021-01-01", "2021-12-31")
     block("2022 OOS (cutoff_2021 model)",          "2022-01-01", "2022-12-31")
+    block("2023 OOS (cutoff_2022 model)",          "2023-01-01", "2023-12-31")
+    block("2024 OOS (cutoff_2023 model)",          "2024-01-01", "2024-12-31")
 
     merged_path = os.path.join(OUT, "rolling_forecast_vs_realized.csv")
     merged.to_csv(merged_path, index=False)
