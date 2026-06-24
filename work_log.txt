@@ -335,3 +335,19 @@ Session 17 — June 23, 2026 (1 hr active, 211 total)
 - This quantifies exactly why per-month t->t+1 with updated features is needed
 - Final forecast_rolling_cpr.py architecture: GPU, test-set only, mmap sequences,
   vectorized last-timestep gather, 4-col raw pass for coupon+realized
+2026-06-24   ~5.0h   Rolling OOS validation complete (cutoff_2022/2023)
+  - Prep sequences: cutoff_2022 (20.4M train, 1.55% prepay) and
+    cutoff_2023 (20.6M train, 1.66% prepay) via prep_rolling_array.slurm
+  - Trained both models via rolling_train_array.slurm --array=6,7
+    cutoff_2022 AUC=0.7070 (Platt a=2.3598 b=-5.2993)
+    cutoff_2023 AUC=0.7165 (Platt a=2.2815 b=-5.1419)
+  - Wrote calibration JSONs from training logs (not auto-saved by trainer)
+  - Ran forecast + diagnostic across all 5 models (2020-2024 window)
+  - Key finding: rolling models only learn rate-driven prepayment when
+    training window contains a refi wave; cutoff_2022/2023 learn turnover
+    (age 3-6 months, incentive-insensitive) as refi channel was closed
+  - Equity gate confirmed in production model: LTV=80 hazard 0.22%->17.35%
+    at 0->+3pp incentive; LTV=120 only reaches 6.87% (flat response)
+  - Sent results + two diagnostic plots to advisor
+  - Payment confirmed processed; logging hours toward next 200hr milestone
+  (SLURM wait time excluded)
