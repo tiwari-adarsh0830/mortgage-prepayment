@@ -385,11 +385,11 @@ relationship, so shape verdicts are independent of calibration.
 
 | Model | Shape | Mechanism |
 |---|---|---|
-| production | Correct S-curve (0.03→0.27 across −2→+4pp) | Trained on full rate cycle |
-| cutoff_2020 | Null / flat (~0.01 everywhere) | 0.90% in-window prepay; no refi signal |
+| production | Correct S-curve (rises monotonically, near-zero at −2pp to ~0.25 at +4pp) | Trained on full rate cycle |
+| cutoff_2020 | Null / flat (near-zero throughout, < 0.02) | 0.90% in-window prepay; no refi signal |
 | cutoff_2021 | U-shaped / distorted | Boom overfit: activation at age 28–33 × incentive >1.5pp |
 | cutoff_2022 | Flat near zero | Turnover learned (age 3–6 months); refi channel closed |
-| cutoff_2023 | Flat near zero | Same as cutoff_2022; equity gate unreliable |
+| cutoff_2023 | Flat near zero | Same as cutoff_2022; equity gate inverted above LTV=100 |
 
 **Equity gate (production model, confirmed):**
 - LTV=80: monthly hazard 0.22% → 17.35% as incentive 0 → +3pp (strong S-curve)
