@@ -366,3 +366,99 @@ Recovered and completed the rolling t→t+1 pipeline after a series of SLURM/mem
 ### SLURM operational notes
 - `--time=4:00:00` routes to `cpu_short` (backfill, fast scheduling) but caps at 4h — too short for full sequence-building passes. Use `--time=8:00:00` on general partitions for full prep (Pass 1–4 ≈ 5–6h); short walltime only for jobs provably under ~3h.
 - FairShare was 1.0 throughout (not deprioritized); walltime, not priority, governed scheduling.
+
+---
+
+## Phase 17 — Rolling OOS Extension + DER Factor-Shock Pipeline (June 24–26, 2026)
+
+### Rolling cutoff_2022 / cutoff_2023
+
+Extended the rolling pipeline to cutoff_2022 (forecasts 2023) and cutoff_2023
+(forecasts 2024). Trained AUCs: cutoff_2022=0.7070, cutoff_2023=0.7165.
+Platt calibration written manually from training logs (trainer does not auto-save):
+cutoff_2022 a=2.3598 b=−5.2993; cutoff_2023 a=2.2815 b=−5.1419.
+
+**Rolling diagnostic findings (all 5 models, calibration-independent):**
+The incentive S-curve diagnostic uses raw σ(logit) with no Platt scaling — since
+Platt is monotonic it cannot reverse the direction of the hazard-vs-incentive
+relationship, so shape verdicts are independent of calibration.
+
+| Model | Shape | Mechanism |
+|---|---|---|
+| production | Correct S-curve (0.03→0.27 across −2→+4pp) | Trained on full rate cycle |
+| cutoff_2020 | Null / flat (~0.01 everywhere) | 0.90% in-window prepay; no refi signal |
+| cutoff_2021 | U-shaped / distorted | Boom overfit: activation at age 28–33 × incentive >1.5pp |
+| cutoff_2022 | Flat near zero | Turnover learned (age 3–6 months); refi channel closed |
+| cutoff_2023 | Flat near zero | Same as cutoff_2022; equity gate unreliable |
+
+**Equity gate (production model, confirmed):**
+- LTV=80: monthly hazard 0.22% → 17.35% as incentive 0 → +3pp (strong S-curve)
+- LTV=120 (underwater): same incentive only reaches 6.87% (gate suppresses refi)
+- Gate survives in cutoff_2021 but weakens in cutoff_2022/2023 as rate-driven
+  signal disappears from the training window
+
+**Core finding:** Rolling models only learn rate-driven prepayment responsiveness
+when their training window contains a refi wave. Outside that window (pre-boom or
+post-boom), the model either has no signal (cutoff_2020) or learns turnover-at-
+young-age which is incentive-insensitive (cutoff_2022/2023). This is a fundamental
+data-availability constraint, not a modeling failure — and it explains why DER use
+a forward-looking dealer survey rather than a backward-fit model for the forecast leg.
+
+**New scripts:** `scripts/stage2_forecast_cpr_rolling.py` (5-model dispatch,
+2020–2024 window), `scripts/diag_rolling_incentive_scurve.py` (S-curve + age×
+incentive + equity×incentive heatmaps), `slurm/prep_rolling_array.slurm`.
+
+---
+
+### DER factor-shock pipeline (`scripts/stage3_der_factor_shocks.py`)
+
+Implements DER (NBER w22851) Eqs 15–18: empirical prepayment-surprise factors
+replacing the analytical price-formula betas used in stage3_der_regression_v2.py.
+
+**Factor construction (DER Eqs 15–18, verified against paper):**
+Each month, run separate OLS of forecast and realized CPR on `max(0, note_rate − PMMS)`
+across the 9 FNCL coupons. Factor innovations = difference in regression coefficients:
+- f_level[t] = x̂_realized − x̂_forecast  (level/turnover surprise)
+- f_slope[t] = ŷ_realized − ŷ_forecast  (rate-sensitivity surprise)
+
+Empirical betas estimated by time-series regression of TBA excess returns on
+(f_level, f_slope). Fama-MacBeth cross-sectional regression gives lambda_x, lambda_y.
+DER multicollinearity guard: drop months where corr(b_x, b_y) > 0.90.
+Single-factor fallback: when all months are collinear (discount-heavy sample),
+report lambda_x only (lambda_y unidentified).
+
+**GFEE alignment (critical):** factor-shock pipeline uses GFEE=0.50 throughout
+to match realized_cpr_by_coupon_v6 bucketing. Separate script
+`scripts/stage2_forecast_cpr_gfee050.py` generates the aligned forecast.
+The production timeseries uses GFEE=0.75 — do not mix these.
+
+**Preliminary results (against v5 realized panel, partially corrupt — see v6 note):**
+- Empirical betas reproduce DER Lemma 1/2 sign pattern: b_x positive for discount
+  coupons (2.5–5.5%), flips negative at premium (6.0–6.5%); b_y monotone declining
+- corr(b_x, b_y) = 0.935 → single-factor mode (discount-heavy sample, 2020–2025)
+- lambda_x mean=0.053, t=1.63, p=0.11 (correct sign per DER Hypothesis 1;
+  marginally significant; consistent with thin cross-sectional spread in
+  one-sided discount market — same structural limitation as analytical-beta result)
+- These values will be updated once realized_cpr_v6 scan completes
+
+---
+
+### realized_cpr_v6.py — two bug fixes to the realized CPR panel
+
+**Bug 1 (boundary failure):** v5 found each loan's global-last row using `idxmax`
+on raw MMYYYY integers. MMYYYY is non-monotonic as integers (122020 > 62024, but
+Dec-2020 precedes Jun-2024). Loans whose payoff month had a numerically smaller
+MMYYYY int than earlier months got the wrong last row → UPB>0 → missed payoff →
+2024–2025 realized CPR all-zero.
+
+**Bug 2 (at-risk denominator):** same ordering error kept paid-off loans in the
+at-risk pool past their true payoff month, inflating denominators and depressing
+CPR even in 2018–2023.
+
+**Fix:** convert MMYYYY→YYYYMM before all ordering/comparisons. Prepayment
+detection stays as UPB==0 at true-last-row (zbc==1 was investigated but rejected —
+col 106 persists for many months post-payoff, not a one-time event stamp).
+
+**v6 also adds:** Pass 0 checkpoint (saves prepay_month/rate_map dict to pkl so
+SLURM restarts skip the global scan). Script: `scripts/realized_cpr_v6.py`.
+Scan running as of June 26; output: `outputs/realized_cpr_by_coupon_v6.csv`.

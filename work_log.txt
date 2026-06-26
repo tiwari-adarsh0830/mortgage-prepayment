@@ -351,3 +351,28 @@ Session 17 — June 23, 2026 (1 hr active, 211 total)
   - Sent results + two diagnostic plots to advisor
   - Payment confirmed processed; logging hours toward next 200hr milestone
   (SLURM wait time excluded)
+
+2026-06-24 to 2026-06-26 | ~8h | Rolling OOS validation (cutoff_2022/2023) + DER factor-shock pipeline + realized CPR v6
+  - Trained cutoff_2022 (AUC=0.7070) and cutoff_2023 (AUC=0.7165); wrote Platt
+    calibration JSONs manually from training logs (not auto-saved by trainer)
+  - Rolling forecast: cutoff_2022/2023 produce near-zero CPR — training window
+    contains only turnover behavior (refi channel closed post-2022)
+  - Diagnostic: cutoff_2020 null (flat curve), cutoff_2021 boom overfit (hazard
+    at age 28-33 x incentive >1.5pp), cutoff_2022/2023 turnover-only
+  - Equity gate confirmed: LTV=80 hazard 0.22%->17.35% at 0->+3pp incentive;
+    LTV=120 only reaches 6.87%. Sent results + plots to advisor
+  - Built stage3_der_factor_shocks.py: DER Eqs 15-18 factor construction
+    (separate OLS of forecast/realized on max(0,note_rate-PMMS), difference
+    intercepts/slopes); empirical betas + Fama-MacBeth with collinearity guard;
+    verified against DER w22851 directly. corr(b_x,b_y)=0.935 -> single-factor
+    mode. lambda_x=0.053 t=1.63 p=0.11 (correct sign, discount-heavy sample)
+  - Built stage2_forecast_cpr_gfee050.py: GFEE=0.50 forecast aligned to v5
+    coupon bucketing (corrects 0.25pp offset that would corrupt shock panel)
+  - Identified 26 all-zero months in realized_cpr_v5 (Januaries + all 2024-25);
+    root cause: v5 used MMYYYY integer ordering to find each loan's last row —
+    MMYYYY is non-monotonic (122020 > 62024 as ints), so boundary payoffs missed
+  - Built realized_cpr_v6.py: v5 UPB==0 detection + MMYYYY->YYYYMM conversion
+    before all comparisons + Pass 0 checkpoint (pkl) to survive SLURM restarts
+  - v6 verified on synthetic harness: all hand-calc checks pass
+  - v6 scan running (job 11842185 successor, 12h walltime); awaiting completion
+  (SLURM wait/queue time excluded)
