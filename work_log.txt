@@ -376,3 +376,4 @@ Session 17 — June 23, 2026 (1 hr active, 211 total)
   - v6 verified on synthetic harness: all hand-calc checks pass
   - v6 scan running (job 11842185 successor, 12h walltime); awaiting completion
   (SLURM wait/queue time excluded)
+2026-06-27 | 2h | v6 realized CPR verification; diagnosed and fixed forecast-leg calibration (cohort-CPR Platt distinct from OAS hazard); full-cycle forecast-vs-realized validation (corr 0.88-0.98); factor-shock FM rerun (lambda_x=0.058, t=2.52); DER Eq.22 magnitude comparison vs Table VIII; results email

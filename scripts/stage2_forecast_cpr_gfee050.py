@@ -10,7 +10,7 @@ This gives the proper DER forecast leg — a time-varying CPR forecast that
 tracks the actual rate environment each month, comparable to the dealer survey.
 
 The contribution: our hazard model produces forecast_CPR[c,t] which we compare
-to realized_CPR[c,t] from realized_cpr_by_coupon_v5.csv.
+to realized_CPR[c,t] from realized_cpr_by_coupon_v6.csv.
 Factor shocks: shock[c,t] = realized_CPR[c,t] - forecast_CPR[c,t]
 
 Key fix vs Stage 2: Stage 2 used current PMMS (6.19%) for all months.
@@ -38,7 +38,7 @@ DATA  = os.path.join(BASE, "data")
 SEQ   = os.path.join(BASE, "data/sequences")
 CKPT  = os.path.join(OUT,  "hazard_best.pt")
 SCALER= os.path.join(SEQ,  "scaler.pkl")
-CALIB = os.path.join(OUT,  "hazard_calibration.json")
+CALIB = os.path.join(BASE, "config", "hazard_calibration_cpr_forecast.json")
 
 MAX_SEQ     = 33
 N_FEATURES  = 9
@@ -198,7 +198,7 @@ def main():
 
     # Comparison vs realized
     print("\n=== Forecast vs Realized CPR comparison ===")
-    real = pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v5.csv"))
+    real = pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v6.csv"))
     real["date"] = pd.to_datetime(real["date"])
     real_target = real[real["implied_mbs_coupon"].isin(COUPONS)]
 

@@ -23,7 +23,7 @@ WHAT'S DIFFERENT FROM stage3_der_regression_v2.py
   touching the rest of the pipeline.
 
 GFEE CONSISTENCY (critical)
-  realized_cpr_by_coupon_v5.csv buckets coupons at GFEE=0.50
+  realized_cpr_by_coupon_v6.csv buckets coupons at GFEE=0.50
   (implied_mbs_coupon = round(note*2)/2 - 0.50). The forecast fed here MUST use the
   same convention. Pass a GFEE=0.50 forecast via --forecast. The default 0.75 forecast
   (forecast_cpr_timeseries.csv) would offset the merge by 0.25pp and corrupt the shock.
@@ -137,7 +137,7 @@ def load_forecast(path):
 
 
 def load_realized():
-    df = pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v5.csv"))
+    df = pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v6.csv"))
     df["date"] = pd.to_datetime(df["date"]).apply(ym)
     df = df.rename(columns={"implied_mbs_coupon": "coupon", "cpr": "realized_cpr"})
     return df[["date", "coupon", "realized_cpr"]]
