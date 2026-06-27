@@ -1,0 +1,9 @@
+{
+  "a": 0.4559,
+  "b": -3.1376,
+  "note": "cohort_CPR_calibration_for_forecast_leg",
+  "calibrated_on": "trough_2022-06_to_2023-12",
+  "validated_on": "boom_2020-06_to_2021-12_held_out",
+  "boom_ratios": "0.51-0.87_expected_forecast_gap",
+  "timeseries_corr": "0.88-0.98_full_2020-2025"
+}
