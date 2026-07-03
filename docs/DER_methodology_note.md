@@ -115,7 +115,7 @@ where `r_t` = PMMS (time-varying, per month), `c^i` = coupon, `φ^i` = mean CPR 
 
 | Component | DER Paper | Current Implementation |
 |---|---|---|
-| Factors x, y | Realized − forecast CPR (cross-coupon regression) | **Built** — `stage3_der_factor_shocks.py` (2026-07-03) |
+| Factors x, y | Realized − forecast CPR (cross-coupon regression) | Built earlier (preliminary, v5 realized CPR); **corrected 2026-07-03** on v6 + FM-restriction fix |
 | β_x, β_y | Time-series regression of returns on x, y shocks | Empirical betas, per DER Eq. 19 (both analytical and empirical versions now maintained side by side) |
 | Forecast leg | Bloomberg dealer survey | Hazard model CPR — full-sample (θ_full) and rolling t→t+1 (θ_{t-}), both implemented |
 | Realized leg | eMBS | Fannie Mae panel (v6) |
@@ -219,11 +219,15 @@ broken.
 ## 7. Known Limitations and Next Steps
 
 ### Limitation 1: Analytical Betas vs. Factor Shocks — RESOLVED 2026-07-03
-Factor shocks (realized − forecast CPR, cross-coupon regression) and empirical betas are
-now built (`stage3_der_factor_shocks.py`); see §6. Analytical (Lemma 1) betas remain in
-production for the Eq. 22 regression, retained separately rather than replaced. Open
-item: λ_y magnitude is not yet reliable pending resolution of the rolling-series debias
-problem (see §6, Debiasing).
+Factor shocks and empirical betas were already built prior to tonight (preliminary run
+against v5 realized CPR: corr(b_x,b_y)=0.935, single-factor collapse — see README).
+Tonight corrected two independent issues: the v5→v6 realized-CPR fix, and an FM
+sample-restriction bug (§6). Together these change the result from DER's own single-
+factor collapse (corr=0.935) to a cleanly identified two-factor result (corr=0.402) —
+the v5→v6 fix specifically is what unlocks factor separability, a sharper causal claim
+than "our forecast leg is cleaner." Analytical (Lemma 1) betas remain in production for
+the Eq. 22 regression, retained separately rather than replaced. Open item: λ_y
+magnitude is not yet reliable pending resolution of the rolling-series debias problem.
 
 ### Limitation 2: Out-of-Sample Validation — PARTIALLY RESOLVED 2026-07-03
 Option (b), pre-2020-only training, was attempted and formally ruled out: calendar-censoring
