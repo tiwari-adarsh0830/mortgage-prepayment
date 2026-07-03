@@ -228,6 +228,8 @@ ssh at7095@login.torch.hpc.nyu.edu
 | ZHVI coverage gap (2018 loans) | Rebuilt zhvi_zip3.csv to 2015+ (was 2019+); 2019+ values unchanged |
 | realized_cpr cross-file bug (v4) | Global Pass 0 across all files finds true last appearance per loan |
 | Calibrate/forecast on login node | Login node kills heavy CPU jobs; use SLURM run_calibrate.sbatch or nohup |
+| FM sample restriction leak (stage3_der_factor_shocks.py) | fama_macbeth() received full returns panel instead of factor-coverage months; silently inflated n back to full-sample count in both full-sample (77->72) and rolling (77->48) runs |
+| Rolling calibration fallback (stage2_forecast_cpr_rolling.py) | cutoff_2020/2021 had no own Platt file, silently fell back to OAS Platt (b=-4.840) instead of cohort-CPR Platt; forced cohort-CPR onto all four cutoffs |
 
 ---
 
@@ -432,14 +434,26 @@ to match realized_cpr_by_coupon_v6 bucketing. Separate script
 `scripts/stage2_forecast_cpr_gfee050.py` generates the aligned forecast.
 The production timeseries uses GFEE=0.75 — do not mix these.
 
-**Preliminary results (against v5 realized panel, partially corrupt — see v6 note):**
-- Empirical betas reproduce DER Lemma 1/2 sign pattern: b_x positive for discount
-  coupons (2.5–5.5%), flips negative at premium (6.0–6.5%); b_y monotone declining
-- corr(b_x, b_y) = 0.935 → single-factor mode (discount-heavy sample, 2020–2025)
-- lambda_x mean=0.053, t=1.63, p=0.11 (correct sign per DER Hypothesis 1;
-  marginally significant; consistent with thin cross-sectional spread in
-  one-sided discount market — same structural limitation as analytical-beta result)
-- These values will be updated once realized_cpr_v6 scan completes
+**Corrected results (v6 realized panel; 2026-07-03):**
+- corr(b_x, b_y) = 0.402 → two-factor mode, both lambda_x and lambda_y identified.
+  The v5->v6 realized-CPR fix (not just the forecast leg) is what unlocks this --
+  v5's MMYYYY-sort bug was compressing the cross-section enough to force DER's own
+  single-factor collapse (corr=0.935, above).
+- Full-sample (theta_full): lambda_x=0.057 t=2.35 n=72, lambda_y=0.169 t=1.58 n=72
+  (an earlier run reported t=2.52 n=77 -- FM sample-restriction bug, see bug table below)
+- Rolling t->t+1 (theta_t-, genuine OOS across cutoff_2020..2023): lambda_x=0.149
+  t=3.04 n=48, corr(b_x,b_y)=0.390 -- both survive the OOS test, lambda_x strengthens
+- AR(1) robustness (DER's own test, Sec IV.B.1, replicated on full-sample factors):
+  rho_x=0.911 rho_y=0.573. Unlike DER ("nearly identical"), our lambda_x is NOT
+  robust to this: t drops 2.35->1.08. Real finding -- full-sample forecast leg
+  (one fixed hazard model) carries more persistent/forecastable structure than
+  DER's dealer-survey panel does.
+- Per-cutoff-model debias of the rolling shock (3 attempts: additive, log-space,
+  log-space ex-cutoff_2020) all broke the cross-section -- rolling shock is 53%
+  time-driven / 8% coupon-driven with sign-reversing trend across cutoffs, a
+  scalar bias per cutoff can't represent it. Correctly abandoned, open problem.
+- lambda_y not currently reportable in the rolling design (0.169->1.263 jump,
+  traceable to 2022-23 forecast/realized ratio blowups, same root cause as debias)
 
 ---
 
