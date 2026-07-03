@@ -306,7 +306,15 @@ def main(forecast_path):
     print("\nEmpirical betas (return loadings on prepayment-surprise factors):")
     print(betas.to_string(index=False))
 
-    lam, diag = fama_macbeth(returns, betas)
+    # FM cross-section restricted to months where the rolling shock/factor
+    # actually exists -- otherwise fixed betas get priced against out-of-window
+    # returns and n silently reverts to the full-sample count, defeating the
+    # point of a genuine rolling OOS test.
+    returns_fm = returns[returns["date"].isin(factor_ts["date"])].copy()
+    print(f"\nFM restricted to factor-coverage months: {returns_fm['date'].nunique()} "
+          f"(full returns panel had {returns['date'].nunique()})")
+
+    lam, diag = fama_macbeth(returns_fm, betas)
     print(f"\nLoading collinearity: corr(b_x,b_y)={diag['rho_loadings_full']:.3f} "
           f"(threshold {diag['rho_max']}) -> mode={diag['mode']}")
     if diag["collinear"]:
