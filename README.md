@@ -455,6 +455,22 @@ The production timeseries uses GFEE=0.75 — do not mix these.
 - lambda_y not currently reportable in the rolling design (0.169->1.263 jump,
   traceable to 2022-23 forecast/realized ratio blowups, same root cause as debias)
 
+**UPB balance-weighting (2026-07-04):** rebuilt realized CPR with UPB weighting
+(DER convention) via realized_cpr_v6_upb.py -- verified clean (2/13.77M prepaid
+loans excluded for lacking a prior-month row; cpr_count matches v6.csv's cpr to
+1.1e-4 max diff across all coupon-months). Fed through both forecast legs:
+
+| Leg | Weight | lambda_x | t | n | lambda_y | t | corr(bx,by) |
+|---|---|---|---|---|---|---|---|
+| Full-sample | count | 0.057 | 2.35 | 72 | 0.169 | 1.58 | 0.402 |
+| Full-sample | UPB   | 0.071 | 2.23 | 72 | 0.156 | 1.56 | 0.493 |
+| Rolling     | count | 0.149 | 3.04 | 48 | 1.263 | 1.52 | 0.390 |
+| Rolling     | UPB   | 0.175 | 3.02 | 48 | 1.299 | 1.53 | 0.377 |
+
+lambda_x positive and significant (p<0.05) in all four combinations; UPB raises
+the coefficient ~20-25% on both legs. corr(bx,by) stays well under DER's 0.90
+threshold throughout -- two-factor identification unaffected by weighting choice.
+
 ---
 
 ### realized_cpr_v6.py — two bug fixes to the realized CPR panel

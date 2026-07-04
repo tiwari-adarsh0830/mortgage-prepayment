@@ -203,6 +203,35 @@ real share of the full-sample λ_x significance is attributable to persistent/fo
 structure in a single fixed hazard model, rather than genuine period-to-period surprise —
 directly responsive to advisor's concern, and a genuine finding rather than a null result.
 
+### UPB Balance-Weighting (DER convention, 2026-07-04)
+
+Realized CPR was loan-count weighted throughout the above; DER's own convention
+balance-weights by UPB. Rebuilt `realized_cpr_v6.py` as `realized_cpr_v6_upb.py`:
+tracks each loan's top-2 (YYYYMM, UPB) rows rather than just the last, since the
+payoff month's own UPB is 0 by construction (that's how prepayment is detected) —
+the payoff weight must be the *prior* month's balance. Verified clean: only 2 of
+13.77M prepaid loans lack a prior-month row; `cpr_count` (loan-count column built
+alongside `cpr_upb` in the same file) matches the existing `v6.csv`'s `cpr` to
+within 1.1e-4 across all 1,748 coupon-months.
+
+Fed through the same factor-shock pipeline, both forecast legs:
+
+| Forecast leg | Weighting | λ_x | t(λ_x) | n | λ_y | t(λ_y) | corr(b_x,b_y) |
+|---|---|---|---|---|---|---|---|
+| Full-sample | Count | 0.057 | 2.35 | 72 | 0.169 | 1.58 | 0.402 |
+| Full-sample | UPB | 0.071 | 2.23 | 72 | 0.156 | 1.56 | 0.493 |
+| Rolling (θ_{t-}) | Count | 0.149 | 3.04 | 48 | 1.263 | 1.52 | 0.390 |
+| Rolling (θ_{t-}) | UPB | 0.175 | 3.02 | 48 | 1.299 | 1.53 | 0.377 |
+
+λ_x is positive and significant at 5% across all four combinations; UPB-weighting
+raises the coefficient ~20-25% relative to count-weighting on both forecast legs,
+consistent with larger (more rate-sensitive) balances contributing more to the
+surprise. Decorrelation moves in opposite directions by forecast leg (rises under
+UPB on full-sample, falls slightly under UPB on rolling) but stays well under DER's
+0.90 collinearity threshold in all four cases — the two-factor identification
+finding is unaffected by weighting choice. λ_y remains not reportable in either
+rolling configuration, for the same reason diagnosed above.
+
 Four attempts at a per-cutoff-model debias of the **rolling** shock series (additive,
 log-space, log-space excluding cutoff_2020) were tried and abandoned — each broke the
 cross-section (corr(b_x,b_y): 0.39→0.51→−0.58). Diagnosis: rolling shock variance is 53%
