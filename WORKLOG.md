@@ -28,3 +28,30 @@
   - Net: Task A complete and reportable. Task B open on the rolling series;
     AR(1) result on full-sample is itself a reportable finding in Task B's
     place.
+
+2026-07-04 | 3h | UPB balance-weighting + pipeline integration
+  - Built realized_cpr_v6_upb.py: extends v6's Pass 0 to track each loan's
+    top-2 (YYYYMM, UPB) rows, since the payoff month's own UPB=0 by
+    construction (that's the prepay-detection signal) -- correct weight for
+    the payoff month is the PRIOR month's balance, not the payoff row itself.
+  - First attempt (nohup on login node) died silently ~file 11/41, likely
+    session disconnect or OOM -- no per-file checkpoint existed yet to
+    diagnose or recover from.
+  - Rewrote with per-5-file Pass 0 checkpointing + resume support before
+    resubmitting via SLURM (--time=20:00:00 --mem=96G). First SLURM attempt
+    (8h) hit TIMEOUT mid-Pass-1 (Pass 0 had completed and checkpointed).
+    Resubmission completed Pass 1 in 8:27:27 using the cached Pass 0 result.
+  - Verified: 2/13.77M prepaid loans excluded (no prior-month row) --
+    negligible. cpr_count column matches existing v6.csv's cpr to within
+    1.1e-4 max diff across 1,748 coupon-months -- confirms the new script's
+    counting logic is consistent with the already-trusted v6 pipeline.
+  - One exact-zero-CPR month (2013-07, coupon 2.5) traced to a panel-boundary
+    artifact (loans already near payoff when the 2013 extension window
+    starts) -- consistent with the same class of early-window artifact
+    already documented for the 2018 boundary.
+  - Parameterized stage3_der_factor_shocks.py's load_realized() to accept
+    --realized/--realized-col, defaults preserve original behavior exactly.
+  - Ran both forecast legs (full-sample, rolling) against UPB-weighted
+    realized CPR. lambda_x positive and significant (p<0.05) in all four
+    leg x weighting combinations; UPB raises the coefficient ~20-25% on
+    both legs; corr(bx,by) stays well under DER's 0.90 threshold throughout.
