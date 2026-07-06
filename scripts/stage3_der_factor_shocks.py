@@ -377,6 +377,6 @@ if __name__ == "__main__":
     ap.add_argument("--realized", default=os.path.join(OUT, "realized_cpr_by_coupon_v6_upb.csv"),
                     help="Realized CPR CSV (default: realized_cpr_by_coupon_v6_upb.csv, UPB version, as of 7/5)")
     ap.add_argument("--realized-col", default="cpr_upb",
-                    help="Column to use as realized CPR: 'cpr' (loan-count) or 'cpr_upb' (UPB-weighted, DEFAULT as of 7/5 per advisor)")
+                    help="Column to use as realized CPR: 'cpr' (loan-count) or 'cpr_upb' (UPB-weighted, DEFAULT as of 7/5)")
     args = ap.parse_args()
     main(args.forecast, args.realized, args.realized_col)
