@@ -136,10 +136,17 @@ def load_forecast(path):
     return df[["date", "coupon", "forecast_cpr"]]
 
 
-def load_realized():
-    df = pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v6.csv"))
+def load_realized(path=None, col="cpr"):
+    """path: realized-CPR CSV. col: which column to treat as realized CPR
+    (e.g. 'cpr' for loan-count weighted, 'cpr_upb' for UPB/balance weighted).
+    Defaults preserve original behavior exactly."""
+    if path is None:
+        path = os.path.join(OUT, "realized_cpr_by_coupon_v6.csv")
+    df = pd.read_csv(path)
     df["date"] = pd.to_datetime(df["date"]).apply(ym)
-    df = df.rename(columns={"implied_mbs_coupon": "coupon", "cpr": "realized_cpr"})
+    if col not in df.columns:
+        raise SystemExit(f"Column '{col}' not found in {path}. Available: {list(df.columns)}")
+    df = df.rename(columns={"implied_mbs_coupon": "coupon", col: "realized_cpr"})
     return df[["date", "coupon", "realized_cpr"]]
 
 
@@ -269,7 +276,7 @@ def fama_macbeth(returns, betas, rho_max=0.90, single_factor_if_collinear=True):
                 months_used=len(lam))
     return lam, diag
 
-def main(forecast_path):
+def main(forecast_path, realized_path=None, realized_col="cpr"):
     print("Loading excess returns...", flush=True)
     returns = load_excess_returns()
     returns = returns[returns["date"] >= START_DATE].copy()
@@ -278,7 +285,7 @@ def main(forecast_path):
 
     print("Loading forecast + realized, building shock...", flush=True)
     fc   = load_forecast(forecast_path)
-    real = load_realized()
+    real = load_realized(realized_path, realized_col)
     shock = fc.merge(real, on=["date", "coupon"], how="inner")
     shock["shock"] = shock["realized_cpr"] - shock["forecast_cpr"]
 
@@ -367,5 +374,9 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--forecast", default=os.path.join(OUT, "forecast_cpr_timeseries_gfee050.csv"),
                     help="GFEE=0.50 forecast CSV (must match realized_cpr_v5 bucketing)")
+    ap.add_argument("--realized", default=os.path.join(OUT, "realized_cpr_by_coupon_v6_upb.csv"),
+                    help="Realized CPR CSV (default: realized_cpr_by_coupon_v6_upb.csv, UPB version, as of 7/5)")
+    ap.add_argument("--realized-col", default="cpr_upb",
+                    help="Column to use as realized CPR: 'cpr' (loan-count) or 'cpr_upb' (UPB-weighted, DEFAULT as of 7/5 per advisor)")
     args = ap.parse_args()
-    main(args.forecast)
+    main(args.forecast, args.realized, args.realized_col)
