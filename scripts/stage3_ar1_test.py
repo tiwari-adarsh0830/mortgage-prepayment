@@ -1,6 +1,6 @@
 """
 AR(1)/persistence test for the factor-shock series — extended to the rolling
-series per advisor's 7/5 request.
+series.
 
 Procedure:
   1. Build f_level[t], f_slope[t] exactly as in stage3_der_factor_shocks.py
