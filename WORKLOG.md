@@ -6,7 +6,7 @@
   - Found and fixed FM sample-leakage bug in stage3_der_factor_shocks.py:
     fama_macbeth() was using the unrestricted 77-month returns panel instead
     of the factor-coverage window. Affected BOTH the rolling result and the
-    original full-sample result already sent to advisor on Jun 27.
+    original full-sample result already sent on Jun 27.
   - Corrected full-sample: lambda_x=0.057 t=2.35 n=72 (sent value was t=2.52 n=77)
   - Rolling (theta_t-, genuine OOS): lambda_x=0.149 t=3.04 n=48, corr(bx,by)=0.390
     -- survives OOS test, stronger than full-sample, decorrelation holds
@@ -55,3 +55,10 @@
     realized CPR. lambda_x positive and significant (p<0.05) in all four
     leg x weighting combinations; UPB raises the coefficient ~20-25% on
     both legs; corr(bx,by) stays well under DER's 0.90 threshold throughout.
+2026-07-05 | 3h | UPB-weighting made pipeline default + AR(1) persistence test on rolling series
+    - Made cpr_upb the default --realized-col and its file the default --realized in stage3_der_factor_shocks.py (was previously opt-in flag only)
+    - Extended AR(1)/persistence residualization test to rolling factor-shock series (new script: stage3_ar1_test.py)
+    - Fixed OOS-only filtering bug in rolling AR(1) test (was including in-sample 2020 production-model months, n=60 -> corrected n=48)
+    - Verified two-factor mode stays intact after AR(1)-residualizing in all four cases (no silent single-factor fallback)
+    - Investigated and diagnosed rho(b_x,b_y) sign flip in rolling AR(1) case (0.39->-0.53) - traced to broad R^2 decline across coupons at n=47, not a single outlier
+    - Sent follow-up email 7/5 with results

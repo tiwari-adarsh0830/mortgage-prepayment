@@ -315,10 +315,10 @@ Old model: correct monotonic S-curve. New model: collapses to ~0 exactly where p
 
 ## Phase 16 — Rolling t→t+1 Estimation + Equity×Incentive Diagnostic (June 20, 2026)
 
-Implements the rolling real-time OOS design (advisor, June 20): train through Dec Y,
-forecast Jan–Dec Y+1, roll forward. Directly addresses the equity×rate-incentive
-interaction advisor flagged (high-leverage post-GFC loans did not refinance; low-leverage
-2020–21 loans did).
+Implements the rolling real-time OOS design (per advisor guidance, June 20): train
+through Dec Y, forecast Jan–Dec Y+1, roll forward. Directly addresses the
+equity×rate-incentive interaction previously flagged (high-leverage post-GFC loans
+did not refinance; low-leverage 2020–21 loans did).
 
 ### Equity×incentive diagnostic (`scripts/diag_equity_incentive.py`)
 Confirms the transformer learned the equity gate on refinancing. Sweeping rate
@@ -492,3 +492,58 @@ col 106 persists for many months post-payoff, not a one-time event stamp).
 **v6 also adds:** Pass 0 checkpoint (saves prepay_month/rate_map dict to pkl so
 SLURM restarts skip the global scan). Script: `scripts/realized_cpr_v6.py`.
 Scan running as of June 26; output: `outputs/realized_cpr_by_coupon_v6.csv`.
+
+---
+
+## Phase 18 — UPB Default Throughout + AR(1) Persistence on Rolling Series (July 5, 2026)
+
+### UPB-weighting made the pipeline standard
+
+`scripts/stage3_der_factor_shocks.py` previously required an explicit
+`--realized-col cpr_upb` flag to use balance-weighted realized CPR. Both defaults
+now point to UPB (`--realized-col` defaults to `cpr_upb`, `--realized` defaults to
+`realized_cpr_by_coupon_v6_upb.csv`), so UPB-weighting is the standing convention
+rather than a robustness check. Verified: a bare `python stage3_der_factor_shocks.py`
+now reproduces the previously-confirmed UPB result (lambda_x=0.071, t=2.23, n=72)
+with zero flags.
+
+### AR(1)/persistence test extended to the rolling series
+
+New script: `scripts/stage3_ar1_test.py`. Fits `f[t] = alpha + rho*f[t-1] + eps[t]`
+on the factor series, replaces `f_level`/`f_slope` with the AR(1) residual
+(innovation-only series), and reruns empirical betas + Fama-MacBeth on the
+residualized factors.
+
+**Note on the Phase 17 full-sample AR(1) result:** the original rho_x=0.911,
+rho_y=0.573, t: 2.35->1.08 finding was run ad hoc and the script no longer exists
+(confirmed via shell-history search) — only the result was recorded above. The new
+`stage3_ar1_test.py` is the versioned, reproducible implementation going forward;
+its full-sample count-weighted number differs slightly (t=1.26 vs the earlier 1.08)
+but the qualitative conclusion — significance collapses under AR(1) residualization
+— is unchanged.
+
+**OOS-only fix:** the rolling series must be filtered to `is_oos == True` before
+the AR(1) test (excludes the in-sample 2020 production-model months). An initial
+run without this filter gave n=60 and a full collapse (rolling t: 2.20 -> -0.59);
+after the fix, n=48, matching the genuine-OOS sample used throughout Phase 17.
+
+**Results (`outputs/ar1_persistence_test_results.json`):**
+
+| | Weight | RAW t | AR(1)-resid t | Survives? |
+|---|---|---|---|---|
+| Full-sample | count | 2.348 | 1.260 | collapses |
+| Full-sample | UPB | 2.232 | 2.098 | mostly holds |
+| Rolling OOS | count | 3.035 | 2.896 | holds |
+| Rolling OOS | UPB | 3.020 | 2.877 | holds |
+
+Two-factor mode stays intact in all four cases after residualizing (no silent
+fallback to single-factor; corr(b_x,b_y) never exceeds the 0.90 threshold).
+
+**Caveat found and diagnosed:** corr(b_x,b_y) in the rolling AR(1)-residualized
+case flips sign (0.39 -> -0.53 count-weighted, 0.38 -> -0.51 UPB-weighted), unlike
+full-sample (0.40 -> 0.43, 0.49 -> 0.59), which stays positive. Inspected the
+per-coupon beta table directly: not a single-outlier artifact — every coupon's R^2
+degrades broadly (e.g. one coupon's fit falls from 0.042 to 0.018) after
+residualizing f_level's rho~0.9 persistence out of only 47 months split across 9
+coupons. Read as an estimation-precision issue at this sample size, not a genuine
+economic reversal — flagged rather than smoothed over.
