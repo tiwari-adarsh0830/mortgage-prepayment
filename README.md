@@ -547,3 +547,115 @@ degrades broadly (e.g. one coupon's fit falls from 0.042 to 0.018) after
 residualizing f_level's rho~0.9 persistence out of only 47 months split across 9
 coupons. Read as an estimation-precision issue at this sample size, not a genuine
 economic reversal — flagged rather than smoothed over.
+
+## Phase 19 — Rolling AR(1) Robustness: Cutoff_2020 Exclusion (July 6, 2026)
+
+### Request
+
+Advisor asked for one more robustness cut on the Phase 18 rolling AR(1) result:
+re-run the AR(1)-residualized rolling Fama-MacBeth excluding the `cutoff_2020`
+forecast leg (drops the 2020-21 forecast-year months), running on the remaining
+36 months from `cutoff_2021` onward. Report point estimates, t-stats, and both
+lambdas.
+
+### Implementation
+
+Patched `scripts/stage3_ar1_test.py` (additive only, verified via diff against
+pre-patch backup):
+- Added `exclude_cutoffs` param to `run()`, filtering on the `model_used` column
+  in `rolling_forecast_cpr_timeseries.csv` before the OOS-only filter
+- Added `lambda_y` mean/t-stat reporting alongside the existing `lambda_x` output
+  (previously only `lambda_x` was surfaced)
+- New `results["rolling_ex_cutoff_2020"]` entry in the output JSON
+
+**Data source correction:** initial run failed — the default realized-CPR file
+(`realized_cpr_by_coupon_v6.csv`) only has count-weighted `cpr`, not `cpr_upb`.
+The UPB-weighted column lives in a separate file, `realized_cpr_by_coupon_v6_upb.csv`
+(built by `scripts/realized_cpr_v6_upb.py`, previously uncommitted — added this
+phase). Corrected invocation passes `--realized-path` explicitly.
+
+### Results (`outputs/ar1_persistence_test_results.json`, UPB-weighted)
+
+| | lambda_x mean | t-stat | n |
+|---|---|---|---|
+| RAW | 0.0486 | 2.586 | 36 |
+| AR(1)-residualized | 0.0318 | 2.310 | 35 |
+
+Holds up: significant both before and after AR(1) residualization, though the
+correction takes a larger relative bite here (t drops ~11%) than in the full
+48-month rolling series (~5% drop, Phase 18).
+
+### lambda_y not identified in this window
+
+`rho(b_x, b_y)` across the 9 coupons rises to **0.986** once `cutoff_2020` is
+excluded (vs. 0.39 with it included), tripping the pipeline's existing
+`rho_max=0.90` single-factor fallback in `fama_macbeth()` — same collinearity
+mechanism as DER's own result, not a bug. Confirmed via standalone diagnostic
+against `empirical_betas()` output directly. Ruled out one hypothesis (all-discount
+market months): 31/36 months have at least one premium coupon, so it isn't simply
+a one-sided-market identification issue like 2023 was.
+
+### Robustness check on the RAW lambda_x result
+
+- Sign consistency: 25/36 months positive
+- Leave-one-out: t-stat ranges from 2.32 to 3.14 across all 36 single-month
+  exclusions (full-sample t=2.586 sits inside this range) — no single month
+  drives the result
+
+Sent to advisor July 6.
+
+## Phase 19 — Rolling AR(1) Robustness: Cutoff_2020 Exclusion (July 6, 2026)
+
+### Request
+
+Advisor asked for one more robustness cut on the Phase 18 rolling AR(1) result:
+re-run the AR(1)-residualized rolling Fama-MacBeth excluding the `cutoff_2020`
+forecast leg (drops the 2020-21 forecast-year months), running on the remaining
+36 months from `cutoff_2021` onward. Report point estimates, t-stats, and both
+lambdas.
+
+### Implementation
+
+Patched `scripts/stage3_ar1_test.py` (additive only, verified via diff against
+pre-patch backup):
+- Added `exclude_cutoffs` param to `run()`, filtering on the `model_used` column
+  in `rolling_forecast_cpr_timeseries.csv` before the OOS-only filter
+- Added `lambda_y` mean/t-stat reporting alongside the existing `lambda_x` output
+  (previously only `lambda_x` was surfaced)
+- New `results["rolling_ex_cutoff_2020"]` entry in the output JSON
+
+**Data source correction:** initial run failed — the default realized-CPR file
+(`realized_cpr_by_coupon_v6.csv`) only has count-weighted `cpr`, not `cpr_upb`.
+The UPB-weighted column lives in a separate file, `realized_cpr_by_coupon_v6_upb.csv`
+(built by `scripts/realized_cpr_v6_upb.py`, previously uncommitted — added this
+phase). Corrected invocation passes `--realized-path` explicitly.
+
+### Results (`outputs/ar1_persistence_test_results.json`, UPB-weighted)
+
+| | lambda_x mean | t-stat | n |
+|---|---|---|---|
+| RAW | 0.0486 | 2.586 | 36 |
+| AR(1)-residualized | 0.0318 | 2.310 | 35 |
+
+Holds up: significant both before and after AR(1) residualization, though the
+correction takes a larger relative bite here (t drops ~11%) than in the full
+48-month rolling series (~5% drop, Phase 18).
+
+### lambda_y not identified in this window
+
+`rho(b_x, b_y)` across the 9 coupons rises to **0.986** once `cutoff_2020` is
+excluded (vs. 0.39 with it included), tripping the pipeline's existing
+`rho_max=0.90` single-factor fallback in `fama_macbeth()` — same collinearity
+mechanism as DER's own result, not a bug. Confirmed via standalone diagnostic
+against `empirical_betas()` output directly. Ruled out one hypothesis (all-discount
+market months): 31/36 months have at least one premium coupon, so it isn't simply
+a one-sided-market identification issue like 2023 was.
+
+### Robustness check on the RAW lambda_x result
+
+- Sign consistency: 25/36 months positive
+- Leave-one-out: t-stat ranges from 2.32 to 3.14 across all 36 single-month
+  exclusions (full-sample t=2.586 sits inside this range) — no single month
+  drives the result
+
+Sent to advisor July 6.

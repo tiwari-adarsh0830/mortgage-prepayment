@@ -62,3 +62,35 @@
     - Verified two-factor mode stays intact after AR(1)-residualizing in all four cases (no silent single-factor fallback)
     - Investigated and diagnosed rho(b_x,b_y) sign flip in rolling AR(1) case (0.39->-0.53) - traced to broad R^2 decline across coupons at n=47, not a single outlier
     - Sent follow-up email 7/5 with results
+2026-07-06 | 2h | AR(1)-residualized rolling FM test, ex-cutoff_2020 robustness (advisor request)
+    - Patched stage3_ar1_test.py: added exclude_cutoffs filter param + lambda_y
+      reporting (additive only; verified via diff against pre-patch backup)
+    - Initial run failed: default realized-CPR file lacks cpr_upb column.
+      Correct source is realized_cpr_by_coupon_v6_upb.csv (separate file,
+      previously uncommitted -- added this session)
+    - Rolling OOS-only, ex-cutoff_2020 (n=36, UPB-weighted):
+      RAW lambda_x=0.0486 t=2.586 | AR(1)-resid lambda_x=0.0318 t=2.310 (n=35)
+    - lambda_y unidentified in this window: rho(b_x,b_y)=0.986 trips the
+      existing single-factor fallback (rho_max=0.90) in fama_macbeth().
+      Confirmed via standalone diagnostic on empirical_betas() output --
+      not a bug, same collinearity mechanism as DER's own result. Ruled out
+      all-discount-market explanation (31/36 months have a premium coupon)
+    - Robustness check on RAW result: 25/36 months positive sign,
+      leave-one-out t-stat range 2.32-3.14 (no single month drives result)
+    - Sent results + lambda_y caveat to advisor
+2026-07-06 | 2h | AR(1)-residualized rolling FM test, ex-cutoff_2020 robustness (advisor request)
+    - Patched stage3_ar1_test.py: added exclude_cutoffs filter param + lambda_y
+      reporting (additive only; verified via diff against pre-patch backup)
+    - Initial run failed: default realized-CPR file lacks cpr_upb column.
+      Correct source is realized_cpr_by_coupon_v6_upb.csv (separate file,
+      previously uncommitted -- added this session)
+    - Rolling OOS-only, ex-cutoff_2020 (n=36, UPB-weighted):
+      RAW lambda_x=0.0486 t=2.586 | AR(1)-resid lambda_x=0.0318 t=2.310 (n=35)
+    - lambda_y unidentified in this window: rho(b_x,b_y)=0.986 trips the
+      existing single-factor fallback (rho_max=0.90) in fama_macbeth().
+      Confirmed via standalone diagnostic on empirical_betas() output --
+      not a bug, same collinearity mechanism as DER's own result. Ruled out
+      all-discount-market explanation (31/36 months have a premium coupon)
+    - Robustness check on RAW result: 25/36 months positive sign,
+      leave-one-out t-stat range 2.32-3.14 (no single month drives result)
+    - Sent results + lambda_y caveat to advisor

@@ -35,7 +35,7 @@ def ar1_residualize(series: pd.Series):
     return rho, resid
 
 
-def run(forecast_path, realized_path, realized_col, label, oos_only=False):
+def run(forecast_path, realized_path, realized_col, label, oos_only=False, exclude_cutoffs=None):
     print(f"\n{'='*70}\n{label}\n{'='*70}")
 
     returns = base.load_excess_returns()
@@ -49,7 +49,13 @@ def run(forecast_path, realized_path, realized_col, label, oos_only=False):
         n_before = len(raw)
         raw = raw[raw["is_oos"] == True].copy()
         print(f"  OOS filter: kept {len(raw)}/{n_before} rows (dropped in-sample production-model months)")
-        tmp_path = forecast_path.replace(".csv", "_oos_only_tmp.csv")
+        suffix = "_oos_only_tmp"
+        if exclude_cutoffs:
+            n_before_ex = len(raw)
+            raw = raw[~raw["model_used"].isin(exclude_cutoffs)].copy()
+            print(f"  Excluding {exclude_cutoffs}: kept {len(raw)}/{n_before_ex} rows")
+            suffix += "_ex_" + "_".join(c.replace("cutoff_", "") for c in exclude_cutoffs)
+        tmp_path = forecast_path.replace(".csv", f"{suffix}.csv")
         raw.to_csv(tmp_path, index=False)
         forecast_path = tmp_path
 
@@ -78,6 +84,8 @@ def run(forecast_path, realized_path, realized_col, label, oos_only=False):
     lam_raw, _ = base.fama_macbeth(returns_fm, betas_raw)
     lx_raw = lam_raw["lambda_x"].dropna()
     t_raw, _ = stats.ttest_1samp(lx_raw, 0) if len(lx_raw) else (np.nan, np.nan)
+    ly_raw = lam_raw["lambda_y"].dropna()
+    ty_raw, _ = stats.ttest_1samp(ly_raw, 0) if len(ly_raw) else (np.nan, np.nan)
 
     # ---- AR(1)-residualized (innovation only) ----
     rho_x, resid_level = ar1_residualize(factor_ts["f_level"])
@@ -93,18 +101,26 @@ def run(forecast_path, realized_path, realized_col, label, oos_only=False):
     lam_innov, _ = base.fama_macbeth(returns_fm_i, betas_innov)
     lx_innov = lam_innov["lambda_x"].dropna()
     t_innov, _ = stats.ttest_1samp(lx_innov, 0) if len(lx_innov) else (np.nan, np.nan)
+    ly_innov = lam_innov["lambda_y"].dropna()
+    ty_innov, _ = stats.ttest_1samp(ly_innov, 0) if len(ly_innov) else (np.nan, np.nan)
 
     print(f"  rho(f_level) = {rho_x:.3f}   rho(f_slope) = {rho_y:.3f}")
     print(f"  RAW:         lambda_x mean={lx_raw.mean():.6f}  t={t_raw:.3f}  n={len(lx_raw)}")
+    print(f"               lambda_y mean={ly_raw.mean():.6f}  t={ty_raw:.3f}  n={len(ly_raw)}")
     print(f"  AR(1)-resid: lambda_x mean={lx_innov.mean():.6f}  t={t_innov:.3f}  n={len(lx_innov)}")
+    print(f"               lambda_y mean={ly_innov.mean():.6f}  t={ty_innov:.3f}  n={len(ly_innov)}")
 
     return dict(
         label=label, rho_f_level=rho_x, rho_f_slope=rho_y,
         raw=dict(mean=float(lx_raw.mean()) if len(lx_raw) else None,
-                  t=float(t_raw) if len(lx_raw) else None, n=int(len(lx_raw))),
+                  t=float(t_raw) if len(lx_raw) else None, n=int(len(lx_raw)),
+                  lambda_y_mean=float(ly_raw.mean()) if len(ly_raw) else None,
+                  lambda_y_t=float(ty_raw) if len(ly_raw) else None),
         ar1_residualized=dict(mean=float(lx_innov.mean()) if len(lx_innov) else None,
                               t=float(t_innov) if len(lx_innov) else None,
-                              n=int(len(lx_innov))),
+                              n=int(len(lx_innov)),
+                              lambda_y_mean=float(ly_innov.mean()) if len(ly_innov) else None,
+                              lambda_y_t=float(ty_innov) if len(ly_innov) else None),
     )
 
 
@@ -129,6 +145,14 @@ if __name__ == "__main__":
         realized_col=args.realized_col,
         label=f"ROLLING OOS-ONLY ({args.realized_col})",
         oos_only=True,
+    )
+    results["rolling_ex_cutoff_2020"] = run(
+        forecast_path=os.path.join(OUT, "rolling_forecast_cpr_timeseries.csv"),
+        realized_path=args.realized_path,
+        realized_col=args.realized_col,
+        label=f"ROLLING OOS-ONLY, EX-CUTOFF_2020 ({args.realized_col})",
+        oos_only=True,
+        exclude_cutoffs=["cutoff_2020"],
     )
 
     json.dump(results, open(os.path.join(OUT, "ar1_persistence_test_results.json"), "w"),
