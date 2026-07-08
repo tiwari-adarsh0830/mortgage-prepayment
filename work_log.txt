@@ -377,3 +377,23 @@ Session 17 — June 23, 2026 (1 hr active, 211 total)
   - v6 scan running (job 11842185 successor, 12h walltime); awaiting completion
   (SLURM wait/queue time excluded)
 2026-06-27 | 2h | v6 realized CPR verification; diagnosed and fixed forecast-leg calibration (cohort-CPR Platt distinct from OAS hazard); full-cycle forecast-vs-realized validation (corr 0.88-0.98); factor-shock FM rerun (lambda_x=0.058, t=2.52); DER Eq.22 magnitude comparison vs Table VIII; results email
+2026-07-07 | 2h | Standardized (unit-variance) surprise series for with/without-2020 magnitude comparison (advisor request)
+    - Patched stage3_ar1_test.py: added standardize_factors() rescaling f_level/f_slope
+      to unit variance within each specification's own window, applied before
+      empirical_betas() for both RAW and AR(1)-residualized legs (additive only)
+    - Fixed --realized-path default (was None, silently falling back to the
+      count-weighted realized_cpr_by_coupon_v6.csv) -- caught via a failed first
+      run (missing cpr_upb column), corrected the default rather than passing
+      the flag as a one-off
+    - Confirmed analytically and via synthetic-data test that this rescaling cannot
+      change any t-stat (linear transform within a fixed window rescales lambda(t)
+      uniformly) -- verified against live output: all six t-stats matched
+      previously-reported values exactly
+    - Standardized AR(1)-resid lambda_x: rolling (with cutoff_2020) 2.745
+      (t=2.877, n=47) vs rolling ex-cutoff_2020 1.834 (t=2.310, n=35) -- 33% drop.
+      RAW series: 1.389 -> 0.964, 31% drop (consistent direction)
+    - Added per-month standardized lambda_x CSV export for leave-one-out without
+      re-running the full pipeline
+    - Leave-one-out on the with/without-2020 comparison: jackknife ranges
+      [2.44, 3.09] (with 2020) vs [1.54, 2.15] (without) -- no overlap
+    - Sent results-only email (left stable-vs-artifact interpretation to advisor)

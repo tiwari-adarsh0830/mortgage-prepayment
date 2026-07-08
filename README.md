@@ -659,3 +659,56 @@ a one-sided-market identification issue like 2023 was.
   drives the result
 
 Sent to advisor July 6.
+
+## Phase 20 — Standardized (Unit-Variance) Price of Risk: With/Without-2020 Comparison (July 7, 2026)
+
+### Request
+
+Following the Phase 19 result, advisor asked to rescale each surprise series
+(f_level, f_slope) to unit variance within its own window before estimating
+betas, so that lambda is denominated in "premium per one-SD exposure" in
+every specification -- making the with/without-cutoff_2020 comparison
+directly comparable, and separating whether 2020-21 was carrying magnitude
+as opposed to just significance.
+
+### Implementation
+
+Patched `scripts/stage3_ar1_test.py` (additive only):
+- Added `standardize_factors()`: z-scores f_level/f_slope using that
+  specification's own mean/std, applied immediately before
+  `empirical_betas()`, for both the RAW and AR(1)-residualized legs
+- Fixed the `--realized-path` default (was `None`, silently falling back to
+  the count-weighted `realized_cpr_by_coupon_v6.csv`); now defaults to the
+  UPB file to match the `--realized-col=cpr_upb` default
+- Added per-month standardized lambda_x CSV export
+  (`ar1_std_lambda_x_<slug>.csv`) to support leave-one-out checks without
+  re-running the full pipeline
+
+**Analytical note, confirmed both by derivation and on synthetic data:**
+because `empirical_betas()`/`fama_macbeth()` are linear in the factor
+columns, this rescaling cannot change any t-stat -- only the reported
+lambda magnitude. Confirmed against live output: all six t-stats
+(full-sample, rolling, rolling-ex-cutoff_2020 x RAW/AR(1)-resid) matched
+the previously-reported values exactly.
+
+### Results (standardized, AR(1)-residualized, UPB-weighted)
+
+| | lambda_x (per 1-SD) | t-stat | n |
+|---|---|---|---|
+| Rolling (with cutoff_2020) | 2.745 | 2.877 | 47 |
+| Rolling ex-cutoff_2020 | 1.834 | 2.310 | 35 |
+
+Ratio (without/with) = 0.668, a 33% drop. RAW series (no AR(1) filter) gives
+a consistent direction: 1.389 -> 0.964, a 31% drop.
+
+std(f_level) itself: 0.029 (with 2020) vs 0.017 (without), AR(1)-resid;
+0.126 vs 0.050, RAW. rho(f_level): 0.92 (with 2020) vs 0.76 (without).
+
+### Robustness check
+
+Leave-one-out (jackknife) on the standardized AR(1)-resid lambda_x series:
+with-2020 means range [2.44, 3.09] across single-month exclusions,
+without-2020 means range [1.54, 2.15] -- ranges do not overlap.
+
+Sent results-only to advisor (no interpretation of the
+stable-vs-scale-artifact question -- left open per his framing) July 7.

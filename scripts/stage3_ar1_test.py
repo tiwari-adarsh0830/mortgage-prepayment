@@ -12,7 +12,7 @@ Procedure:
 Works for both full-sample and rolling by pointing --forecast at either file,
 and for count/UPB weighting via --realized-col.
 """
-import os, json, argparse
+import os, re, json, argparse
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -33,6 +33,40 @@ def ar1_residualize(series: pd.Series):
     alpha, rho = float(coef[0]), float(coef[1])
     resid = s - (alpha + rho * lag)
     return rho, resid
+
+
+def standardize_factors(factor_ts: pd.DataFrame, cols=("f_level", "f_slope")):
+    """Rescale each surprise series to unit variance WITHIN ITS OWN WINDOW
+    (7/7 advisor request) -- i.e. each specification (full-sample / rolling /
+    rolling-ex-cutoff_2020, RAW or AR(1)-residualized) is z-scored using its
+    own mean/std, not a global one. This makes b_x, b_y loadings-per-1-SD
+    move, and lambda the premium per one-within-window-SD exposure, in
+    every specification.
+
+    NOTE (analytical, not a result to re-derive by hand each time): because
+    empirical_betas() and fama_macbeth() are both linear in the factor
+    columns, rescaling f_level/f_slope by constants s_x, s_y within a fixed
+    window rescales b_x -> b_x/s_x and b_y -> b_y/s_y for every coupon
+    uniformly, which rescales lambda_x[t] -> lambda_x[t]*s_x and
+    lambda_y[t] -> lambda_y[t]*s_y for every month uniformly. Mean AND
+    cross-month std of the lambda series scale by the same factor, so the
+    t-stat (and the collinearity diagnostic rho_full, and the single-vs-two
+    -factor mode) is UNCHANGED by this transform -- only the reported
+    lambda magnitude changes. That's the point: it isolates "was 2020-21
+    carrying magnitude" from "was 2020-21 carrying significance" cleanly.
+
+    Returns (standardized_copy, {col: std_used})."""
+    out = factor_ts.copy()
+    stds = {}
+    for col in cols:
+        s = out[col]
+        std = float(s.std(ddof=1))
+        stds[col] = std
+        if std < 1e-12:
+            raise SystemExit(f"standardize_factors: '{col}' has ~zero variance "
+                              f"in this window -- cannot standardize.")
+        out[col] = (s - s.mean()) / std
+    return out, stds
 
 
 def run(forecast_path, realized_path, realized_col, label, oos_only=False, exclude_cutoffs=None):
@@ -87,6 +121,16 @@ def run(forecast_path, realized_path, realized_col, label, oos_only=False, exclu
     ly_raw = lam_raw["lambda_y"].dropna()
     ty_raw, _ = stats.ttest_1samp(ly_raw, 0) if len(ly_raw) else (np.nan, np.nan)
 
+    # ---- RAW, standardized (7/7 request): unit-variance rescale within this
+    # window before estimating betas -> lambda = premium per 1-SD exposure ----
+    factor_ts_std, std_raw = standardize_factors(factor_ts)
+    betas_raw_std  = base.empirical_betas(returns, factor_ts_std)
+    lam_raw_std, _ = base.fama_macbeth(returns_fm, betas_raw_std)
+    lx_raw_std = lam_raw_std["lambda_x"].dropna()
+    t_raw_std, _ = stats.ttest_1samp(lx_raw_std, 0) if len(lx_raw_std) else (np.nan, np.nan)
+    ly_raw_std = lam_raw_std["lambda_y"].dropna()
+    ty_raw_std, _ = stats.ttest_1samp(ly_raw_std, 0) if len(ly_raw_std) else (np.nan, np.nan)
+
     # ---- AR(1)-residualized (innovation only) ----
     rho_x, resid_level = ar1_residualize(factor_ts["f_level"])
     rho_y, resid_slope = ar1_residualize(factor_ts["f_slope"])
@@ -104,11 +148,33 @@ def run(forecast_path, realized_path, realized_col, label, oos_only=False, exclu
     ly_innov = lam_innov["lambda_y"].dropna()
     ty_innov, _ = stats.ttest_1samp(ly_innov, 0) if len(ly_innov) else (np.nan, np.nan)
 
+    # ---- AR(1)-residualized, standardized (7/7 request) ----
+    factor_innov_std, std_innov = standardize_factors(factor_innov)
+    betas_innov_std  = base.empirical_betas(returns, factor_innov_std)
+    lam_innov_std, _ = base.fama_macbeth(returns_fm_i, betas_innov_std)
+    lx_innov_std = lam_innov_std["lambda_x"].dropna()
+    t_innov_std, _ = stats.ttest_1samp(lx_innov_std, 0) if len(lx_innov_std) else (np.nan, np.nan)
+    ly_innov_std = lam_innov_std["lambda_y"].dropna()
+    ty_innov_std, _ = stats.ttest_1samp(ly_innov_std, 0) if len(ly_innov_std) else (np.nan, np.nan)
+
+    # Save the per-month standardized AR(1)-resid lambda_x series so leave-one-out
+    # robustness can be checked on the actual magnitude comparison without
+    # re-running the full pipeline (7/7 follow-up: verify before sending).
+    slug = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+    lam_innov_std[["date", "lambda_x"]].to_csv(
+        os.path.join(OUT, f"ar1_std_lambda_x_{slug}.csv"), index=False)
+
     print(f"  rho(f_level) = {rho_x:.3f}   rho(f_slope) = {rho_y:.3f}")
-    print(f"  RAW:         lambda_x mean={lx_raw.mean():.6f}  t={t_raw:.3f}  n={len(lx_raw)}")
-    print(f"               lambda_y mean={ly_raw.mean():.6f}  t={ty_raw:.3f}  n={len(ly_raw)}")
-    print(f"  AR(1)-resid: lambda_x mean={lx_innov.mean():.6f}  t={t_innov:.3f}  n={len(lx_innov)}")
-    print(f"               lambda_y mean={ly_innov.mean():.6f}  t={ty_innov:.3f}  n={len(ly_innov)}")
+    print(f"  RAW:              lambda_x mean={lx_raw.mean():.6f}  t={t_raw:.3f}  n={len(lx_raw)}")
+    print(f"                    lambda_y mean={ly_raw.mean():.6f}  t={ty_raw:.3f}  n={len(ly_raw)}")
+    print(f"  RAW (std'zd):     lambda_x mean={lx_raw_std.mean():.6f}  t={t_raw_std:.3f}  n={len(lx_raw_std)}  "
+          f"[std(f_level)={std_raw['f_level']:.6f}, std(f_slope)={std_raw['f_slope']:.6f}]")
+    print(f"                    lambda_y mean={ly_raw_std.mean():.6f}  t={ty_raw_std:.3f}  n={len(ly_raw_std)}")
+    print(f"  AR(1)-resid:      lambda_x mean={lx_innov.mean():.6f}  t={t_innov:.3f}  n={len(lx_innov)}")
+    print(f"                    lambda_y mean={ly_innov.mean():.6f}  t={ty_innov:.3f}  n={len(ly_innov)}")
+    print(f"  AR(1) (std'zd):   lambda_x mean={lx_innov_std.mean():.6f}  t={t_innov_std:.3f}  n={len(lx_innov_std)}  "
+          f"[std(f_level)={std_innov['f_level']:.6f}, std(f_slope)={std_innov['f_slope']:.6f}]")
+    print(f"                    lambda_y mean={ly_innov_std.mean():.6f}  t={ty_innov_std:.3f}  n={len(ly_innov_std)}")
 
     return dict(
         label=label, rho_f_level=rho_x, rho_f_slope=rho_y,
@@ -116,11 +182,23 @@ def run(forecast_path, realized_path, realized_col, label, oos_only=False, exclu
                   t=float(t_raw) if len(lx_raw) else None, n=int(len(lx_raw)),
                   lambda_y_mean=float(ly_raw.mean()) if len(ly_raw) else None,
                   lambda_y_t=float(ty_raw) if len(ly_raw) else None),
+        raw_standardized=dict(mean=float(lx_raw_std.mean()) if len(lx_raw_std) else None,
+                  t=float(t_raw_std) if len(lx_raw_std) else None, n=int(len(lx_raw_std)),
+                  lambda_y_mean=float(ly_raw_std.mean()) if len(ly_raw_std) else None,
+                  lambda_y_t=float(ty_raw_std) if len(ly_raw_std) else None,
+                  std_f_level=std_raw["f_level"], std_f_slope=std_raw["f_slope"]),
         ar1_residualized=dict(mean=float(lx_innov.mean()) if len(lx_innov) else None,
                               t=float(t_innov) if len(lx_innov) else None,
                               n=int(len(lx_innov)),
                               lambda_y_mean=float(ly_innov.mean()) if len(ly_innov) else None,
                               lambda_y_t=float(ty_innov) if len(ly_innov) else None),
+        ar1_residualized_standardized=dict(
+                              mean=float(lx_innov_std.mean()) if len(lx_innov_std) else None,
+                              t=float(t_innov_std) if len(lx_innov_std) else None,
+                              n=int(len(lx_innov_std)),
+                              lambda_y_mean=float(ly_innov_std.mean()) if len(ly_innov_std) else None,
+                              lambda_y_t=float(ty_innov_std) if len(ly_innov_std) else None,
+                              std_f_level=std_innov["f_level"], std_f_slope=std_innov["f_slope"]),
     )
 
 
@@ -128,8 +206,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--realized-col", default="cpr_upb",
                     help="'cpr' (count) or 'cpr_upb' (UPB) — defaults to UPB per 7/5 ask")
-    ap.add_argument("--realized-path", default=None,
-                    help="Override realized-CPR CSV path if UPB lives in a separate file")
+    ap.add_argument("--realized-path",
+                    default=os.path.join(OUT, "realized_cpr_by_coupon_v6_upb.csv"),
+                    help="Realized-CPR CSV (default: realized_cpr_by_coupon_v6_upb.csv, "
+                         "UPB version -- must match --realized-col=cpr_upb default)")
     args = ap.parse_args()
 
     results = {}
