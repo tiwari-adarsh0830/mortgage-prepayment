@@ -604,62 +604,6 @@ a one-sided-market identification issue like 2023 was.
 
 Sent to advisor July 6.
 
-## Phase 19 — Rolling AR(1) Robustness: Cutoff_2020 Exclusion (July 6, 2026)
-
-### Request
-
-Advisor asked for one more robustness cut on the Phase 18 rolling AR(1) result:
-re-run the AR(1)-residualized rolling Fama-MacBeth excluding the `cutoff_2020`
-forecast leg (drops the 2020-21 forecast-year months), running on the remaining
-36 months from `cutoff_2021` onward. Report point estimates, t-stats, and both
-lambdas.
-
-### Implementation
-
-Patched `scripts/stage3_ar1_test.py` (additive only, verified via diff against
-pre-patch backup):
-- Added `exclude_cutoffs` param to `run()`, filtering on the `model_used` column
-  in `rolling_forecast_cpr_timeseries.csv` before the OOS-only filter
-- Added `lambda_y` mean/t-stat reporting alongside the existing `lambda_x` output
-  (previously only `lambda_x` was surfaced)
-- New `results["rolling_ex_cutoff_2020"]` entry in the output JSON
-
-**Data source correction:** initial run failed — the default realized-CPR file
-(`realized_cpr_by_coupon_v6.csv`) only has count-weighted `cpr`, not `cpr_upb`.
-The UPB-weighted column lives in a separate file, `realized_cpr_by_coupon_v6_upb.csv`
-(built by `scripts/realized_cpr_v6_upb.py`, previously uncommitted — added this
-phase). Corrected invocation passes `--realized-path` explicitly.
-
-### Results (`outputs/ar1_persistence_test_results.json`, UPB-weighted)
-
-| | lambda_x mean | t-stat | n |
-|---|---|---|---|
-| RAW | 0.0486 | 2.586 | 36 |
-| AR(1)-residualized | 0.0318 | 2.310 | 35 |
-
-Holds up: significant both before and after AR(1) residualization, though the
-correction takes a larger relative bite here (t drops ~11%) than in the full
-48-month rolling series (~5% drop, Phase 18).
-
-### lambda_y not identified in this window
-
-`rho(b_x, b_y)` across the 9 coupons rises to **0.986** once `cutoff_2020` is
-excluded (vs. 0.39 with it included), tripping the pipeline's existing
-`rho_max=0.90` single-factor fallback in `fama_macbeth()` — same collinearity
-mechanism as DER's own result, not a bug. Confirmed via standalone diagnostic
-against `empirical_betas()` output directly. Ruled out one hypothesis (all-discount
-market months): 31/36 months have at least one premium coupon, so it isn't simply
-a one-sided-market identification issue like 2023 was.
-
-### Robustness check on the RAW lambda_x result
-
-- Sign consistency: 25/36 months positive
-- Leave-one-out: t-stat ranges from 2.32 to 3.14 across all 36 single-month
-  exclusions (full-sample t=2.586 sits inside this range) — no single month
-  drives the result
-
-Sent to advisor July 6.
-
 ## Phase 20 — Standardized (Unit-Variance) Price of Risk: With/Without-2020 Comparison (July 7, 2026)
 
 ### Request
@@ -712,3 +656,191 @@ without-2020 means range [1.54, 2.15] -- ranges do not overlap.
 
 Sent results-only to advisor (no interpretation of the
 stable-vs-scale-artifact question -- left open per his framing) July 7.
+
+## Phase 21 — Post-Residualization Autocorrelation Check + Beta Spread/Sharpe (July 17, 2026)
+
+### Request
+
+Advisor's three-part reply to Phase 20: (1) confirm the quoted rho values
+(0.92/0.76) are from the raw pre-standardization factor series, and confirm
+post-AR(1)-residualization autocorrelation is near zero; (2) report the
+cross-sectional spread of standardized betas across coupons, translate into
+an implied premium gap in bps/yr between the most- and least-exposed coupon,
+plus the factor portfolio's Sharpe next to DER's; (3) scope a pre-2013
+Fannie Mae data investigation ahead of a redesigned historical retrain.
+This section covers (1) and (2).
+
+### Implementation
+
+Ask (1), rho sourcing: confirmed directly from code -- `ar1_residualize()`
+runs on `factor_ts['f_level']`/`factor_ts['f_slope']` (the raw series)
+before `standardize_factors()` is ever applied.
+
+Ask (1), post-residualization check: this wasn't actually being verified
+before (only the AR(1) coefficient on the raw series was reported, never
+whether the leftover residual itself is white noise). Added
+`lag1_autocorr()` to `scripts/stage3_ar1_test.py`, wired into `run()` to
+report it for all three specs alongside the existing rho.
+
+New script `scripts/stage3_beta_spread_sharpe.py` (ask 2): reuses the
+AR(1)-residualize + standardize pipeline from Phase 20, then for each spec:
+(a) takes max-min of the standardized b_x across the 9 coupons, (b)
+multiplies by lambda_x and annualizes to bps/yr, (c) builds a
+long-highest-beta/short-lowest-beta zero-cost portfolio from realized
+excess returns and reports its annualized Sharpe.
+
+New script `scripts/stage3_beta_spread_loo.py`: leave-one-out on the
+ex-cutoff_2020 spec's bps/yr and Sharpe (the only spec with a real
+monotonic beta profile -- see Results).
+
+### Results
+
+Post-residualization autocorrelation (lag-1, on the AR(1) residual itself,
+not the raw-series rho):
+
+| | rho (raw series) | resid autocorr | n | ~SE (1/sqrt(n)) |
+|---|---|---|---|---|
+| Full-sample | 0.916 | -0.278 | 71 | 0.119 |
+| Rolling (with cutoff_2020) | 0.922 | -0.152 | 47 | 0.146 |
+| Rolling ex-cutoff_2020 | 0.764 | -0.177 | 35 | 0.169 |
+
+Both rolling specs are within ~1 SE of zero (genuinely near-white-noise).
+Full-sample sits at ~2.3 SE -- a real residual autocorrelation, not clean.
+
+Cross-sectional beta profile monotonicity (Spearman rho between coupon and
+standardized b_x):
+
+| | spearman rho | p-value | mean per-coupon R2 |
+|---|---|---|---|
+| Full-sample | +0.450 | 0.224 (n.s.) | 0.014 |
+| Rolling (with cutoff_2020) | -0.217 | 0.576 (n.s.) | 0.038 |
+| Rolling ex-cutoff_2020 | +0.933 | <0.001 | 0.034 |
+
+Only rolling ex-cutoff_2020 has a statistically real, monotonic exposure
+gradient. The other two specs' "most/least exposed coupon" would be
+reading noise as signal -- not reported as a spread there.
+
+For rolling ex-cutoff_2020: standardized b_x spread = 0.0035 (coupon 6.5
+high / 3.0 low), lambda_x = 1.834, implied gap = 769.7 bps/yr. Realized
+long-6.5/short-3.0 portfolio: Sharpe = 0.918 (n=35).
+
+DER's own Sharpe benchmarks (Table XII) for comparison: full-sample
+Max-Min=0.44/PRP=0.76; discount-market Max-Min=-0.47/PRP=0.47. Our
+ex-cutoff_2020 window (cutoff_2021 onward, i.e. 2022-24) is a
+discount-market period per the existing DM/PM classification, so the
+discount-market row is the relevant comparison, not full-sample. Their
+portfolios are vol-scaled/equal-leg-weighted over ~20 years; ours is a raw
+monthly return difference over 35 months -- not directly comparable
+methodology, caveated as such.
+
+### Robustness check
+
+Leave-one-out on the ex-cutoff_2020 headline (36 folds, one month dropped
+each time, everything downstream re-estimated):
+- bps/yr: range [572.9, 905.2] around 769.7, zero sign flips across all 36
+  folds -- stable.
+- Sharpe: range [-1.349, 1.185] around 0.918 -- **flips sign** when July
+  2022 is dropped. That single month's exclusion changes which two coupons
+  are identified as most/least exposed (6.5/3.0 -> 2.5/5.0), so the
+  "Sharpe" isn't even comparing the same pair of coupons in that fold. Root
+  cause: per-coupon betas are closely spaced and noisily estimated (R^2
+  ~2-5% each), so an argmax/argmin over 9 coupons is fragile in a way the
+  cross-sectional mean (lambda_x) isn't.
+
+bps/yr reported to advisor as solid; Sharpe explicitly flagged as not
+stable enough to report as a clean number, with the one-month mechanism
+explained. Sent results-only July 17.
+
+## Phase 21 — Post-Residualization Autocorrelation Check + Beta Spread/Sharpe (July 17, 2026)
+
+### Request
+
+Advisor's three-part reply to Phase 20: (1) confirm the quoted rho values
+(0.92/0.76) are from the raw pre-standardization factor series, and confirm
+post-AR(1)-residualization autocorrelation is near zero; (2) report the
+cross-sectional spread of standardized betas across coupons, translate into
+an implied premium gap in bps/yr between the most- and least-exposed coupon,
+plus the factor portfolio's Sharpe next to DER's; (3) scope a pre-2013
+Fannie Mae data investigation ahead of a redesigned historical retrain.
+This section covers (1) and (2).
+
+### Implementation
+
+Ask (1), rho sourcing: confirmed directly from code -- `ar1_residualize()`
+runs on `factor_ts['f_level']`/`factor_ts['f_slope']` (the raw series)
+before `standardize_factors()` is ever applied.
+
+Ask (1), post-residualization check: this wasn't actually being verified
+before (only the AR(1) coefficient on the raw series was reported, never
+whether the leftover residual itself is white noise). Added
+`lag1_autocorr()` to `scripts/stage3_ar1_test.py`, wired into `run()` to
+report it for all three specs alongside the existing rho.
+
+New script `scripts/stage3_beta_spread_sharpe.py` (ask 2): reuses the
+AR(1)-residualize + standardize pipeline from Phase 20, then for each spec:
+(a) takes max-min of the standardized b_x across the 9 coupons, (b)
+multiplies by lambda_x and annualizes to bps/yr, (c) builds a
+long-highest-beta/short-lowest-beta zero-cost portfolio from realized
+excess returns and reports its annualized Sharpe.
+
+New script `scripts/stage3_beta_spread_loo.py`: leave-one-out on the
+ex-cutoff_2020 spec's bps/yr and Sharpe (the only spec with a real
+monotonic beta profile -- see Results).
+
+### Results
+
+Post-residualization autocorrelation (lag-1, on the AR(1) residual itself,
+not the raw-series rho):
+
+| | rho (raw series) | resid autocorr | n | ~SE (1/sqrt(n)) |
+|---|---|---|---|---|
+| Full-sample | 0.916 | -0.278 | 71 | 0.119 |
+| Rolling (with cutoff_2020) | 0.922 | -0.152 | 47 | 0.146 |
+| Rolling ex-cutoff_2020 | 0.764 | -0.177 | 35 | 0.169 |
+
+Both rolling specs are within ~1 SE of zero (genuinely near-white-noise).
+Full-sample sits at ~2.3 SE -- a real residual autocorrelation, not clean.
+
+Cross-sectional beta profile monotonicity (Spearman rho between coupon and
+standardized b_x):
+
+| | spearman rho | p-value | mean per-coupon R2 |
+|---|---|---|---|
+| Full-sample | +0.450 | 0.224 (n.s.) | 0.014 |
+| Rolling (with cutoff_2020) | -0.217 | 0.576 (n.s.) | 0.038 |
+| Rolling ex-cutoff_2020 | +0.933 | <0.001 | 0.034 |
+
+Only rolling ex-cutoff_2020 has a statistically real, monotonic exposure
+gradient. The other two specs' "most/least exposed coupon" would be
+reading noise as signal -- not reported as a spread there.
+
+For rolling ex-cutoff_2020: standardized b_x spread = 0.0035 (coupon 6.5
+high / 3.0 low), lambda_x = 1.834, implied gap = 769.7 bps/yr. Realized
+long-6.5/short-3.0 portfolio: Sharpe = 0.918 (n=35).
+
+DER's own Sharpe benchmarks (Table XII) for comparison: full-sample
+Max-Min=0.44/PRP=0.76; discount-market Max-Min=-0.47/PRP=0.47. Our
+ex-cutoff_2020 window (cutoff_2021 onward, i.e. 2022-24) is a
+discount-market period per the existing DM/PM classification, so the
+discount-market row is the relevant comparison, not full-sample. Their
+portfolios are vol-scaled/equal-leg-weighted over ~20 years; ours is a raw
+monthly return difference over 35 months -- not directly comparable
+methodology, caveated as such.
+
+### Robustness check
+
+Leave-one-out on the ex-cutoff_2020 headline (36 folds, one month dropped
+each time, everything downstream re-estimated):
+- bps/yr: range [572.9, 905.2] around 769.7, zero sign flips across all 36
+  folds -- stable.
+- Sharpe: range [-1.349, 1.185] around 0.918 -- **flips sign** when July
+  2022 is dropped. That single month's exclusion changes which two coupons
+  are identified as most/least exposed (6.5/3.0 -> 2.5/5.0), so the
+  "Sharpe" isn't even comparing the same pair of coupons in that fold. Root
+  cause: per-coupon betas are closely spaced and noisily estimated (R^2
+  ~2-5% each), so an argmax/argmin over 9 coupons is fragile in a way the
+  cross-sectional mean (lambda_x) isn't.
+
+bps/yr reported to advisor as solid; Sharpe explicitly flagged as not
+stable enough to report as a clean number, with the one-month mechanism
+explained. Sent results-only July 17.

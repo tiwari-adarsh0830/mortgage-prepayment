@@ -35,6 +35,25 @@ def ar1_residualize(series: pd.Series):
     return rho, resid
 
 
+def lag1_autocorr(series: pd.Series):
+    """Lag-1 autocorrelation of a series (e.g. the AR(1) residual itself), NOT
+    to be confused with rho from ar1_residualize (that's the AR(1) coefficient
+    fit to the RAW series). This checks whether the residual/innovation series
+    left over after removing that AR(1) structure is itself still persistent.
+    OLS orthogonality (resid _|_ lag of the fitted regressor) does not by
+    itself guarantee resid[t] _|_ resid[t-1] -- e.g. if the true process has
+    higher-order structure an AR(1) fit won't capture, so this needs to be
+    checked on the actual residual series, not assumed (7/16 advisor ask).
+    Returns np.nan if fewer than 3 non-NaN observations."""
+    s = series.dropna().reset_index(drop=True)
+    if len(s) < 3:
+        return float("nan")
+    a, b = s[1:].reset_index(drop=True), s[:-1].reset_index(drop=True)
+    if a.std() < 1e-12 or b.std() < 1e-12:
+        return float("nan")
+    return float(np.corrcoef(a, b)[0, 1])
+
+
 def standardize_factors(factor_ts: pd.DataFrame, cols=("f_level", "f_slope")):
     """Rescale each surprise series to unit variance WITHIN ITS OWN WINDOW
     (7/7 advisor request) -- i.e. each specification (full-sample / rolling /
@@ -135,6 +154,11 @@ def run(forecast_path, realized_path, realized_col, label, oos_only=False, exclu
     rho_x, resid_level = ar1_residualize(factor_ts["f_level"])
     rho_y, resid_slope = ar1_residualize(factor_ts["f_slope"])
 
+    # Post-residualization check (7/16 ask #1): is the leftover innovation
+    # series itself close to white noise, or does persistence remain?
+    resid_rho_x = lag1_autocorr(resid_level)
+    resid_rho_y = lag1_autocorr(resid_slope)
+
     factor_innov = factor_ts.copy()
     factor_innov["f_level"] = resid_level
     factor_innov["f_slope"] = resid_slope
@@ -164,7 +188,10 @@ def run(forecast_path, realized_path, realized_col, label, oos_only=False, exclu
     lam_innov_std[["date", "lambda_x"]].to_csv(
         os.path.join(OUT, f"ar1_std_lambda_x_{slug}.csv"), index=False)
 
-    print(f"  rho(f_level) = {rho_x:.3f}   rho(f_slope) = {rho_y:.3f}")
+    print(f"  rho(f_level) [RAW series, AR(1) coef]        = {rho_x:.3f}   "
+          f"rho(f_slope) [RAW series, AR(1) coef]        = {rho_y:.3f}")
+    print(f"  lag-1 autocorr(resid_level) [post-resid check] = {resid_rho_x:.3f}   "
+          f"lag-1 autocorr(resid_slope) [post-resid check] = {resid_rho_y:.3f}")
     print(f"  RAW:              lambda_x mean={lx_raw.mean():.6f}  t={t_raw:.3f}  n={len(lx_raw)}")
     print(f"                    lambda_y mean={ly_raw.mean():.6f}  t={ty_raw:.3f}  n={len(ly_raw)}")
     print(f"  RAW (std'zd):     lambda_x mean={lx_raw_std.mean():.6f}  t={t_raw_std:.3f}  n={len(lx_raw_std)}  "
@@ -178,6 +205,7 @@ def run(forecast_path, realized_path, realized_col, label, oos_only=False, exclu
 
     return dict(
         label=label, rho_f_level=rho_x, rho_f_slope=rho_y,
+        resid_autocorr_f_level=resid_rho_x, resid_autocorr_f_slope=resid_rho_y,
         raw=dict(mean=float(lx_raw.mean()) if len(lx_raw) else None,
                   t=float(t_raw) if len(lx_raw) else None, n=int(len(lx_raw)),
                   lambda_y_mean=float(ly_raw.mean()) if len(ly_raw) else None,
