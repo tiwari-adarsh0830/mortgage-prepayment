@@ -844,3 +844,39 @@ each time, everything downstream re-estimated):
 bps/yr reported to advisor as solid; Sharpe explicitly flagged as not
 stable enough to report as a clean number, with the one-month mechanism
 explained. Sent results-only July 17.
+
+## Pre-2013 historical data (verified 2026-07-19)
+
+`data_pre2013_raw/` — Fannie Mae Single-Family Loan Performance, 2000Q1-2012Q4,
+52 quarters, 29,130,527 unique loans. Same layout as the existing pipeline:
+113 pipe-delimited columns with a leading pipe (field N = awk $(N+1)), MMYYYY
+dates, 2-decimal original UPB.
+
+Field positions verified against a 2018Q1 control (11 of 113 checked, i.e. the
+ones the pipeline consumes): $2 loan_id, $3 month, $8 rate, $10 original_upb,
+$13 term, $14 origination_date, $24 borrower_credit_score,
+$25 coborrower_credit_score, $32 msa, $33 zip3, $107 zero_balance_code.
+
+The Jan-2015 single-score -> dual-score change does not appear here; co-borrower
+fill rates are 45.2%/59.7%/43.3% for 2005Q4/2012Q4/2018Q1. Historical files
+appear to have been restated into the current layout (inferred from fill rates,
+not confirmed against Fannie Mae documentation).
+
+`data_harp_raw/` — HARPLPPub.csv (25.9GB, same 113-col layout) and
+Loan_Mapping.txt (comma-delimited, no header, 1,035,452 rows).
+Mapping direction verified empirically: **col1 = original loan_id,
+col2 = post-refi HARP loan_id**.
+
+Open design questions (with advisor): sampling balance between the 2003 wave
+(5,659,815 loans) and pre-wave history (2000-2002, 7,862,013), and whether a
+HARP-refinanced loan is one continuous loan life or two events for labelling.
+
+## Known issue: ar1_residualize() positional shift
+
+`stage3_ar1_test.ar1_residualize()` does `reset_index(drop=True)` then
+`shift(1)` — positional, not date-aware. Contiguous series are fine. In
+leave-one-out folds, dropping a middle month makes the step treat the two
+months either side of the gap as consecutive, and dropping either of the first
+two months yields identical post-residualization date sets (35 unique Sharpes
+across 36 folds in beta_spread_loo_ex_cutoff_2020.json). Headline estimates are
+unaffected; fold values are slightly off.
