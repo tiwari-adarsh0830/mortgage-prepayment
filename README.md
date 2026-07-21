@@ -880,3 +880,33 @@ months either side of the gap as consecutive, and dropping either of the first
 two months yields identical post-residualization date sets (35 unique Sharpes
 across 36 folds in beta_spread_loo_ex_cutoff_2020.json). Headline estimates are
 unaffected; fold values are slightly off.
+
+## Known issue: fixed duration hedge in load_excess_returns() (found 2026-07-20)
+
+`stage3_der_factor_shocks.py` line 51 sets `D_MOD_AVG = 6.5` — a single blended
+5y/10y modified duration in YEARS — and applies it to every coupon at line 85.
+TBA duration varies strongly by coupon (prepayment shortens premium coupons), so
+this leaves residual rate exposure in `excess_return`.
+
+`scripts/stage3_hedge_diagnostic.py` quantifies it. Per-coupon regression of
+excess returns on 5y/10y rate changes:
+
+- Ex-2020 window (2022-01..2024-12): 9/9 coupons significant on at least one leg.
+  Full 100-month sample: 4/9.
+- Implied duration (`D_c = D_MOD_AVG - 100*coef` on dy_avg) runs 8.05y at coupon
+  2.5 down to 1.97y at coupon 6.5, vs 6.50 assumed. Spearman(coupon,
+  implied_duration) = -1.000 in both samples.
+- R2 is U-shaped in coupon, min 0.375 at coupon 4.0 — the coupon whose implied
+  duration (6.58) is closest to the constant. Residual exposure is smallest where
+  the fixed hedge happens to fit.
+- At coupon 4.0, t(dy5) = +4.38 and t(dy10) = -4.45: unhedged curve exposure
+  persists even where the level hedge fits, because one blended duration cannot
+  match both key rates.
+- Long-6.5/short-3.0: net mismatch 5.83y (t=13.56). Rate-driven component is
+  599.9 of 790.4 bps/yr; residual intercept 190.5 bps/yr with t=1.00.
+
+IMPACT: everything downstream of `load_excess_returns()` inherits this — the
+lambda_x estimates, AR(1) residualization work, and beta spread / bps / Sharpe
+results from Phases 18-21. Fix is per-coupon hedge ratios fixed at the beginning
+of each month; estimation method (trailing-window empirical vs OAS model
+duration, blended vs separate 5y/10y) pending.
