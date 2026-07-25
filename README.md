@@ -910,3 +910,102 @@ lambda_x estimates, AR(1) residualization work, and beta spread / bps / Sharpe
 results from Phases 18-21. Fix is per-coupon hedge ratios fixed at the beginning
 of each month; estimation method (trailing-window empirical vs OAS model
 duration, blended vs separate 5y/10y) pending.
+
+## Hedge rebuild (2026-07-24)
+
+### OAS engine cannot produce key-rate durations
+
+`oas_engine.py` discounts on a 33-month grid (`MAX_SEQ`), and
+`risk_neutral_rates.bootstrap_zero_curve()` interpolates the zero curve onto
+`m/12 for m in 1..33` — max 2.75 years. Bumping the 5yr or 10yr par node moves
+the discount curve by exactly zero (0/33 months change on +1bp at either tenor;
+a 2yr control bump moves 21/33, confirming the test works). Both key-rate
+durations come out identically zero. The Monte Carlo engine is therefore not a
+viable source of per-tenor hedge ratios.
+
+### Deterministic replacement: scripts/model_hedge_krd.py
+
+Bootstraps the par curve to 360 monthly nodes at each month-end, prices each
+coupon as a 30y pass-through (note rate = coupon + GFEE 0.50) amortizing at a
+CPR path from the hazard model, bumps +/-25bp at the 5y and 10y points, passes
+the bump through to the mortgage rate, recomputes the refi incentive, re-runs
+the hazard model for a new CPR path under each bump, reprices, and takes the
+two-sided difference. Ratios use data through the prior month-end.
+
+Conversion (derived, matches a level position of equal parts 5y/10y plus a
+long-10y/short-5y slope position):
+
+    dP/P = -KRD5*dy5 - KRD10*dy10
+         = -(KRD5+KRD10)*level - ((KRD10-KRD5)/2)*slope
+    D_level = KRD5 + KRD10 ; D_slope = (KRD10 - KRD5)/2
+    level = (dy5+dy10)/2 ; slope = dy10 - dy5
+
+Calibration is `config/hazard_calibration_cpr_forecast.json` (a=0.4559,
+b=-3.1376) — the cohort-CPR pair, never the OAS loan-level pair.
+
+Note: all rows built by `build_batch_constant_refi()` are identical (constant
+refi incentive, fixed representative loan), so `n_paths=1` is exact and the
+500-path mean is redundant. `cpr_path()` uses 1 and memoizes on the incentive.
+
+### Bump shape
+
+Standard localized key-rate taper (0 at 3y, 1 at 5y, 0 at 7y; 0 at 7y, 1 at 10y,
+0 at 20y) selects a single node on this par grid, since the taper endpoints
+coincide with adjacent nodes. Two localized bumps capture only ~1/3 of effective
+duration. `--spanning` uses partition-of-unity weights instead (w5 = 1 for T<=5,
+linear taper to 0 at 10y; w10 = 1 - w5), so D_level equals effective duration by
+construction — verified to 0.009% over 60 random coupon-months.
+
+### Prepayment response works; verification still fails at discounts
+
+`krd10` and `D_slope` turn negative at high coupons (krd10 = -0.97 at coupon
+6.5): genuine negative convexity, absent from any fixed-CPR pricer.
+
+Verification (regress hedged returns on level and slope per coupon; want all
+coefficients zero, no cross-coupon pattern), spanning bumps, 99 months:
+
+- coupon 6.5: t(level) = +0.12, R2 = 0.03 — passes
+- degrades monotonically to t(level) = -12.70 at coupon 2.5
+
+Residual duration implied by those coefficients (`-100*b_level`) plus the model
+`D_level` reproduces the regression-implied duration at every coupon to within
+~0.2y. Pricing is therefore correct; the hedge removes too little at discounts.
+
+### Root cause: CPR beyond the 33-month forecast horizon
+
+The forecast path is still ramping steeply at month 33 (m33/m12 = 5.1x to 7.5x
+across coupons), so holding the terminal value flat to month 360 assumes a very
+high permanent prepayment rate. Flat lifetime CPR needed to reproduce the
+regression-implied duration, vs what the model assumes:
+
+    coupon 2.5:  model 13.98%  needed  3.42%
+    coupon 4.0:  model 14.43%  needed  6.80%
+    coupon 6.0:  model 24.09%  needed 24.96%
+    coupon 6.5:  model 28.91%  needed 37.83%
+
+Crossover near coupon 6.0 — exactly where the verification test starts passing.
+
+The path is also not a clean seasoning ramp: high at m1, trough near m12, then
+climbing. Likely an artifact of the constant-incentive synthetic-loan setup,
+which makes extending the terminal value fragile regardless of level.
+
+Long-run CPR policy past the forecast horizon is unresolved and is the current
+blocker. `extend_cpr()` isolates it.
+
+### Superseded
+
+- `scripts/krd_pricer.py` — first deterministic pricer, static CPR (no
+  prepayment response) and spanning bumps only. Kept for reference; use
+  `model_hedge_krd.py`.
+- `scripts/build_hedge_panel.py` — per-coupon empirical level/slope hedge fit on
+  realized returns. Neutralizes rate exposure (out-of-basis 2yr control t drops
+  from 5-8 to <=0.25) but the betas are fit in sample, and they are regime
+  dependent: fit on 2018-2026 the slope duration sign-flips for high coupons
+  relative to a 2022-24 fit. Retained as the comparison that motivated the model
+  hedge; not part of the pipeline.
+
+### Pipeline state
+
+`stage3_der_factor_shocks.load_excess_returns()` is UNCHANGED and still uses
+`D_MOD_AVG = 6.5`. No corrected hedge has been wired in, pending the long-run
+CPR decision. All Phase 18-21 results still carry the fixed-duration issue.
