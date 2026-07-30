@@ -1,0 +1,11 @@
+{
+  "floor": 0.051744047586354626,
+  "sat": 0.22038128833058854,
+  "k": 3.0411937251703662,
+  "x0": 0.3997718708481632,
+  "n": 1392,
+  "r2": 0.42868770280231616,
+  "cap": 2.0,
+  "source": "realized_cpr_by_coupon_v6_upb.csv, pooled across all coupons and dates (2014-2025; no age column available, so not restricted to seasoned loans)",
+  "note": "monotone logistic; fitted on incentive -4.0 to +2.0. Above +2.0 the terminal is flat-extrapolated at sat: 18.4% of pricer coupon-months fall there. Not fitted beyond +2.0 because that region is dominated by the 2020-21 refi boom (mean CPR 0.33-0.35 in 2020-21 vs 0.03-0.17 in 2014-19 at the same incentive) and bucket sds run 0.16-0.26. Observed burnout past +1.5 not fitted."
+}

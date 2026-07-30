@@ -147,12 +147,85 @@ def cpr_path(incentive, model, scaler, a, b):
     return cpr
 
 
-def extend_cpr(path33, n=N_MONTHS):
-    """Forecast horizon = 33m. Beyond it hold the TERMINAL value of the (bumped)
-    path, so long-run CPR shifts with the bump as specified."""
+_SCURVE_EXP = {}
+def scurve_params_asof(cutoff):
+    """Terminal S-curve fitted ONLY on realized CPR strictly before `cutoff`
+    (a YYYY-MM string), so the ratios use data through the prior month-end as
+    specified. Cached per cutoff. Expanding window: ~460 obs at the panel start
+    (realized file begins 2013-07), converging to the full sample by 2026."""
+    if cutoff in _SCURVE_EXP:
+        return _SCURVE_EXP[cutoff]
+    import pandas as _pd
+    from scipy.optimize import curve_fit as _cf
+    global _REALIZED
+    try:
+        _REALIZED
+    except NameError:
+        _r = _pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v6_upb.csv"))
+        _r["date"] = _pd.to_datetime(_r["date"])
+        _pm = _pd.read_csv(os.path.join(DATA, "pmms_monthly.csv"))
+        def _parse(x):
+            t = str(int(x))
+            if len(t) == 5: return _pd.Timestamp(year=int(t[1:]), month=int(t[0]), day=1)
+            if len(t) == 6: return _pd.Timestamp(year=int(t[2:]), month=int(t[:2]), day=1)
+            return _pd.NaT
+        _pm["date"] = _pm["reporting_period"].apply(_parse)
+        _ps = _pm.dropna(subset=["date"]).set_index("date")["rate_30yr"]
+        _r["pmms"] = _r["date"].map(_ps)
+        _r["inc"] = (_r["implied_mbs_coupon"] + GFEE) - _r["pmms"]
+        _REALIZED = _r.dropna(subset=["inc", "cpr_upb"])
+    # Restrict to the coupon range actually being hedged. The realized file spans
+    # coupons 1.0-8.0 and dates from 2013-07; coupons outside 2.5-6.5 are 25.5% of
+    # the unrestricted sample and are a different population from the TBA stack.
+    # Restricting raises R2 from 0.43 to 0.52 (more homogeneous) and shifts the
+    # curve up (floor 0.0517->0.0546, sat 0.2204->0.2492). A further 2018+ cut fits
+    # better still (R2 0.567) but leaves ~9 observations at the panel start, so it
+    # is incompatible with the expanding window.
+    h = _REALIZED[(_REALIZED["date"] < _pd.Timestamp(cutoff + "-01"))
+                  & (_REALIZED["inc"] >= -4.0) & (_REALIZED["inc"] <= 2.0)
+                  & (_REALIZED["implied_mbs_coupon"] >= 2.5)
+                  & (_REALIZED["implied_mbs_coupon"] <= 6.5)]
+    if len(h) < 40:
+        raise ValueError("insufficient history before %s (n=%d)" % (cutoff, len(h)))
+    def _sc(x, f, sa, k, x0):
+        return f + (sa - f) / (1.0 + np.exp(-k * (x - x0)))
+    po, _ = _cf(_sc, h["inc"].values, h["cpr_upb"].values, p0=[0.04, 0.22, 3.0, 0.4],
+                bounds=([0.005, 0.05, 0.2, -2.0], [0.15, 0.60, 10.0, 3.0]), maxfev=40000)
+    q = dict(floor=float(po[0]), sat=float(po[1]), k=float(po[2]), x0=float(po[3]),
+             n=int(len(h)))
+    _SCURVE_EXP[cutoff] = q
+    return q
+
+
+_SCURVE = None
+def _scurve_params():
+    """Terminal-incentive S-curve fitted to REALIZED seasoned CPR.
+    Model month-33 output is ~4x the realized floor at deep discounts (0.140 vs
+    0.035) with its steepest response at incentive 0.00 rather than ~+0.5, so the
+    terminal is anchored to realized data instead of extracted from the model."""
+    global _SCURVE
+    if _SCURVE is None:
+        import json as _j
+        _SCURVE = _j.load(open(os.path.join(BASE, "config", "terminal_scurve.json")))
+    return _SCURVE
+
+
+def terminal_cpr(incentive, asof=None):
+    """S-curve terminal hazard. Argument is the (bumped) refi incentive, so the
+    terminal shifts with the bump and preserves the CPR/rate relationship."""
+    q = scurve_params_asof(asof) if asof else _scurve_params()
+    return q["floor"] + (q["sat"] - q["floor"]) / (
+        1.0 + np.exp(-q["k"] * (float(incentive) - q["x0"])))
+
+
+def extend_cpr(path33, n=N_MONTHS, incentive=None, asof=None):
+    """Months 1-33 from the hazard model. Months 34-360 from the terminal S-curve
+    evaluated at the (bumped) incentive. If incentive is None, falls back to
+    holding path33[-1] flat (the previous behaviour) for comparison runs."""
     out = np.empty(n)
     out[:MAX_SEQ] = path33
-    out[MAX_SEQ:] = path33[-1]
+    out[MAX_SEQ:] = (path33[-1] if incentive is None
+                     else terminal_cpr(incentive, asof=asof))
     return out
 
 
@@ -174,11 +247,12 @@ def price_path(coupon, cpr360, zeros, gfee=GFEE, n=N_MONTHS):
     return pv
 
 
-def krd_pair(coupon, par, pmms, model, scaler, a, b, pmms_key='10yr', spanning=False):
+def krd_pair(coupon, par, pmms, model, scaler, a, b, pmms_key='10yr', spanning=False, asof=None):
     """Returns (P0, KRD5, KRD10) with CPR re-forecast under each bump."""
     note = coupon + GFEE
     z0 = bootstrap_zeros(par)
-    p0 = price_path(coupon, extend_cpr(cpr_path(note-pmms, model, scaler, a, b)), z0)
+    p0 = price_path(coupon, extend_cpr(cpr_path(note-pmms, model, scaler, a, b),
+                                       incentive=note-pmms, asof=asof), z0)
     h = BUMP_BP/100.0
     out = {}
     for ten in ('5yr', '10yr'):
@@ -190,7 +264,8 @@ def krd_pair(coupon, par, pmms, model, scaler, a, b, pmms_key='10yr', spanning=F
             bp = {lab: float(par[lab]) + sgn*h*wi for lab, wi in zip(MAT_LABELS, w)}
             inc = note - (pmms + sgn*dp)
             prices[sgn] = price_path(coupon,
-                            extend_cpr(cpr_path(inc, model, scaler, a, b)),
+                            extend_cpr(cpr_path(inc, model, scaler, a, b),
+                                       incentive=inc, asof=asof),
                             bootstrap_zeros(bp))
         out[ten] = (prices[-1] - prices[+1]) / (2.0*p0*(h/100.0))
     return p0, out['5yr'], out['10yr']
@@ -256,7 +331,8 @@ def main(pmms_key, spanning=False):
             pc, pp = fncl.loc[fncl["Date"] == curr, col], fncl.loc[fncl["Date"] == prev, col]
             if pc.empty or pp.empty or pd.isna(pc.iloc[0]) or pd.isna(pp.iloc[0]): continue
             tba = (float(pc.iloc[0]) + c/12.0 - float(pp.iloc[0])) / float(pp.iloc[0])
-            p0, k5, k10 = krd_pair(c, par, pmms, model, scaler, a, b, pmms_key, spanning)
+            p0, k5, k10 = krd_pair(c, par, pmms, model, scaler, a, b, pmms_key,
+                                   spanning, asof=str(curr.to_period("M")))
             rows.append(dict(ret_month=str(curr.to_period("M")), info_date=str(prev.date()),
                              coupon=c, pmms=pmms, price=p0, krd5=k5, krd10=k10,
                              D_level=k5+k10, D_slope=(k10-k5)/2.0,

@@ -1009,3 +1009,103 @@ blocker. `extend_cpr()` isolates it.
 `stage3_der_factor_shocks.load_excess_returns()` is UNCHANGED and still uses
 `D_MOD_AVG = 6.5`. No corrected hedge has been wired in, pending the long-run
 CPR decision. All Phase 18-21 results still carry the fixed-duration issue.
+
+## Hedge rebuild, part 2: tent bumps + terminal S-curve (2026-07-29)
+
+### Bump shape
+
+Tent functions spanning the whole curve: the 5y leg is flat at full height for
+T <= 5y then tapers linearly to zero at 10y; the 10y leg is the complement,
+rising from zero at 5y to full height at 10y and staying there to 360 months.
+The pair sums to exactly 1 at all 360 monthly nodes.
+
+A strictly triangular 5y leg (rising from zero at T=0) does NOT span: below 5y
+nothing holds the short end, so the weights sum to 0.017 at one month and only
+reach 1 at month 60. Flat-below-peak is required for the parallel-shift
+property. Identical to the earlier `--spanning` option.
+
+### Terminal CPR: S-curve fitted to realized CPR
+
+`extend_cpr()` no longer holds month-33 flat to 360. Months 34-360 use
+
+    CPR(inc) = floor + (sat - floor) / (1 + exp(-k*(inc - x0)))
+
+evaluated at the BUMPED incentive, so the terminal shifts with the bump.
+
+The model CAN be queried at seasoned ages -- loan age is feature index 5 and can
+be set independently of sequence position; `MAX_SEQ` only caps positions -- but
+it extrapolates badly (`scripts/diag/diag_age_extrapolation.py`). Mean CPR at
+incentive -3.0 RISES with age (0.063 at age 1, 0.146 at 61, 0.264 at 121) where
+lock-in implies it should fall toward the realized 0.035-0.055, and the incentive
+response collapses (sat/floor ratio 3.47 at age 1 to 1.42 at 121), which breaks
+the requirement that the terminal preserve the CPR-rate relationship. Seasoned
+ages are far outside the training range: age 61 maps to z=1.89..3.62 and age 121
+to z=5.14..6.88 against a training span of z=-1.37..0.37. Even at month 33 the
+model is ~4x realized at deep discounts (0.140 vs 0.035 at incentive -4) and
+peaks at incentive 0.00 where realized peaks near +0.7. Hence realized data, not
+the model, anchors the terminal.
+
+Fitted per month on an expanding window (realized CPR strictly before the ratio
+month) so ratios use prior data only. Restricted to coupons 2.5-6.5. Across the
+99 monthly fits: floor 0.0364-0.0610, sat 0.1897-0.2518, x0 0.397-0.559,
+n 350-1037. Cached per cutoff in `scurve_params_asof()`.
+
+FIT SCOPE (important): `realized_cpr_by_coupon_v6_upb.csv` spans 2013-07 to
+2025-12 and coupons 1.0-8.0 -- wider than the 2018Q1-2023Q1 vintage framing used
+elsewhere. Coupons outside 2.5-6.5 were 25.5% of the unrestricted fit sample and
+pre-2018 was 32.4%. Scope comparison (incentive -4..+2):
+
+    ALL                   n=1392  floor=0.0517 sat=0.2204 x0=0.400 R2=0.429
+    coupons 2.5-6.5       n=1037  floor=0.0546 sat=0.2492 x0=0.493 R2=0.515
+    2018+                 n=941   floor=0.0534 sat=0.2207 x0=0.344 R2=0.400
+    2.5-6.5 AND 2018+     n=694   floor=0.0573 sat=0.2740 x0=0.483 R2=0.567
+
+Restricted to 2.5-6.5 is used: better specified (R2 0.43->0.52) though it makes
+the verification marginally worse. A further 2018+ cut fits best but leaves ~9
+observations at the panel start, so it is incompatible with the expanding window.
+Scope was chosen on data relevance, NOT on verification outcome.
+
+Expanding vs full-sample fit: coupon 2.5 level t -6.98 vs -6.91, so the earlier
+full-sample result was not leaning on look-ahead.
+
+### Verification (advisor's test: hedged returns on level and slope)
+
+Level t-statistics, 99 months:
+
+    coupon   flat-m33   S-curve (all cpn)   S-curve (2.5-6.5)
+      2.5     -12.70          -6.91              -7.15
+      3.5     -10.30          -7.70              -8.00
+      5.0      -5.32          -2.75              -2.82
+      5.5      -3.82          -2.01              -1.96
+      6.0      -1.72          -1.62              -1.54
+      6.5      +0.12          -1.32              -1.37
+
+Inside |t| < 2: level at 5.5, 6.0, 6.5; slope at 4.5 through 6.5. Worst is now
+coupon 3.5, not either end. Duration spread capture 44% -> 72% (model 4.241y vs
+regression-implied 5.878y). Residual duration plus model duration reconstructs
+the regression-implied duration to within 0.399y at every coupon (worst at 3.0),
+short at all nine.
+
+### Known limitations
+
+- The aggregated CPR file has no age column, so the fit is across all ages. Age
+  IS computable -- `realized_cpr_v6_upb.py` reads raw loan-level files and selects
+  only 4 columns (COL_LOAN=1, COL_MONTH=2, COL_RATE=7, COL_UPB=11); origination
+  date is in the rows. A seasoned-only fit needs the aggregation re-run with age
+  as a key (~2-3h). Not yet done.
+- Fit capped at incentive +2.0, terminal flat above it; 18.4% of panel
+  coupon-months sit there (max +4.32). Not fitted beyond +2.0 because that region
+  is dominated by the 2020-21 refi wave (realized CPR 0.33-0.35 in 2020-21 vs
+  0.03-0.17 in 2014-19 at the same incentive, bucket sds 0.16-0.26).
+- Realized CPR is non-monotone in incentive (dips ~+1.7 to +2.7 then rises). A
+  monotone logistic was chosen, so this is not captured; a non-monotone form is
+  fittable but adds a parameter and was not attempted.
+- Weighting the fit on bucket means changes the floor by 16bp; checked, not adopted.
+- `pmms_key='10yr'`: only the 10y bump moves the mortgage rate, so the whole
+  prepayment response sits in KRD10 by construction. PMMS - 10yr measures 190bp
+  over the full available history (2001-07+) and 189bp from 2003, matching the
+  assumed figure; it is 215bp from 2018 and 247bp from 2022, so the panel window
+  is wider than the long-run average. Does not affect the ratios, since the
+  pass-through uses the bump and the PMMS level comes from data.
+- `stage3_der_factor_shocks.load_excess_returns()` remains UNCHANGED at
+  `D_MOD_AVG = 6.5`. No corrected hedge is wired into the pipeline.
