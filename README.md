@@ -751,100 +751,6 @@ bps/yr reported to advisor as solid; Sharpe explicitly flagged as not
 stable enough to report as a clean number, with the one-month mechanism
 explained. Sent results-only July 17.
 
-## Phase 21 — Post-Residualization Autocorrelation Check + Beta Spread/Sharpe (July 17, 2026)
-
-### Request
-
-Advisor's three-part reply to Phase 20: (1) confirm the quoted rho values
-(0.92/0.76) are from the raw pre-standardization factor series, and confirm
-post-AR(1)-residualization autocorrelation is near zero; (2) report the
-cross-sectional spread of standardized betas across coupons, translate into
-an implied premium gap in bps/yr between the most- and least-exposed coupon,
-plus the factor portfolio's Sharpe next to DER's; (3) scope a pre-2013
-Fannie Mae data investigation ahead of a redesigned historical retrain.
-This section covers (1) and (2).
-
-### Implementation
-
-Ask (1), rho sourcing: confirmed directly from code -- `ar1_residualize()`
-runs on `factor_ts['f_level']`/`factor_ts['f_slope']` (the raw series)
-before `standardize_factors()` is ever applied.
-
-Ask (1), post-residualization check: this wasn't actually being verified
-before (only the AR(1) coefficient on the raw series was reported, never
-whether the leftover residual itself is white noise). Added
-`lag1_autocorr()` to `scripts/stage3_ar1_test.py`, wired into `run()` to
-report it for all three specs alongside the existing rho.
-
-New script `scripts/stage3_beta_spread_sharpe.py` (ask 2): reuses the
-AR(1)-residualize + standardize pipeline from Phase 20, then for each spec:
-(a) takes max-min of the standardized b_x across the 9 coupons, (b)
-multiplies by lambda_x and annualizes to bps/yr, (c) builds a
-long-highest-beta/short-lowest-beta zero-cost portfolio from realized
-excess returns and reports its annualized Sharpe.
-
-New script `scripts/stage3_beta_spread_loo.py`: leave-one-out on the
-ex-cutoff_2020 spec's bps/yr and Sharpe (the only spec with a real
-monotonic beta profile -- see Results).
-
-### Results
-
-Post-residualization autocorrelation (lag-1, on the AR(1) residual itself,
-not the raw-series rho):
-
-| | rho (raw series) | resid autocorr | n | ~SE (1/sqrt(n)) |
-|---|---|---|---|---|
-| Full-sample | 0.916 | -0.278 | 71 | 0.119 |
-| Rolling (with cutoff_2020) | 0.922 | -0.152 | 47 | 0.146 |
-| Rolling ex-cutoff_2020 | 0.764 | -0.177 | 35 | 0.169 |
-
-Both rolling specs are within ~1 SE of zero (genuinely near-white-noise).
-Full-sample sits at ~2.3 SE -- a real residual autocorrelation, not clean.
-
-Cross-sectional beta profile monotonicity (Spearman rho between coupon and
-standardized b_x):
-
-| | spearman rho | p-value | mean per-coupon R2 |
-|---|---|---|---|
-| Full-sample | +0.450 | 0.224 (n.s.) | 0.014 |
-| Rolling (with cutoff_2020) | -0.217 | 0.576 (n.s.) | 0.038 |
-| Rolling ex-cutoff_2020 | +0.933 | <0.001 | 0.034 |
-
-Only rolling ex-cutoff_2020 has a statistically real, monotonic exposure
-gradient. The other two specs' "most/least exposed coupon" would be
-reading noise as signal -- not reported as a spread there.
-
-For rolling ex-cutoff_2020: standardized b_x spread = 0.0035 (coupon 6.5
-high / 3.0 low), lambda_x = 1.834, implied gap = 769.7 bps/yr. Realized
-long-6.5/short-3.0 portfolio: Sharpe = 0.918 (n=35).
-
-DER's own Sharpe benchmarks (Table XII) for comparison: full-sample
-Max-Min=0.44/PRP=0.76; discount-market Max-Min=-0.47/PRP=0.47. Our
-ex-cutoff_2020 window (cutoff_2021 onward, i.e. 2022-24) is a
-discount-market period per the existing DM/PM classification, so the
-discount-market row is the relevant comparison, not full-sample. Their
-portfolios are vol-scaled/equal-leg-weighted over ~20 years; ours is a raw
-monthly return difference over 35 months -- not directly comparable
-methodology, caveated as such.
-
-### Robustness check
-
-Leave-one-out on the ex-cutoff_2020 headline (36 folds, one month dropped
-each time, everything downstream re-estimated):
-- bps/yr: range [572.9, 905.2] around 769.7, zero sign flips across all 36
-  folds -- stable.
-- Sharpe: range [-1.349, 1.185] around 0.918 -- **flips sign** when July
-  2022 is dropped. That single month's exclusion changes which two coupons
-  are identified as most/least exposed (6.5/3.0 -> 2.5/5.0), so the
-  "Sharpe" isn't even comparing the same pair of coupons in that fold. Root
-  cause: per-coupon betas are closely spaced and noisily estimated (R^2
-  ~2-5% each), so an argmax/argmin over 9 coupons is fragile in a way the
-  cross-sectional mean (lambda_x) isn't.
-
-bps/yr reported to advisor as solid; Sharpe explicitly flagged as not
-stable enough to report as a clean number, with the one-month mechanism
-explained. Sent results-only July 17.
-
 ## Pre-2013 historical data (verified 2026-07-19)
 
 `data_pre2013_raw/` — Fannie Mae Single-Family Loan Performance, 2000Q1-2012Q4,
@@ -1109,3 +1015,207 @@ short at all nine.
   pass-through uses the bump and the PMMS level comes from data.
 - `stage3_der_factor_shocks.load_excess_returns()` remains UNCHANGED at
   `D_MOD_AVG = 6.5`. No corrected hedge is wired into the pipeline.
+
+## Phase 22 — Age-Keyed Realized CPR, Spread Control, Terminal Floor Refit (July 30 – August 3, 2026)
+
+### Requests
+
+Advisor, July 30, in reply to the hedge verification results: add a mortgage
+spread control (the PMMS minus 10-year spread change); yes to re-running the
+realized-CPR aggregation with loan age as a key; and yes, one terminal curve in
+incentive evaluated per coupon, rather than a separate curve fitted per coupon.
+
+Advisor, August 3, after those results: refit the terminal curve using a floor
+of 0.0459 rather than the fitted 0.0546; check whether the model's prepayment
+response is too flat to rate incentive by comparing the model S-curve against
+realized; run the verification regression on level, slope AND spread change for
+nine coupons; report the annualized vol of the hedged coupon-spread portfolio;
+report residual duration in years. (The last bullet ends mid-sentence in the
+original, so it was answered on a reading of intent and flagged as such.)
+
+### Age-keyed aggregation — and a bug the validation could not see
+
+`scripts/realized_cpr_v6_upb_byage.py` adds a seasoning key to Pass 1 of the
+UPB-weighted aggregation: levels 0 (age < 60mo), 60 (60–119mo), 120 (120+).
+Levels 60 and 120 together are the advisor's "age > 5yr" cut. Pass 0 is
+untouched and its 2026-07-03 checkpoint (25,769,042 loans) is reused, since
+nothing Pass 0 produces depends on age.
+
+**The bug.** v2 read `LOAN_AGE` (0-based col 15) off each row. That field is
+blank on the payoff row, so every prepayment landed in the missing-age bucket:
+100% of `upb_prepay` in `age_group == -1`, zero in every real level. Seasoned
+CPR came out identically zero, and the S-curve diagnostic downstream died with
+a ZeroDivisionError on a zero-variance R² denominator.
+
+**Why the validation missed it.** `verify_byage_totals.py` summed over all age
+levels and compared against the baseline panel. That reconciles exactly whether
+or not the numerator and denominator are split correctly — the partition was
+intact, only the association between prepayments and ages was broken. The check
+tested the wrong invariant. It now also asserts that `upb_prepay` is nonzero in
+the real age levels.
+
+**The fix.** v3 derives age from the origination date (col 13, MMYYYY, constant
+within a loan) as `(Y2-Y1)*12 + (M2-M1)`, which is well-defined on every row
+including the payoff row. Verified first on a synthetic raw file constructed to
+reproduce the bug, then on the real panel: prepay mass in real age levels went
+0.00% → 100.00%, and `n_prepay` now reconciles against the baseline exactly
+(max abs diff 0.00, max rel diff 0.000e+00; was 1106 and 1.000 under v2).
+
+The file's `LOAN_AGE` is not months-since-origination. Accumulating
+`derived_age - LOAN_AGE` across the scan gives +1 at 95.45%, +2 at 2.97%, +0 at
+1.51%, with a tail to +11 at ~0.05% — 99.93% within ±1 of the dominant
+convention, immaterial at a 60-month boundary, and measured rather than assumed.
+
+Runtime note: the first v3 run took 27 min/file and would have overrun a 12h
+wall. The cost was `Counter(diff.tolist())` in the offset cross-check, a Python
+loop over up to 2M ints per chunk. `np.unique` brought it to 7.4 min/file.
+
+### Spread control — a negative result on the hypothesis
+
+`scripts/diag/diag_spread_control.py`. Adding the PMMS − 10yr spread change as
+a third regressor makes the level exposure LARGER, not smaller: coupon 2.5 goes
+-7.12 → -8.20, worst coupon -7.89 → -9.13 (coupon 3.5), and coupons inside
+|t| < 2 on level fall from three to two.
+
+**A timing trap on the way.** The panel's `pmms` column is keyed to the
+information date, not the return month: `corr(panel pmms, ret_month pmms lagged
+one month) = 1.0000` exactly. Differencing it against a contemporaneous
+Treasury change gives a spread series misaligned by one month — and that
+misaligned version APPEARS to work, taking coupon 2.5 from -7.15 to -3.97. Its
+VIF is 2.4, so much of the apparent improvement is standard errors widening
+rather than the coefficient falling. Any spec mixing lagged panel PMMS with
+contemporaneous external data is misaligned.
+
+**Mechanism.** The spread coefficient is significant at coupons 2.5 through 5.0
+(t between -2.81 and -4.49) and insignificant at 5.5, 6.0, 6.5 — present where
+the hedge fails, absent where it passes. `corr(d_level, d_spread) = -0.601`
+with a negative spread coefficient means omitting the spread biases the level
+coefficient TOWARD zero. So the residual reads as unhedged level exposure that
+the spread was partly offsetting in the estimate, not as spread contamination.
+(Sign of the bias is shown; the interpretation is not separately tested.)
+
+### Seasoned terminal curve — a wash, and why
+
+Fitting the S-curve to seasoned loans only moves the level exposure around
+rather than fixing it: coupon 2.5 goes -7.15 → -8.16, coupon 3.5 -8.00 → -7.56,
+so the worst coupon shifts from 3.5 to 2.5 and the |t| < 2 count is unchanged.
+
+The reason is that the seasoned restriction does not change the data where the
+floor is identified. In the half-point incentive buckets from -4.0 to -1.5 the
+seasoned and all-loan samples have IDENTICAL observation counts (28, 40, 41,
+44, 53) — every deep-discount coupon-month cell already contains seasoned
+balance. The restriction only thins the middle of the range (86→69, 122→86,
+137→100 between -1.5 and 0), which distorts curvature.
+
+The seasoned fit reports floor 0.0700 against 0.0546 all-loan, but that is a
+fitting artifact: realized seasoned CPR below incentive -2.5 is 0.0516 (bootstrap
+SE 0.0010), so the fitted floor sits 18.4 SE above what seasoned loans actually
+do at depth, and a fit restricted to inc <= -1.0 gives 0.0483. The full-range
+fit absorbs mid-range curvature into the floor parameter.
+
+### Terminal floor modes
+
+`model_hedge_krd.py` gains three alternatives to the fitted floor, selected by
+`--floor-mode`, with the mode in the output filename so runs do not overwrite
+each other. Default behaviour is unchanged and reproduces the prior t-statistics
+exactly (verified as a control).
+
+| mode | floor | sat | x0 | note |
+|---|---|---|---|---|
+| fitted (default) | 0.0546 | 0.2492 | 0.493 | full-range logistic, all-loan, expanding window |
+| seasoned-fit | 0.0700 | 0.1875 | 0.365 | advisor's literal request; artifact, see above |
+| pinned-seasoned | 0.0514 | 0.2509 | 0.484 | floor = realized seasoned mean at inc <= -2.5 |
+| pinned-fixed | 0.0459 | 0.2545 | 0.473 | floor = realized all-loan mean; **has look-ahead** |
+
+`pinned-seasoned` fails on the expanding window before 2018-02 (n=0 deep-discount
+seasoned observations) — there were no deep discounts at all in the 2013–2018
+window, so the floor is not estimable there. `pinned-fixed` applies a full-sample
+statistic at every cutoff, which is look-ahead by construction; fine as a
+diagnostic, not a production spec.
+
+**Result of the 0.0459 refit.** Level t improves at all coupons 2.5–5.0
+(2.5: -7.15 → -6.57; 3.5: -8.00 → -7.35, still worst), degrades slightly at
+5.5/6.0/6.5, and 5.5 crosses out of the band at -2.07 so the |t| < 2 count falls
+from three coupons to two. Duration capture 72.2% → 74.1%. Real improvement,
+small.
+
+### Verification outputs (advisor's requested table)
+
+Three-regressor spec, hedged return on level, slope and spread change, pinned
+floor panel, 99 months:
+
+| cpn | t_level | t_slope | t_spread | resid_dur (2reg) | model_D |
+|---|---|---|---|---|---|
+| 2.5 | -7.73 | -3.24 | -3.62 | 1.588 | 5.463 |
+| 3.0 | -8.06 | -2.72 | -3.63 | 1.536 | 4.752 |
+| 3.5 | -8.74 | -2.77 | -4.11 | 1.538 | 4.257 |
+| 4.0 | -8.08 | -2.82 | -4.67 | 1.194 | 3.857 |
+| 4.5 | -5.93 | -2.02 | -3.66 | 0.866 | 3.500 |
+| 5.0 | -3.87 | -0.51 | -2.80 | 0.560 | 3.107 |
+| 5.5 | -2.53 | 0.17 | -1.42 | 0.384 | 2.498 |
+| 6.0 | -1.32 | 0.09 | 0.19 | 0.384 | 1.630 |
+| 6.5 | -0.32 | -1.14 | 1.50 | 0.313 | 1.106 |
+
+Inside |t| < 2: coupons 6.0 and 6.5 on level, 5.0–6.5 on slope. The
+three-regressor spec is a harsher test than the two-regressor one at every
+coupon from 2.5 to 5.5.
+
+**Portfolio vol.** Fixed pair, long 6.5 / short 2.5, on hedged returns over 99
+months: 2.87% annualized (3.01% before the floor change). The 8.0417% figure
+from the July 20 email is a DIFFERENT construction — beta-ranked pair on
+unhedged excess returns over 35 months — so the two are not comparable and the
+difference should not be read as the hedge improving.
+
+All panel numbers were recomputed through a second code path (normal equations
+rather than lstsq, `verify_before_email.py`) and matched exactly.
+
+### Model vs realized S-curve — peak slope is not a usable statistic
+
+The advisor's hypothesis was that the model's prepayment response is too flat to
+rate incentive. **This has no stable answer as posed**, and three different
+headlines were produced from the same data before that was caught:
+
+| measurement | model/realized ratio, age 61 | reading |
+|---|---|---|
+| realized bucketed at 0.5 | 1.027 | not flat |
+| bucket-free local linear | 0.536 | too flat |
+| total CPR range | 2.292 | steeper than realized |
+
+Peak slope moves monotonically with bucket width (age 61: 0.511 / 1.027 / 1.674
+at widths 0.25 / 0.50 / 1.00) because realized CPR is noisy and non-monotone in
+incentive, so its own peak slope moves by ~2x between quarter- and half-point
+buckets. **Do not build a claim on peak slope with this data.**
+
+What IS stable across every measurement, because it involves no derivative and
+no binning:
+
+- **Level.** Model CPR at incentive -4.0 is 0.140 (age 33), 0.091 (61), 0.267
+  (121) against realized 0.0459 all-loan and 0.0516 seasoned below -2.5 — three
+  to five times realized at deep discounts.
+- **Position.** Model steepest at 0.00 (age 33), -0.75 (61), -0.50 (121);
+  realized steepest at +0.55 for both populations under every bucketing tried.
+  The model reacts hardest 0.5–1.25 points below where loans actually respond.
+- **Age response is wrong-signed.** Deep-discount CPR rises from age 61 to age
+  121 where lock-in implies it should fall. Consistent with
+  `diag_age_extrapolation.py`; seasoned ages are far outside the training range.
+
+### Open with the advisor
+
+Portfolio definition (fixed pair on hedged returns vs beta-ranked); the
+truncated residual-duration sentence; and whether to fit the terminal curve's
+x0 to the realized peak (~+0.55) rather than letting the full-range fit place it
+at ~0.47. The last is a proposal, not a request.
+
+### New scripts
+
+`scripts/realized_cpr_v6_upb_byage.py`,
+`scripts/diag/verify_byage_totals.py`,
+`scripts/diag/diag_spread_control.py`,
+`scripts/diag/diag_seasoned_vs_all_scurve.py`,
+`scripts/diag/diag_seasoned_floor_check.py`,
+`scripts/diag/diag_advisor_outputs.py`,
+`scripts/diag/diag_model_vs_realized_scurve.py`,
+`scripts/diag/diag_flatness_range.py`,
+`scripts/diag/verify_before_email.py`,
+`scripts/patches/patch_floor_modes.py`,
+`scripts/patches/patch_pinned_fixed.py`.
