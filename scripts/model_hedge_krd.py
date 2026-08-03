@@ -148,13 +148,54 @@ def cpr_path(incentive, model, scaler, a, b):
 
 
 _SCURVE_EXP = {}
+FLOOR_MODE = "fitted"          # fitted | seasoned-fit | pinned-seasoned
+_SEASONED = None
+DEEP_INC = -2.5                # depth at which the pinned floor is estimated
+FIXED_FLOOR = 0.0459           # advisor 2026-08-03: realized all-loan CPR at inc <= -2.5
+                               # FULL-SAMPLE value -- introduces look-ahead by construction
+
+
+def _load_seasoned():
+    """Realized CPR restricted to loans aged > 60 months, rebuilt from the
+    age-keyed panel. UPB is summed across seasoning levels 60 and 120 and CPR
+    recomputed -- averaging the per-level cpr_upb would weight a thin 120+
+    cell equally with a large 60-119 cell."""
+    global _SEASONED
+    if _SEASONED is not None:
+        return _SEASONED
+    import pandas as _pd
+    b = _pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v6_upb_byage.csv"))
+    b = b[b["age_group"] >= 60]
+    g = (b.groupby(["coupon_bucket", "implied_mbs_coupon", "yyyymm"], as_index=False)
+           [["upb_atrisk", "upb_prepay"]].sum())
+    g = g[g["upb_atrisk"] > 0].copy()
+    g["smm"] = g["upb_prepay"] / g["upb_atrisk"]
+    g["cpr_upb"] = 1.0 - (1.0 - g["smm"]) ** 12
+    g["date"] = _pd.to_datetime(g["yyyymm"].astype(str), format="%Y%m")
+    _pm = _pd.read_csv(os.path.join(DATA, "pmms_monthly.csv"))
+
+    def _parse(x):
+        t = str(int(x))
+        if len(t) == 5: return _pd.Timestamp(year=int(t[1:]), month=int(t[0]), day=1)
+        if len(t) == 6: return _pd.Timestamp(year=int(t[2:]), month=int(t[:2]), day=1)
+        return _pd.NaT
+
+    _pm["date"] = _pm["reporting_period"].apply(_parse)
+    _ps = _pm.dropna(subset=["date"]).set_index("date")["rate_30yr"]
+    g["pmms"] = g["date"].map(_ps)
+    g["inc"] = (g["implied_mbs_coupon"] + GFEE) - g["pmms"]
+    _SEASONED = g.dropna(subset=["inc", "cpr_upb"])
+    return _SEASONED
+
+
 def scurve_params_asof(cutoff):
     """Terminal S-curve fitted ONLY on realized CPR strictly before `cutoff`
     (a YYYY-MM string), so the ratios use data through the prior month-end as
     specified. Cached per cutoff. Expanding window: ~460 obs at the panel start
     (realized file begins 2013-07), converging to the full sample by 2026."""
-    if cutoff in _SCURVE_EXP:
-        return _SCURVE_EXP[cutoff]
+    _key = (cutoff, FLOOR_MODE)
+    if _key in _SCURVE_EXP:
+        return _SCURVE_EXP[_key]
     import pandas as _pd
     from scipy.optimize import curve_fit as _cf
     global _REALIZED
@@ -189,11 +230,53 @@ def scurve_params_asof(cutoff):
         raise ValueError("insufficient history before %s (n=%d)" % (cutoff, len(h)))
     def _sc(x, f, sa, k, x0):
         return f + (sa - f) / (1.0 + np.exp(-k * (x - x0)))
-    po, _ = _cf(_sc, h["inc"].values, h["cpr_upb"].values, p0=[0.04, 0.22, 3.0, 0.4],
-                bounds=([0.005, 0.05, 0.2, -2.0], [0.15, 0.60, 10.0, 3.0]), maxfev=40000)
-    q = dict(floor=float(po[0]), sat=float(po[1]), k=float(po[2]), x0=float(po[3]),
-             n=int(len(h)))
-    _SCURVE_EXP[cutoff] = q
+    if FLOOR_MODE == "seasoned-fit":
+        _s = _load_seasoned()
+        h = _s[(_s["date"] < _pd.Timestamp(cutoff + "-01"))
+               & (_s["inc"] >= -4.0) & (_s["inc"] <= 2.0)
+               & (_s["implied_mbs_coupon"] >= 2.5)
+               & (_s["implied_mbs_coupon"] <= 6.5)]
+        if len(h) < 40:
+            raise ValueError("insufficient seasoned history before %s (n=%d)"
+                             % (cutoff, len(h)))
+
+    if FLOOR_MODE == "pinned-fixed":
+        _fl = FIXED_FLOOR
+
+        def _sc_fix(x, sa, k, x0):
+            return _fl + (sa - _fl) / (1.0 + np.exp(-k * (x - x0)))
+
+        pof, _ = _cf(_sc_fix, h["inc"].values, h["cpr_upb"].values,
+                     p0=[0.22, 3.0, 0.4],
+                     bounds=([0.05, 0.2, -2.0], [0.60, 10.0, 3.0]), maxfev=40000)
+        q = dict(floor=_fl, sat=float(pof[0]), k=float(pof[1]), x0=float(pof[2]),
+                 n=int(len(h)))
+    elif FLOOR_MODE == "pinned-seasoned":
+        _s = _load_seasoned()
+        _d = _s[(_s["date"] < _pd.Timestamp(cutoff + "-01"))
+                & (_s["inc"] <= DEEP_INC)
+                & (_s["implied_mbs_coupon"] >= 2.5)
+                & (_s["implied_mbs_coupon"] <= 6.5)]
+        if len(_d) < 10:
+            raise ValueError("insufficient deep-discount seasoned history before "
+                             "%s (n=%d)" % (cutoff, len(_d)))
+        _fl = float(_d["cpr_upb"].mean())
+
+        def _sc_pin(x, sa, k, x0):
+            return _fl + (sa - _fl) / (1.0 + np.exp(-k * (x - x0)))
+
+        po3, _ = _cf(_sc_pin, h["inc"].values, h["cpr_upb"].values,
+                     p0=[0.22, 3.0, 0.4],
+                     bounds=([0.05, 0.2, -2.0], [0.60, 10.0, 3.0]), maxfev=40000)
+        q = dict(floor=_fl, sat=float(po3[0]), k=float(po3[1]), x0=float(po3[2]),
+                 n=int(len(h)), n_deep=int(len(_d)))
+    else:
+        po, _ = _cf(_sc, h["inc"].values, h["cpr_upb"].values, p0=[0.04, 0.22, 3.0, 0.4],
+                    bounds=([0.005, 0.05, 0.2, -2.0], [0.15, 0.60, 10.0, 3.0]),
+                    maxfev=40000)
+        q = dict(floor=float(po[0]), sat=float(po[1]), k=float(po[2]), x0=float(po[3]),
+                 n=int(len(h)))
+    _SCURVE_EXP[_key] = q
     return q
 
 
@@ -345,6 +428,8 @@ def main(pmms_key, spanning=False):
     p["hedged"] = (p["tba_total_return"] - p["income"]
                    + (p["D_level"]*p["d_level"] + p["D_slope"]*p["d_slope"])/100.0)
     tag = pmms_key.replace("yr", "") + ("_span" if spanning else "_local")
+    if FLOOR_MODE != "fitted":
+        tag = tag + "_" + FLOOR_MODE.replace("-", "")
     p.to_csv(os.path.join(OUT, f"model_hedge_panel_{tag}.csv"), index=False)
 
     print(f"\npanel: {len(p)} coupon-months, {p['ret_month'].nunique()} months "
@@ -370,5 +455,11 @@ if __name__ == "__main__":
                          "PMMS-10yr). 'any': PMMS moves 1:1 with whichever tenor is bumped.")
     ap.add_argument("--spanning", action="store_true",
                     help="partition-of-unity bumps instead of localized key rates")
+    ap.add_argument("--floor-mode", default="fitted",
+                    choices=["fitted", "seasoned-fit", "pinned-seasoned",
+                             "pinned-fixed"],
+                    help="terminal S-curve floor specification")
     args = ap.parse_args()
+    FLOOR_MODE = args.floor_mode
+    print("floor mode: %s" % FLOOR_MODE)
     main(args.pmms_key, args.spanning)
