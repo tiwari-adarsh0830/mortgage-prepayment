@@ -123,10 +123,39 @@ def load_hazard():
 
 
 _CPR_CACHE = {}
+MAP_MODE = "off"
+
+
+_FROZEN_FACTOR = {}
+
+
+def _mapped(path33, asof, key=None, base=False):
+    """Apply the expanding-window CPR mapping to the model segment only.
+
+    frozen mode: the scale factor is computed once per coupon-month from the
+    UNBUMPED path (base=True) and reused for every bumped path (base=False), so
+    the bump moves the model path only and the KRD is not contaminated by the
+    correction's own rate sensitivity."""
+    if MAP_MODE == "off":
+        return path33
+    import cpr_mapping
+    if MAP_MODE != "frozen":
+        out, _applied = cpr_mapping.apply_mapping(path33, asof, mode=MAP_MODE)
+        return out
+    if base:
+        _FROZEN_FACTOR[key] = cpr_mapping.scale_factor(path33, asof)
+    elif key not in _FROZEN_FACTOR:
+        raise RuntimeError(
+            "frozen mode: no baseline factor for %r -- the unbumped path must be "
+            "priced before the bumped ones" % (key,))
+    return cpr_mapping.apply_factor(path33, _FROZEN_FACTOR[key])
+
+
 def cpr_path(incentive, model, scaler, a, b):
     """(33,) CPR path for a constant refi incentive. All synthetic rows are
     identical (constant incentive + fixed REP loan), so n_paths=1 is exact."""
     k = round(float(incentive), 6)
+    k = (k, MAP_MODE)
     if k in _CPR_CACHE: return _CPR_CACHE[k]
     s = np.zeros((1, MAX_SEQ, N_FEATURES), dtype=np.float32)
     s[:, :, 0] = incentive
@@ -334,7 +363,7 @@ def krd_pair(coupon, par, pmms, model, scaler, a, b, pmms_key='10yr', spanning=F
     """Returns (P0, KRD5, KRD10) with CPR re-forecast under each bump."""
     note = coupon + GFEE
     z0 = bootstrap_zeros(par)
-    p0 = price_path(coupon, extend_cpr(cpr_path(note-pmms, model, scaler, a, b),
+    p0 = price_path(coupon, extend_cpr(_mapped(cpr_path(note-pmms, model, scaler, a, b), asof, key=(coupon, asof), base=True),
                                        incentive=note-pmms, asof=asof), z0)
     h = BUMP_BP/100.0
     out = {}
@@ -347,7 +376,7 @@ def krd_pair(coupon, par, pmms, model, scaler, a, b, pmms_key='10yr', spanning=F
             bp = {lab: float(par[lab]) + sgn*h*wi for lab, wi in zip(MAT_LABELS, w)}
             inc = note - (pmms + sgn*dp)
             prices[sgn] = price_path(coupon,
-                            extend_cpr(cpr_path(inc, model, scaler, a, b),
+                            extend_cpr(_mapped(cpr_path(inc, model, scaler, a, b), asof, key=(coupon, asof), base=False),
                                        incentive=inc, asof=asof),
                             bootstrap_zeros(bp))
         out[ten] = (prices[-1] - prices[+1]) / (2.0*p0*(h/100.0))
@@ -430,6 +459,8 @@ def main(pmms_key, spanning=False):
     tag = pmms_key.replace("yr", "") + ("_span" if spanning else "_local")
     if FLOOR_MODE != "fitted":
         tag = tag + "_" + FLOOR_MODE.replace("-", "")
+    if MAP_MODE != "off":
+        tag = tag + "_map" + MAP_MODE
     p.to_csv(os.path.join(OUT, f"model_hedge_panel_{tag}.csv"), index=False)
 
     print(f"\npanel: {len(p)} coupon-months, {p['ret_month'].nunique()} months "
@@ -455,11 +486,20 @@ if __name__ == "__main__":
                          "PMMS-10yr). 'any': PMMS moves 1:1 with whichever tenor is bumped.")
     ap.add_argument("--spanning", action="store_true",
                     help="partition-of-unity bumps instead of localized key rates")
+    ap.add_argument("--map-mode", default="off",
+                    choices=["off", "scalar", "pointwise", "frozen"],
+                    help="CPR mapping applied to months 1-33 before pricing; "
+                         "off reproduces prior behaviour exactly (control)")
     ap.add_argument("--floor-mode", default="fitted",
                     choices=["fitted", "seasoned-fit", "pinned-seasoned",
                              "pinned-fixed"],
                     help="terminal S-curve floor specification")
     args = ap.parse_args()
     FLOOR_MODE = args.floor_mode
+    MAP_MODE = args.map_mode
     print("floor mode: %s" % FLOOR_MODE)
+    print("map mode:   %s" % MAP_MODE)
+    if MAP_MODE != "off":
+        import cpr_mapping
+        print("  " + cpr_mapping.describe("2025-06-30"))
     main(args.pmms_key, args.spanning)
