@@ -29,8 +29,12 @@ TWO IMPLEMENTATION NOTES (flagged, not silently chosen):
      D_level + D_slope does NOT equal total effective duration -- localized key
      rates leave curve exposure between/beyond the knots. That is inherent to
      localized key rates, not an error.
-  2. PMMS KEYING (--pmms-key). The 189bp spread is PMMS minus the 10yr
-     (risk_neutral_rates.py computes it that way). Under that keying a 5y-only
+  2. PMMS KEYING (--pmms-key). The spread is PMMS minus the 10yr
+     (risk_neutral_rates.py computes it that way, averaging 189bp over its
+     2001-07-onward join; over THIS script's 2018-02..2026-04 window the same
+     spread averages 216bp, the difference being the post-2020 widening. Neither
+     constant is used in pricing -- krd_pair takes the contemporaneous monthly
+     pmms). Under that keying a 5y-only
      bump leaves PMMS unchanged, so the 5y KRD is pure discounting while the 10y
      KRD carries the prepayment response. Default '10yr'. '--pmms-key any' moves
      PMMS 1:1 with whichever tenor is bumped. Both are run and reported.
@@ -421,12 +425,14 @@ def main(pmms_key, spanning=False):
     pm["date"] = pm["reporting_period"].apply(parse)
     pmms_s = pm.dropna(subset=["date"]).set_index("date")["rate_30yr"]
 
-    # sanity: realized PMMS - 10yr spread (advisor cited 189bp)
+    # sanity: realized PMMS - 10yr spread over THIS window. 189bp is the
+    # 2001-07-onward average from risk_neutral_rates.py, not this sample.
     j = clean.set_index("Date")[[y10c]].copy()
     j["ym"] = j.index.to_period("M").to_timestamp()
     j["pmms"] = j["ym"].map(pmms_s)
     sp = (j["pmms"] - j[y10c]).dropna()
-    print(f"  PMMS - 10yr spread: mean {sp.mean()*100:.0f}bp  (advisor cited 189bp)")
+    print(f"  PMMS - 10yr spread: mean {sp.mean()*100:.0f}bp over this window"
+          f"  (189bp is the 2001+ average, different sample)")
 
     rows = []
     for i in range(1, len(clean)):

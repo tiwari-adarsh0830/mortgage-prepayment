@@ -1219,3 +1219,155 @@ at ~0.47. The last is a proposal, not a request.
 `scripts/diag/verify_before_email.py`,
 `scripts/patches/patch_floor_modes.py`,
 `scripts/patches/patch_pinned_fixed.py`.
+
+## Phase 23 — CPR Mapping, and Where the Residual Actually Lives (August 4–5, 2026)
+
+### Request
+
+Advisor, August 4: the transformer does not aggregate well into pool-level
+predictions. For each month t, take history through t-1; for every coupon-month
+cell fit realized CPR as a function of (model CPR, incentive) — suggested form, a
+regression of log realized against log model with coefficients varying by
+incentive. Then every CPR path, baseline and each bumped path, goes through that
+mapping before it is priced. Expanding-window throughout so no look-ahead.
+
+### The mapping works as a forecast correction
+
+`scripts/cpr_mapping.py`, diagnostics in `scripts/diag/diag_cpr_mapping_v2.py`.
+UPB-weighted, 36-month burn-in, 1-month reporting lag, 524 scored cells over 59
+cutoffs. OOS log RMSE 0.4761 with no mapping against 0.3461 under a logit link —
+a 27.3% reduction. Deep-discount ratio (realized/model below -2.5 incentive)
+0.718 -> 0.912.
+
+Model side is `forecast_cpr_timeseries_gfee050.csv`, which
+`model_hedge_krd.py` already imports, so it is the same construction as
+`cpr_path` at the same GFEE. Realized side is `cpr_upb`, matching
+`scurve_params_asof`, so the mapped months 1-33 and the terminal months 34-360
+share a weighting convention. `forecast_vs_realized_cpr_gfee050.csv` is NOT used:
+its realized column is count-weighted (matches `cpr_count` to 1.1e-4, `cpr_upb`
+only to 0.524), predating the 2026-07-06 UPB rebuild.
+
+### It does not fix the hedge, in any of three application modes
+
+`--map-mode {off,scalar,pointwise,frozen}`; `off` reproduces the prior
+t-statistics exactly and is the control. Level t-statistics, pinned-fixed floor,
+spanning bumps, 99 months:
+
+| coupon | off | frozen | scalar | pointwise |
+|---|---|---|---|---|
+| 2.5 | -6.57 | -5.99 | -6.36 | -7.87 |
+| 3.5 | -7.35 | -6.94 | -7.36 | -9.11 |
+| 5.5 | -2.07 | -2.67 | -4.76 | -6.15 |
+| 6.5 | -1.49 | -3.52 | -6.17 | -5.56 |
+| **inside \|t\|<2** | **2** | **0** | **0** | **0** |
+
+The fitted logit slope is 1.922 (sd 0.071, min 1.747), above 1 at every cutoff,
+so the mapping amplifies the CPR response to a bump rather than only correcting
+its level. That shortens model durations; scalar drives `D_level` at coupon 6.5
+to -0.084, a premium MBS gaining value when the whole curve sells off.
+
+`frozen` was built to test whether the degradation is an artifact of application:
+it fixes the scale factor at the unbumped incentive so a bump moves the model
+path only. It is the least bad mode and still leaves zero coupons in the band, so
+the effect is structural — correcting the CPR level changes cashflow timing, and
+that changes duration.
+
+**Capture moves the other way**: 74.1% (off) -> 82.6% (frozen) -> 94.1%
+(scalar). Capture is a range over argmax/argmin, the same fragile construction
+that made the Phase 20 Sharpe unreportable, and scalar reaches 94.1% by
+overshooting at 6.5 rather than fitting better. Reported to the advisor
+alongside the t-statistics rather than omitted.
+
+### Two departures from the literal specification, both measured
+
+**Logit rather than log.** Log-log stays inside (0,1) on observed cells (peak
+0.816) but exceeds 1.0 once extrapolated past the observed model-CPR range,
+which is what a bump does. `price_path` computes
+`1-(1-clip(cpr,0,0.99))**(1/12)`, so an out-of-range CPR is silently clamped and
+priced wrongly with no error raised.
+
+**Single slope rather than incentive-varying coefficients.** The bucketed form
+gives a negative model->realized slope in some bucket at 44 of 59 cutoffs, which
+inverts the KRD sign under a bump. In the logit family incentive terms also score
+slightly worse (0.3461 plain against 0.3548 with incentive).
+
+### Zero-cell handling is load-bearing under OLS and not under WLS
+
+The 33 realized-zero cells hold 0.0001% of at-risk UPB — median 2.91e6 against
+1.41e11, 48 loans against 754,961. At 48 loans an observed count of zero is the
+modal draw, not evidence of zero prepayment. Unweighted, dropping them versus
+flooring them flipped the headline (+12% against -10.8%). UPB-weighted, drop and
+floor agree to four decimals and the `--min-upb` sweep is flat from 0 to 1e10, so
+the size filter is redundant. Weighting is also correct on its own terms:
+realized CPR is UPB-weighted, DER's convention is UPB-weighted, and the pricer
+values balance rather than loan counts.
+
+### The residual is not spanned by level and slope
+
+`scripts/diag/diag_duration_gap.py`. Fitting level/slope durations by regression
+on past returns — sized as well as the data allows — and testing residual
+exposure to the 2-year change, which is outside the level/slope span:
+
+- **Expanding-window fitted durations still leave |t(dy2)| > 2 at seven of nine
+  coupons.** If the residual were spanned by level and slope, optimally-sized
+  durations would drive out-of-basis exposure toward zero. They do not. Something
+  is missing from the two-factor set, and no CPR correction can fix it. This
+  explains why the seasoned curve, the spread control, the floor refit and the
+  mapping have all left the level t-statistics roughly where they were.
+- `hedge_panel_validation.csv`'s t_dy2 = -0.12 is in-sample flattery — its
+  coefficients are fitted on the same 36 months they are evaluated against.
+
+### Two sizing findings, separate from the above
+
+**Under spanning, durations are uniformly ~1.36x too small, shape correct.**
+Median `D_fit/D_model` 1.36, flat across coupons (Spearman -0.367, p=0.33),
+unaffected by floor choice. The Phase 21 rebuild therefore fixed the
+cross-sectional shape that `D_MOD_AVG = 6.5` destroyed, and left a uniform scale
+error. Phase 21's Spearman of -1.000 was over implied duration *levels*, not this
+ratio; the two agree where they measure the same thing (implied 8.05 -> 1.97
+there, D_fit 7.41 -> 1.53 here).
+
+**Localized key rates are unusable on this par-node grid.** At matched vintage
+and floor: ratio 3.46, `D_level` negative at coupons 6.0 and 6.5, and
+`t_dy2_model` indistinguishable from unhedged at every coupon. The par nodes sit
+at 3, 5 and 7 years, so a standard taper zero at 3y and 7y touches the 5y node
+only. Spanning is required, not preferred. (An earlier comparison against
+`model_hedge_panel_10.csv`, dated July 24, overstated this at 4-7x by confounding
+bump shape with the July 31 terminal-curve construction.)
+
+### Method notes worth keeping
+
+- **A guard that only warns will be reasoned past.** The duration diagnostic
+  merged Treasury changes on `info_date`; the correct key is `ret_month`
+  (correlation 0.994 against 0.025). The reconstruction check fired and printed a
+  warning, and the table below it was read anyway. It now raises. A second guard
+  was added: unhedged returns must show significant dy2 exposure, or the
+  alignment is wrong whatever else passed.
+- **An epsilon is a modelling choice.** Flooring zero cells at 1e-4 puts
+  log(1e-4) = -9.21 into the response and dominates every score: identity RMSE
+  1.1768 under floor against 0.4860 under drop, with identical predictions.
+- **Check a safety grid against the empirical support.** The first in-range check
+  tested model CPR 0.60 at incentive -5.0, a combination that never occurs;
+  restricted to the observed support, in-range pass rates went 0% -> 100%.
+- **189bp vs 216bp is not an error.** 189bp is `risk_neutral_rates.py`'s
+  2001-07-onward average (daily join; month-end gives 190bp); 216bp is the
+  2018-02..2026-04 window. Post-2020 widening. Nothing in pricing uses either —
+  `krd_pair` takes the contemporaneous monthly `pmms`.
+- **`FIXED_FLOOR = 0.0459` is not reproducible from the current panel.** Every
+  filter tried gives 0.045452; the value likely predates the July 31 age-keyed
+  rebuild. No t-statistic depends on it. It is quoted as the specified value, not
+  as a recomputed statistic.
+
+### Open
+
+The mapping's slope of ~1.92 is close to a direct measure of how much less the
+model responds to incentive than realized CPR does. The model sees 2018 onward —
+one refi cycle. The pre-2013 files are unzipped at `data_pre2013_raw/` and the
+layout is verified compatible, so the expanding-window design (train through
+2002 predict 2003, through 2011 predict 2012-13, through 2019 predict 2020-21)
+would address the flatness at source rather than after the fact. Vintage sampling
+balance and HARP one-life-vs-two-events labelling remain undecided, and the scan
+needs rebuilding at roughly double scale.
+
+The larger open question is what the missing factor is. Level and slope do not
+span the residual, and that is prior to any CPR or duration work.
