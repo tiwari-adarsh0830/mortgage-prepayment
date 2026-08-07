@@ -111,6 +111,21 @@ def key_rate_weights(tenor, spanning=False):
     return w
 
 
+def key_rate_weights3(tenor):
+    """Three-tent partition of unity per advisor 2026-08-06: a 2yr component
+    separate from the short and long ends. Refines the spanning pair rather than
+    replacing it -- w2+w5 here equals spanning's w5, and this w10 equals
+    spanning's w10, checked node-by-node before use. tenor in ('2yr','5yr','10yr').
+    """
+    T = np.asarray(MAT_YEARS, float)
+    w2 = np.where(T <= 2.0, 1.0, np.where(T <= 5.0, (5.0-T)/3.0, 0.0))
+    w5 = np.where(T <= 2.0, 0.0,
+                  np.where(T <= 5.0, (T-2.0)/3.0,
+                           np.where(T <= 10.0, (10.0-T)/5.0, 0.0)))
+    w10 = np.where(T <= 5.0, 0.0, np.where(T <= 10.0, (T-5.0)/5.0, 1.0))
+    return {'2yr': w2, '5yr': w5, '10yr': w10}[tenor]
+
+
 # ── hazard CPR path ──────────────────────────────────────────────────────────
 def load_hazard():
     import importlib, sys
@@ -128,6 +143,7 @@ def load_hazard():
 
 _CPR_CACHE = {}
 MAP_MODE = "off"
+BUMP_SHAPE = None
 
 
 _FROZEN_FACTOR = {}
@@ -197,7 +213,7 @@ def _load_seasoned():
     if _SEASONED is not None:
         return _SEASONED
     import pandas as _pd
-    b = _pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v6_upb_byage.csv"))
+    b = pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v6_upb_byage.csv"))
     b = b[b["age_group"] >= 60]
     g = (b.groupby(["coupon_bucket", "implied_mbs_coupon", "yyyymm"], as_index=False)
            [["upb_atrisk", "upb_prepay"]].sum())
@@ -205,7 +221,7 @@ def _load_seasoned():
     g["smm"] = g["upb_prepay"] / g["upb_atrisk"]
     g["cpr_upb"] = 1.0 - (1.0 - g["smm"]) ** 12
     g["date"] = _pd.to_datetime(g["yyyymm"].astype(str), format="%Y%m")
-    _pm = _pd.read_csv(os.path.join(DATA, "pmms_monthly.csv"))
+    _pm = pd.read_csv(os.path.join(DATA, "pmms_monthly.csv"))
 
     def _parse(x):
         t = str(int(x))
@@ -235,9 +251,9 @@ def scurve_params_asof(cutoff):
     try:
         _REALIZED
     except NameError:
-        _r = _pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v6_upb.csv"))
+        _r = pd.read_csv(os.path.join(OUT, "realized_cpr_by_coupon_v6_upb.csv"))
         _r["date"] = _pd.to_datetime(_r["date"])
-        _pm = _pd.read_csv(os.path.join(DATA, "pmms_monthly.csv"))
+        _pm = pd.read_csv(os.path.join(DATA, "pmms_monthly.csv"))
         def _parse(x):
             t = str(int(x))
             if len(t) == 5: return _pd.Timestamp(year=int(t[1:]), month=int(t[0]), day=1)
@@ -387,6 +403,35 @@ def krd_pair(coupon, par, pmms, model, scaler, a, b, pmms_key='10yr', spanning=F
     return p0, out['5yr'], out['10yr']
 
 
+def krd_triple(coupon, par, pmms, model, scaler, a, b, pmms_key='10yr', asof=None):
+    """Three-tent version: returns (P0, K2, K5, K10). The 2yr bump never moves
+    PMMS (decision, not from the advisor's email): PMMS is a 30yr-fixed survey
+    rate tracking the long end, so moving it off a front-end bump would be wrong
+    regardless of keying convention. --pmms-key any still applies to 5yr/10yr."""
+    note = coupon + GFEE
+    z0 = bootstrap_zeros(par)
+    p0 = price_path(coupon, extend_cpr(_mapped(cpr_path(note-pmms, model, scaler, a, b), asof, key=(coupon, asof), base=True),
+                                       incentive=note-pmms, asof=asof), z0)
+    h = BUMP_BP/100.0
+    out = {}
+    for ten in ('2yr', '5yr', '10yr'):
+        w = key_rate_weights3(ten)
+        if ten == '2yr':
+            dp = 0.0
+        else:
+            dp = h if (pmms_key == 'any' or pmms_key == ten) else 0.0
+        prices = {}
+        for sgn in (+1, -1):
+            bp = {lab: float(par[lab]) + sgn*h*wi for lab, wi in zip(MAT_LABELS, w)}
+            inc = note - (pmms + sgn*dp)
+            prices[sgn] = price_path(coupon,
+                            extend_cpr(_mapped(cpr_path(inc, model, scaler, a, b), asof, key=(coupon, asof), base=False),
+                                       incentive=inc, asof=asof),
+                            bootstrap_zeros(bp))
+        out[ten] = (prices[-1] - prices[+1]) / (2.0*p0*(h/100.0))
+    return p0, out['2yr'], out['5yr'], out['10yr']
+
+
 def ols(y, X):
     co, *_ = np.linalg.lstsq(X, y, rcond=None)
     r = y - X@co; n, k = X.shape
@@ -396,6 +441,7 @@ def ols(y, X):
 
 
 def main(pmms_key, spanning=False):
+    global BUMP_SHAPE
     print(f"PMMS keying: {pmms_key} | bump shape: {'spanning' if spanning else 'localized'}")
     model, scaler, a, b = load_hazard()
 
@@ -409,6 +455,21 @@ def main(pmms_key, spanning=False):
     y10c = [c for c in clean.columns if "10yr" in c.lower()][0]
     clean["d_level"] = ((clean[y5c]+clean[y10c])/2).diff()
     clean["d_slope"] = (clean[y10c]-clean[y5c]).diff()
+
+    # d_curve for tents3 only. 2yr is not in treasury_yields_clean.xlsx, so all
+    # three legs are pulled from the daily file with the same month-end
+    # alignment build_hedge_panel.py already uses for its dy2 control, rather
+    # than mixing a monthly-clean 5yr/10yr basis with a daily-sourced 2yr.
+    _daily = pd.read_csv(os.path.join(DATA, "treasury_yields.csv"),
+                          index_col=0, parse_dates=True).sort_index()
+    def _me_aligned(col):
+        vals = []
+        for dt in clean["Date"]:
+            idx = _daily.index[_daily.index <= dt]
+            vals.append(_daily.loc[idx[-1], col] if len(idx) else np.nan)
+        return pd.Series(vals, index=clean.index)
+    _d2, _d5, _d10 = _me_aligned("2yr"), _me_aligned("5yr"), _me_aligned("10yr")
+    clean["d_curve"] = (2.0*_d5 - _d2 - _d10).diff()
     clean["income"]  = ((clean[y5c]+clean[y10c])/2)/12.0/100.0
 
     fncl = pd.read_excel(os.path.join(DATA, "fncl_tba_prices_clean.xlsx"),
@@ -449,20 +510,36 @@ def main(pmms_key, spanning=False):
             pc, pp = fncl.loc[fncl["Date"] == curr, col], fncl.loc[fncl["Date"] == prev, col]
             if pc.empty or pp.empty or pd.isna(pc.iloc[0]) or pd.isna(pp.iloc[0]): continue
             tba = (float(pc.iloc[0]) + c/12.0 - float(pp.iloc[0])) / float(pp.iloc[0])
-            p0, k5, k10 = krd_pair(c, par, pmms, model, scaler, a, b, pmms_key,
-                                   spanning, asof=str(curr.to_period("M")))
-            rows.append(dict(ret_month=str(curr.to_period("M")), info_date=str(prev.date()),
-                             coupon=c, pmms=pmms, price=p0, krd5=k5, krd10=k10,
-                             D_level=k5+k10, D_slope=(k10-k5)/2.0,
-                             tba_total_return=tba,
-                             income=float(clean["income"].iloc[i]),
-                             d_level=float(clean["d_level"].iloc[i]),
-                             d_slope=float(clean["d_slope"].iloc[i])))
+            if BUMP_SHAPE == "tents3":
+                p0, k2, k5, k10 = krd_triple(c, par, pmms, model, scaler, a, b,
+                                             pmms_key, asof=str(curr.to_period("M")))
+                D_level = k2 + k5 + k10
+                D_slope = (k10 - k2) / 2.0
+                D_curve = (2.0*k5 - k2 - k10) / 6.0
+                rows.append(dict(ret_month=str(curr.to_period("M")), info_date=str(prev.date()),
+                                 coupon=c, pmms=pmms, price=p0, krd2=k2, krd5=k5, krd10=k10,
+                                 D_level=D_level, D_slope=D_slope, D_curve=D_curve,
+                                 tba_total_return=tba,
+                                 income=float(clean["income"].iloc[i]),
+                                 d_level=float(clean["d_level"].iloc[i]),
+                                 d_slope=float(clean["d_slope"].iloc[i]),
+                                 d_curve=float(clean["d_curve"].iloc[i])))
+            else:
+                p0, k5, k10 = krd_pair(c, par, pmms, model, scaler, a, b, pmms_key,
+                                       spanning, asof=str(curr.to_period("M")))
+                rows.append(dict(ret_month=str(curr.to_period("M")), info_date=str(prev.date()),
+                                 coupon=c, pmms=pmms, price=p0, krd5=k5, krd10=k10,
+                                 D_level=k5+k10, D_slope=(k10-k5)/2.0,
+                                 tba_total_return=tba,
+                                 income=float(clean["income"].iloc[i]),
+                                 d_level=float(clean["d_level"].iloc[i]),
+                                 d_slope=float(clean["d_slope"].iloc[i])))
 
     p = pd.DataFrame(rows).dropna(subset=["d_level", "d_slope"])
     p["hedged"] = (p["tba_total_return"] - p["income"]
                    + (p["D_level"]*p["d_level"] + p["D_slope"]*p["d_slope"])/100.0)
-    tag = pmms_key.replace("yr", "") + ("_span" if spanning else "_local")
+    tag = pmms_key.replace("yr", "") + (
+        "_tents3" if BUMP_SHAPE == "tents3" else ("_span" if spanning else "_local"))
     if FLOOR_MODE != "fitted":
         tag = tag + "_" + FLOOR_MODE.replace("-", "")
     if MAP_MODE != "off":
@@ -492,6 +569,11 @@ if __name__ == "__main__":
                          "PMMS-10yr). 'any': PMMS moves 1:1 with whichever tenor is bumped.")
     ap.add_argument("--spanning", action="store_true",
                     help="partition-of-unity bumps instead of localized key rates")
+    ap.add_argument("--bump-shape", default=None,
+                    choices=["tents3"],
+                    help="tents3: three-tent level/slope/curvature per advisor "
+                         "2026-08-06. Overrides --spanning when given; omit for "
+                         "the existing localized/spanning two-tent behaviour.")
     ap.add_argument("--map-mode", default="off",
                     choices=["off", "scalar", "pointwise", "frozen"],
                     help="CPR mapping applied to months 1-33 before pricing; "
@@ -503,8 +585,11 @@ if __name__ == "__main__":
     args = ap.parse_args()
     FLOOR_MODE = args.floor_mode
     MAP_MODE = args.map_mode
+    BUMP_SHAPE = args.bump_shape
     print("floor mode: %s" % FLOOR_MODE)
     print("map mode:   %s" % MAP_MODE)
+    print("bump shape: %s" % (BUMP_SHAPE if BUMP_SHAPE else
+                              ("spanning" if args.spanning else "localized")))
     if MAP_MODE != "off":
         import cpr_mapping
         print("  " + cpr_mapping.describe("2025-06-30"))

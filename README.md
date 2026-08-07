@@ -1371,3 +1371,111 @@ needs rebuilding at roughly double scale.
 
 The larger open question is what the missing factor is. Level and slope do not
 span the residual, and that is prior to any CPR or duration work.
+
+## Phase 24 — Third Tent Tested; 2yr Blindness Found, Not Yet Fixed (August 7, 2026)
+
+### Request
+
+Advisor, August 6, replying to Phase 23: the missing factor is a separate 2yr
+rate component. Fix: a third tent, flat below 2yr, peaking at 2yr, falling to
+zero at 5yr, with the 5yr leg starting to rise at 2yr instead of flat from
+zero. Reparameterize into level/slope/curvature (curvature = "the middle
+moving against the two ends"). Separately: the Phase 23 finding that durations
+are uniformly ~1.36x too small "looks mechanical" — try scaling durations by
+1.36 directly as a diagnostic. Defer the pre-2013 historical work until this is
+nailed down.
+
+### The 1.36 scaling test does not pass
+
+Non-circular test (dy2 was never used to fit the scalar): scaling the existing
+level/slope durations by 1.36 does not zero out residual dy2 exposure — it
+overshoots. At k=1.36, t(dy2) is positive at every coupon (+1.06 to +3.76),
+having crossed zero somewhere below it. The scalar that actually zeros t(dy2)
+sits near 1.15-1.20, a different number from what the level t-statistic itself
+wants (that grid-searched value is circular and only used as context, not
+reported as a finding). Not one clean mechanical scale factor.
+
+### The tent is built and geometrically exact
+
+`key_rate_weights3()`, `krd_triple()`, `--bump-shape tents3` in
+`model_hedge_krd.py`. Verified against the pricer's actual node grid, not just
+algebraically: the sum of the three tents equals 1 at every node (max error
+1e-10), and w2+w5 under the new construction exactly reproduces the old
+spanning w5, w10 reproduces the old spanning w10. The three-tent version is
+therefore a strict refinement of the existing spanning pair, not a new
+construction — it splits the old 5y leg into a genuine 2y piece and 5y piece.
+
+Curvature is built as `2*dy5 - dy2 - dy10`, exactly twice the advisor's literal
+"the middle moving against the two ends" (`dy5 - (dy2+dy10)/2`) — confirmed on
+synthetic data so the check can't inherit a real-data bug. The
+level/slope/curvature reparameterization (`D_level=K2+K5+K10`,
+`D_slope=(K10-K2)/2`, `D_curve=(2*K5-K2-K10)/6`) round-trips exactly.
+
+### The three-factor hedge does not outperform the two-factor one
+
+Expanding-window fitted durations (level, slope, curve — sized as well as the
+data allows, not just the pricer's own output) leave `|t(dy2)| > 2` at seven of
+nine coupons, identical to the two-factor count from Phase 23. Curvature is not
+absorbing the residual that dy2 was flagging.
+
+### Root cause: the 2yr leg was designed to never move PMMS
+
+Decision made in this phase, not from the advisor's email: PMMS was assumed to
+track only the long end, so `dp=0` unconditionally for the 2yr tenor. That
+means the incentive fed to the CPR model (`note - pmms`) is identical under a
++25bp and a −25bp 2yr bump, so `krd2` can only reflect discounting of near-term
+cashflows — it structurally cannot respond to prepayment risk, which is the
+dominant channel of MBS curve exposure.
+
+Confirmed directly: `krd2` correlates with realized dy2 at only 0.03–0.17
+across coupons (rising modestly toward premium coupons, not flat), and is a
+small share of total duration at discount coupons (9.3% at 2.5). Its share
+rises to 88% at coupon 6.5, but that tracks krd5+krd10 collapsing toward zero
+at premium coupons (the Phase 23 duration-scaling gap), not genuine 2yr
+sensitivity — checked and distinguished from the real effect.
+
+### Empirical PMMS/2yr sensitivity — a range, not settled
+
+Regressing monthly PMMS changes on the three Treasury legs:
+
+- **Univariate** (dy2 alone): 0.44 contemporaneous, 0.57 at a one-month lag.
+  The lag gap was checked against a month-alignment bug — the same class of
+  error that produced the Phase 22 spread-misalignment trap — by rerunning
+  under two different resample conventions (month-end, month-start). Both give
+  *identical* results (0.442/t=6.05 and 0.570/t=8.81, to three decimals), so
+  the lag effect appears to be a genuine one-month PMMS reporting lag rather
+  than an artifact.
+- **Multivariate** (all three legs, dy5/dy10 controlled): 0.73 pooled
+  2018-2026, but leave-one-out stable (std 0.033, no single month responsible)
+  while a chronological half-sample split is NOT stable — 0.05 (t=0.20) in
+  2018–early 2022, 1.09 (t=2.90) in 2022–2026. A 24-month rolling window shows
+  this is not a clean regime break at a single date either; it is a noisy,
+  mostly-insignificant relationship through most of the sample that only
+  became reliably significant (t>2.4) in roughly the most recent 15 months.
+
+No single number was proposed to the advisor as settled. Reported as a range
+(0.4–1.1) with the instability stated explicitly, and the choice — rebuild with
+a specific pass-through now, or pin the estimate down further first — was left
+to him.
+
+### Verification discipline
+
+Before emailing, every claim above was re-derived independently in one pass
+(`verify_all_claims_final.py`) from raw source files, without importing or
+trusting any of the diagnostic scripts that produced the original numbers:
+tent geometry (numeric, against the real grid), curvature formula (synthetic
+data), `dp=0` (read from the live pricer source, not memory), krd2
+magnitude/correlation (rebuilt dy2 from scratch with its own alignment guard),
+the 7-of-9 count (fresh regression, not reused from `verify_tents3.py`),
+control-panel byte-identity (direct file diff), and the MS/ME resample
+equivalence (both conventions run side by side in one script). All seven
+checks passed.
+
+### Open
+
+Whether to rebuild `krd_triple` with a nonzero PMMS pass-through on the 2yr
+leg, and at what value — awaiting the advisor's reply. If he wants the
+estimate pinned down further before choosing a number, the natural next step is
+an expanding-window PMMS/2yr sensitivity (mirroring the Phase 23 CPR mapping
+design) rather than a single fixed constant, given the regime instability found
+above.
