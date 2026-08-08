@@ -144,6 +144,7 @@ def load_hazard():
 _CPR_CACHE = {}
 MAP_MODE = "off"
 BUMP_SHAPE = None
+SHOCK_SOURCE = "clean"   # clean | daily
 
 
 _FROZEN_FACTOR = {}
@@ -441,7 +442,7 @@ def ols(y, X):
 
 
 def main(pmms_key, spanning=False):
-    global BUMP_SHAPE
+    global BUMP_SHAPE, SHOCK_SOURCE
     print(f"PMMS keying: {pmms_key} | bump shape: {'spanning' if spanning else 'localized'}")
     model, scaler, a, b = load_hazard()
 
@@ -451,10 +452,23 @@ def main(pmms_key, spanning=False):
                           sheet_name="Treasury_Yields", header=1)
     clean.columns = [str(c).strip() for c in clean.columns]
     clean["Date"] = pd.to_datetime(clean["Date"]); clean = clean.sort_values("Date").reset_index(drop=True)
+    _dly = pd.read_csv(os.path.join(DATA, "treasury_yields.csv"),
+                       index_col=0, parse_dates=True).sort_index()
+    def _mea(col):
+        vals = []
+        for dt in clean["Date"]:
+            idx = _dly.index[_dly.index <= dt]
+            vals.append(_dly.loc[idx[-1], col] if len(idx) else np.nan)
+        return pd.Series(vals, index=clean.index)
+    _S2, _S5, _S10 = _mea("2yr"), _mea("5yr"), _mea("10yr")
     y5c  = [c for c in clean.columns if "5yr" in c.lower() and "avg" not in c.lower()][0]
     y10c = [c for c in clean.columns if "10yr" in c.lower()][0]
-    clean["d_level"] = ((clean[y5c]+clean[y10c])/2).diff()
-    clean["d_slope"] = (clean[y10c]-clean[y5c]).diff()
+    if SHOCK_SOURCE == "daily":
+        clean["d_level"] = ((_S5 + _S10)/2).diff()
+        clean["d_slope"] = (_S10 - _S5).diff()
+    else:
+        clean["d_level"] = ((clean[y5c]+clean[y10c])/2).diff()
+        clean["d_slope"] = (clean[y10c]-clean[y5c]).diff()
 
     # d_curve for tents3 only. 2yr is not in treasury_yields_clean.xlsx, so all
     # three legs are pulled from the daily file with the same month-end
@@ -470,6 +484,10 @@ def main(pmms_key, spanning=False):
         return pd.Series(vals, index=clean.index)
     _d2, _d5, _d10 = _me_aligned("2yr"), _me_aligned("5yr"), _me_aligned("10yr")
     clean["d_curve"] = (2.0*_d5 - _d2 - _d10).diff()
+    # tents3-only: L/S/C basis on the same daily-sourced legs as d_curve.
+    # Span path keeps clean.xlsx d_level/d_slope so its control reproduces.
+    clean["d_level3"] = ((_d2 + _d5 + _d10)/3.0).diff()
+    clean["d_slope3"] = (_d10 - _d2).diff()
     clean["income"]  = ((clean[y5c]+clean[y10c])/2)/12.0/100.0
 
     fncl = pd.read_excel(os.path.join(DATA, "fncl_tba_prices_clean.xlsx"),
@@ -521,8 +539,8 @@ def main(pmms_key, spanning=False):
                                  D_level=D_level, D_slope=D_slope, D_curve=D_curve,
                                  tba_total_return=tba,
                                  income=float(clean["income"].iloc[i]),
-                                 d_level=float(clean["d_level"].iloc[i]),
-                                 d_slope=float(clean["d_slope"].iloc[i]),
+                                 d_level=float(clean["d_level3"].iloc[i]),
+                                 d_slope=float(clean["d_slope3"].iloc[i]),
                                  d_curve=float(clean["d_curve"].iloc[i])))
             else:
                 p0, k5, k10 = krd_pair(c, par, pmms, model, scaler, a, b, pmms_key,
@@ -537,28 +555,40 @@ def main(pmms_key, spanning=False):
 
     p = pd.DataFrame(rows).dropna(subset=["d_level", "d_slope"])
     p["hedged"] = (p["tba_total_return"] - p["income"]
-                   + (p["D_level"]*p["d_level"] + p["D_slope"]*p["d_slope"])/100.0)
+                   + (p["D_level"]*p["d_level"] + p["D_slope"]*p["d_slope"]
+                      + p.get("D_curve", 0.0)*p.get("d_curve", 0.0))/100.0)
     tag = pmms_key.replace("yr", "") + (
         "_tents3" if BUMP_SHAPE == "tents3" else ("_span" if spanning else "_local"))
     if FLOOR_MODE != "fitted":
         tag = tag + "_" + FLOOR_MODE.replace("-", "")
     if MAP_MODE != "off":
         tag = tag + "_map" + MAP_MODE
+    if SHOCK_SOURCE != "clean":
+        tag = tag + "_src" + SHOCK_SOURCE
     p.to_csv(os.path.join(OUT, f"model_hedge_panel_{tag}.csv"), index=False)
 
     print(f"\npanel: {len(p)} coupon-months, {p['ret_month'].nunique()} months "
           f"({p['ret_month'].min()} -> {p['ret_month'].max()})")
     print("\nmean model durations by coupon:")
-    print(p.groupby("coupon")[["krd5","krd10","D_level","D_slope"]].mean().round(3).to_string())
+    _dcols = [c for c in ["krd2","krd5","krd10","D_level","D_slope","D_curve"]
+              if c in p.columns]
+    print(p.groupby("coupon")[_dcols].mean().round(3).to_string())
 
-    print("\n=== VERIFICATION: hedged returns on [level, slope] (want all t ~ 0) ===")
-    print(f"{'cpn':>4} {'n':>4} {'b_lvl':>9} {'t_lvl':>7} {'b_slp':>9} {'t_slp':>7} {'r2':>6}")
+    _hascv = "d_curve" in p.columns
+    print("\n=== VERIFICATION: hedged returns on [level, slope%s] (want all t ~ 0) ==="
+          % (", curve" if _hascv else ""))
+    print(f"{'cpn':>4} {'n':>4} {'b_lvl':>9} {'t_lvl':>7} {'b_slp':>9} {'t_slp':>7}"
+          + (f" {'b_crv':>9} {'t_crv':>7}" if _hascv else "") + f" {'r2':>6}")
     for c, g in p.groupby("coupon"):
         g = g.dropna(subset=["hedged"])
         co, se, r2 = ols(g["hedged"].values,
-                         np.column_stack([np.ones(len(g)), g["d_level"], g["d_slope"]]))
-        print(f"{c:>4} {len(g):>4} {co[1]:>9.5f} {co[1]/se[1]:>7.2f} "
-              f"{co[2]:>9.5f} {co[2]/se[2]:>7.2f} {r2:>6.3f}")
+                         np.column_stack([np.ones(len(g)), g["d_level"], g["d_slope"]]
+                                         + ([g["d_curve"]] if "d_curve" in g.columns else [])))
+        _row = (f"{c:>4} {len(g):>4} {co[1]:>9.5f} {co[1]/se[1]:>7.2f} "
+                f"{co[2]:>9.5f} {co[2]/se[2]:>7.2f}")
+        if _hascv:
+            _row += f" {co[3]:>9.5f} {co[3]/se[3]:>7.2f}"
+        print(_row + f" {r2:>6.3f}")
     print(f"\nSaved: outputs/model_hedge_panel_{tag}.csv")
 
 
@@ -582,10 +612,15 @@ if __name__ == "__main__":
                     choices=["fitted", "seasoned-fit", "pinned-seasoned",
                              "pinned-fixed"],
                     help="terminal S-curve floor specification")
+    ap.add_argument("--shock-source", default="clean",
+                    choices=["clean", "daily"],
+                    help="source for the 5y/10y shock legs. clean: treasury_yields_clean.xlsx (default, reproduces prior runs). daily: month-end aligned treasury_yields.csv, same source as the 2yr leg.")
     args = ap.parse_args()
     FLOOR_MODE = args.floor_mode
     MAP_MODE = args.map_mode
     BUMP_SHAPE = args.bump_shape
+    globals()["SHOCK_SOURCE"] = args.shock_source
+    print("shock source: %s" % SHOCK_SOURCE)
     print("floor mode: %s" % FLOOR_MODE)
     print("map mode:   %s" % MAP_MODE)
     print("bump shape: %s" % (BUMP_SHAPE if BUMP_SHAPE else
