@@ -1479,3 +1479,26 @@ estimate pinned down further before choosing a number, the natural next step is
 an expanding-window PMMS/2yr sensitivity (mirroring the Phase 23 CPR mapping
 design) rather than a single fixed constant, given the regime instability found
 above.
+
+### Two threads not yet followed up (flagged 2026-08-07, not started)
+
+**"1.36 looks mechanical" — his named candidates not individually checked.**
+The 1.36 test performed was the uniform-scalar sweep he explicitly suggested as
+a diagnostic, and it failed (overshoots, wrong scalar for dy2 vs level t-stat).
+But his email named three *specific* candidate mechanisms — the duration
+denominator price (model vs market), bump normalization, or a term correction
+in discounting future MBS cashflows — and only the first was checked (Phase 23:
+market/model price ratio is 0.945-0.960, wrong direction and wrong magnitude to
+explain 1.36). Bump normalization and the discounting term correction remain
+unexamined. If he comes back with one of those two in mind specifically, that
+is separate, not-yet-started work, not a re-read of what's already done.
+
+**Why does PMMS/2yr sensitivity break down pre- vs post-2022?** The regime
+instability (t=0.20 pre-2022, t=2.90 post-2022, no clean single-date break)
+was found and reported as a range, but no economic explanation was tested.
+Candidate: PMMS is a lender-survey rate that may be sticky/administered in
+calm periods and start tracking the front end more closely when curve moves
+are fast and repricing risk becomes urgent — plausible, untested. Worth
+checking whether the instability correlates with realized rate volatility
+(e.g. rolling std of dy2 or dy10) rather than calendar date, which would
+support a vol-regime story over an arbitrary split-sample artifact.
