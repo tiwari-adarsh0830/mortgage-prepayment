@@ -1502,3 +1502,71 @@ are fast and repricing risk becomes urgent — plausible, untested. Worth
 checking whether the instability correlates with realized rate volatility
 (e.g. rolling std of dy2 or dy10) rather than calendar date, which would
 support a vol-regime story over an arbitrary split-sample artifact.
+
+## Phase 25 — 2yr Leg Fixed in Hedge Construction; Level Still Fails at 7/9 (August 8, 2026)
+
+Advisor's Aug 8 reply to the Aug 7 email asked directly whether the hedged
+return subtracts a two-year Treasury position. It didn't, even in the
+tents3 run: `d_level`/`d_slope` in `model_hedge_krd.py` were still built as
+`(dy5+dy10)/2` and `dy10-dy5`, the original two-tent definitions. `D_curve`
+was computed from krd2/krd5/krd10 but never entered the `hedged` formula.
+So the Phase 24 three-factor result was, at the point that mattered, still
+a two-factor hedge with a durations basis (`D_level`, `D_slope`) that
+included krd2 while the shocks it was paired with did not.
+
+Fixed for tents3 only: `d_level = (dy2+dy5+dy10)/3`, `d_slope = dy10-dy2`,
+`hedged` now includes `D_curve*d_curve`. Span (two-tent) path untouched —
+verified byte-identical against the Aug 7 `_span_pinnedfixed.csv` after
+patching (control run before and after every edit).
+
+While tracing shock sources, found `treasury_yields_clean.xlsx` and
+`treasury_yields.csv` disagree by a few bp at matching dates — mean-zero,
+mean-reverting (diff-of-diffs autocorrelation -0.5/-0.6), not a level or
+convention offset; ruled out simple resampling explanations by direct
+test. Added `--shock-source {clean,daily}` to the pricer to isolate this
+from the composition fix. Three arms run, same 99-month panel:
+
+  A: span,   clean source  (control, reproduces Phase 24 exactly)
+  B: span,   daily source  (isolates source effect only)
+  C: tents3, daily source  (composition fix, this session)
+
+|t_lvl|>2 count is 7/9 in all three arms — unchanged. Source swap (A->B)
+moves t_lvl by <0.5 at every coupon; composition fix (B->C) accounts for
+essentially all the improvement, largest at low coupons (2.5: -6.57 to
+-5.15; 3.0: -6.99 to -5.83), fading to near zero by coupon 5.0-6.5.
+Curvature not significant anywhere (|t_crv| < 1, all nine coupons).
+
+Not yet explained: R2 on the hedged return rose under the corrected basis
+at nearly every coupon (2.5: 0.317->0.360; 6.5: 0.030->0.102) rather than
+falling. A hedge that's working better should explain less residual
+variance, not more. Flagged to advisor, not investigated further this
+session.
+
+All three arms' t-stats independently re-derived via raw normal equations
+(`/tmp/verify_final.py`, not committed — reran from scratch next session
+if needed) against the pricer's own `ols()` output before anything went
+to the advisor. Matched exactly.
+
+Verdict sent to advisor: the 2yr omission was real and the fix is
+correctly scoped, but it isn't sufficient — six of nine coupons remain
+significant post-fix. Of his three named candidates for the 1.36 (Aug 6
+email — price denominator, bump normalization, discounting term
+correction), only price-denominator has been tested (Phase 24, ruled
+out). Asked him which of the remaining two to check next rather than
+guessing.
+
+**Open, unchanged from Phase 24:** pre-2013 data investigation deferred
+per advisor's Aug 6 instruction. PMMS/2yr pass-through range (0.4-1.1)
+not needed for now — advisor's Aug 8 reply resolved this by pointing at
+the hedge construction instead.
+
+**New open items:**
+- Bump normalization and discounting term correction — untested, his
+  remaining two candidates for the 1.36.
+- R2-rises-under-correct-hedge anomaly — no working hypothesis yet.
+- clean.xlsx vs daily-file Treasury discrepancy — confirmed negligible
+  for this result (<0.5 t-stat) but source unreconciled; worth resolving
+  independent of the hedge work since it's a standing data-quality gap.
+- `build_hedge_panel.py`'s dy2 out-of-basis control is no longer valid
+  once dy2 is inside the hedge basis (this session's fix) — needs a
+  replacement control (1yr and/or 30yr proposed, not yet built).
