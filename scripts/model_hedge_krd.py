@@ -145,6 +145,9 @@ _CPR_CACHE = {}
 MAP_MODE = "off"
 BUMP_SHAPE = None
 SHOCK_SOURCE = "clean"   # clean | daily
+# PMMS pass-through per bumped tenor (2yr, 5yr, 10yr). (0,0,1) is the
+# original behaviour: only the 10yr bump moves PMMS.
+PMMS_PASSTHROUGH = None  # None -> use pmms_key logic unchanged
 
 
 _FROZEN_FACTOR = {}
@@ -405,10 +408,12 @@ def krd_pair(coupon, par, pmms, model, scaler, a, b, pmms_key='10yr', spanning=F
 
 
 def krd_triple(coupon, par, pmms, model, scaler, a, b, pmms_key='10yr', asof=None):
-    """Three-tent version: returns (P0, K2, K5, K10). The 2yr bump never moves
-    PMMS (decision, not from the advisor's email): PMMS is a 30yr-fixed survey
-    rate tracking the long end, so moving it off a front-end bump would be wrong
-    regardless of keying convention. --pmms-key any still applies to 5yr/10yr."""
+    """Three-tent version: returns (P0, K2, K5, K10).
+
+    By default the 2yr bump never moves PMMS: PMMS is a 30yr-fixed survey rate
+    tracking the long end, so moving it off a front-end bump would be wrong
+    regardless of keying convention. --pmms-key any still applies to 5yr/10yr.
+    --pmms-passthrough overrides all of this with explicit per-tenor weights."""
     note = coupon + GFEE
     z0 = bootstrap_zeros(par)
     p0 = price_path(coupon, extend_cpr(_mapped(cpr_path(note-pmms, model, scaler, a, b), asof, key=(coupon, asof), base=True),
@@ -417,7 +422,9 @@ def krd_triple(coupon, par, pmms, model, scaler, a, b, pmms_key='10yr', asof=Non
     out = {}
     for ten in ('2yr', '5yr', '10yr'):
         w = key_rate_weights3(ten)
-        if ten == '2yr':
+        if PMMS_PASSTHROUGH is not None:
+            dp = h * PMMS_PASSTHROUGH[('2yr', '5yr', '10yr').index(ten)]
+        elif ten == '2yr':
             dp = 0.0
         else:
             dp = h if (pmms_key == 'any' or pmms_key == ten) else 0.0
@@ -565,6 +572,8 @@ def main(pmms_key, spanning=False):
         tag = tag + "_map" + MAP_MODE
     if SHOCK_SOURCE != "clean":
         tag = tag + "_src" + SHOCK_SOURCE
+    if PMMS_PASSTHROUGH is not None:
+        tag = tag + "_pt" + "".join(str(x).replace(".", "") for x in PMMS_PASSTHROUGH)
     p.to_csv(os.path.join(OUT, f"model_hedge_panel_{tag}.csv"), index=False)
 
     print(f"\npanel: {len(p)} coupon-months, {p['ret_month'].nunique()} months "
@@ -615,11 +624,22 @@ if __name__ == "__main__":
     ap.add_argument("--shock-source", default="clean",
                     choices=["clean", "daily"],
                     help="source for the 5y/10y shock legs. clean: treasury_yields_clean.xlsx (default, reproduces prior runs). daily: month-end aligned treasury_yields.csv, same source as the 2yr leg.")
+    ap.add_argument("--pmms-passthrough", default=None,
+                    help="comma-separated PMMS pass-through for the "
+                         "(2yr,5yr,10yr) bumps, e.g. 0,0.3,0.7. Omit for "
+                         "the original (0,0,1) pmms-key behaviour. "
+                         "tents3 only.")
     args = ap.parse_args()
     FLOOR_MODE = args.floor_mode
     MAP_MODE = args.map_mode
     BUMP_SHAPE = args.bump_shape
     globals()["SHOCK_SOURCE"] = args.shock_source
+    if args.pmms_passthrough:
+        _pt = tuple(float(x) for x in args.pmms_passthrough.split(","))
+        if len(_pt) != 3:
+            raise SystemExit("--pmms-passthrough needs exactly 3 values")
+        globals()["PMMS_PASSTHROUGH"] = _pt
+        print("PMMS pass-through: %s" % (_pt,))
     print("shock source: %s" % SHOCK_SOURCE)
     print("floor mode: %s" % FLOOR_MODE)
     print("map mode:   %s" % MAP_MODE)

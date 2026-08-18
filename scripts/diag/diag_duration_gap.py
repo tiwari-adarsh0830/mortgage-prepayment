@@ -92,11 +92,13 @@ def load_dy2(panel):
     dy2 must be the same differencing on the same dates or the out-of-basis test
     compares misaligned series."""
     t = pd.read_csv(os.path.join(DATA, "treasury_yields.csv"), parse_dates=["DATE"])
-    t = t.set_index("DATE")[["2yr", "5yr", "10yr"]].sort_index()
+    t = t.set_index("DATE")[["1yr", "2yr", "5yr", "10yr", "30yr"]].sort_index()
     me = t.resample("ME").last()
+    me["dy1"] = me["1yr"].diff()
     me["dy2"] = me["2yr"].diff()
     me["dy5"] = me["5yr"].diff()
     me["dy10"] = me["10yr"].diff()
+    me["dy30"] = me["30yr"].diff()
 
     p = panel.copy()
     # d_level is the change OVER the return month, so ret_month is the key.
@@ -104,14 +106,18 @@ def load_dy2(panel):
     # keying on ret_month gives 0.994. Verified, not assumed.
     p["key"] = pd.PeriodIndex(p["ret_month"], freq="M")
     me["key"] = me.index.to_period("M")
-    mm = me.reset_index()[["key", "dy2", "dy5", "dy10"]]
+    mm = me.reset_index()[["key", "dy1", "dy2", "dy5", "dy10", "dy30"]]
     out = p.merge(mm, on="key", how="left")
 
     # sanity: the panel's own d_level should reconstruct from dy5/dy10
     chk = out.dropna(subset=["dy5", "dy10", "d_level"])
     if not len(chk):
         raise RuntimeError("no rows survived the Treasury merge -- key mismatch")
-    recon = (chk.dy5 + chk.dy10) / 2.0
+    if "d_curve" in out.columns:
+        recon = (chk.dy2 + chk.dy5 + chk.dy10) / 3.0
+        print("  (three-leg panel detected: d_level checked as (dy2+dy5+dy10)/3)")
+    else:
+        recon = (chk.dy5 + chk.dy10) / 2.0
     err = (recon - chk.d_level).abs()
     corr = float(np.corrcoef(recon, chk.d_level)[0, 1])
     worst = chk.loc[err.idxmax(), "ret_month"]
@@ -140,25 +146,37 @@ def fitted_durations(g, expanding=False, min_months=36):
     coefficients."""
     g = g.sort_values("ret_month")
     y = (g.tba_total_return - g.income).values
-    X = np.column_stack([np.ones(len(g)), g.d_level.values, g.d_slope.values])
+    _cols = [g.d_level.values, g.d_slope.values]
+    _has_curve = "d_curve" in g.columns and not g.d_curve.isna().all()
+    if _has_curve:
+        _cols.append(g.d_curve.values)
+    X = np.column_stack([np.ones(len(g))] + _cols)
 
     if not expanding:
         co, se, r2, _ = ols(y, X)
-        hedged = y + ((-100 * co[1]) * g.d_level.values
-                      + (-100 * co[2]) * g.d_slope.values) / 100.0
+        adj = ((-100 * co[1]) * g.d_level.values
+               + (-100 * co[2]) * g.d_slope.values)
+        if _has_curve:
+            adj = adj + (-100 * co[3]) * g.d_curve.values
+        hedged = y + adj / 100.0
         return -100 * co[1], -100 * co[2], r2, hedged, np.ones(len(g), bool)
 
     DL = np.full(len(g), np.nan)
     DS = np.full(len(g), np.nan)
+    DC = np.full(len(g), np.nan)
     for i in range(len(g)):
         if i < min_months:
             continue
         co, _, _, _ = ols(y[:i], X[:i])
         DL[i], DS[i] = -100 * co[1], -100 * co[2]
+        if _has_curve:
+            DC[i] = -100 * co[3]
     ok = ~np.isnan(DL)
     hedged = np.full(len(g), np.nan)
-    hedged[ok] = y[ok] + (DL[ok] * g.d_level.values[ok]
-                          + DS[ok] * g.d_slope.values[ok]) / 100.0
+    adj = DL[ok] * g.d_level.values[ok] + DS[ok] * g.d_slope.values[ok]
+    if _has_curve:
+        adj = adj + DC[ok] * g.d_curve.values[ok]
+    hedged[ok] = y[ok] + adj / 100.0
     return np.nanmean(DL), np.nanmean(DS), np.nan, hedged, ok
 
 
@@ -169,6 +187,12 @@ def t_on_dy2(vals, dy2, mask):
     X = np.column_stack([np.ones(m.sum()), dy2[m]])
     co, se, _, _ = ols(vals[m], X)
     return co[1] / se[1]
+
+
+def t_on_control(vals, ctrl, mask):
+    """Same test, any control tenor. Kept separate from t_on_dy2 so the
+    original two-instrument path is untouched and reproduces exactly."""
+    return t_on_dy2(vals, ctrl, mask)
 
 
 def main():
@@ -198,10 +222,21 @@ def main():
             "right for an MBS return; the dy2 alignment is still wrong."
             % (_co[1] / _se[1]))
 
+    _three = "d_curve" in p.columns and not p["d_curve"].isna().all()
+    if _three:
+        print("\n  THREE-LEG PANEL: dy2 is INSIDE the fitted basis, so t_dy2_fit")
+        print("  below is orthogonal by construction and proves nothing. Read")
+        print("  t_dy1_fit / t_dy30_fit instead -- those are the out-of-basis tests.")
+        for _a, _b in [("dy1", "dy2"), ("dy30", "dy10")]:
+            _cc = p[[_a, _b]].dropna()
+            print("    corr(%s, %s) = %.3f" % (_a, _b,
+                  float(np.corrcoef(_cc[_a], _cc[_b])[0, 1])))
+        print("  High correlation means the out-of-basis test is weaker than")
+        print("  dy2-vs-{5,10} was; it is not an equally sharp check.")
     print("\n=== fitted vs model durations, same 99-month sample ===")
-    print("%5s %9s %9s %8s %9s %9s %9s %9s"
+    print("%5s %9s %9s %8s %9s %9s %9s %9s %9s %9s"
           % ("cpn", "D_model", "D_fit_IS", "ratio", "D_fit_EW",
-             "t_dy2_non", "t_dy2_mdl", "t_dy2_fit"))
+             "t_dy2_non", "t_dy2_mdl", "t_dy2_fit", "t_dy1_fit", "t_dy30_fit"))
     rows = []
     for c, g in p.groupby("coupon"):
         g = g.dropna(subset=["hedged", "d_level", "d_slope"]).sort_values("ret_month")
@@ -215,13 +250,16 @@ def main():
         t_non = t_on_dy2(unh, dy2, np.ones(len(g), bool))
         t_mdl = t_on_dy2(g.hedged.values, dy2, np.ones(len(g), bool))
         t_fit = t_on_dy2(hedged_ew, dy2, m_ew)
+        t_fit_1  = t_on_control(hedged_ew, g.dy1.values,  m_ew)
+        t_fit_30 = t_on_control(hedged_ew, g.dy30.values, m_ew)
 
-        print("%5.1f %9.3f %9.3f %8.2f %9.3f %9.2f %9.2f %9.2f"
+        print("%5.1f %9.3f %9.3f %8.2f %9.3f %9.2f %9.2f %9.2f %9.2f %9.2f"
               % (c, d_model, dl_is, dl_is / d_model if d_model else np.nan,
-                 dl_ew, t_non, t_mdl, t_fit))
+                 dl_ew, t_non, t_mdl, t_fit, t_fit_1, t_fit_30))
         rows.append(dict(coupon=c, D_model=d_model, D_fit_IS=dl_is,
                          D_fit_EW=dl_ew, ratio=dl_is / d_model if d_model else np.nan,
-                         t_dy2_none=t_non, t_dy2_model=t_mdl, t_dy2_fit=t_fit))
+                         t_dy2_none=t_non, t_dy2_model=t_mdl, t_dy2_fit=t_fit,
+                         t_dy1_fit=t_fit_1, t_dy30_fit=t_fit_30))
 
     r = pd.DataFrame(rows)
     print("\n=== reading ===")
