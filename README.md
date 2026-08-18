@@ -1570,3 +1570,70 @@ the hedge construction instead.
 - `build_hedge_panel.py`'s dy2 out-of-basis control is no longer valid
   once dy2 is inside the hedge basis (this session's fix) — needs a
   replacement control (1yr and/or 30yr proposed, not yet built).
+
+## Phase 26 — Three-Instrument Regression Hedge; Duration Scaling Clears Most of the Residual (August 17, 2026)
+
+Advisor's Aug 16 reply resolved the R2 question (not a puzzle — expected
+under the new normalization), endorsed the treasury fix, and set three
+tasks: rerun the regression hedge for all three instruments, try a
+`(0, 0.3, 0.7)` PMMS pass-through instead of `(0, 0, 1)`, and try
+everything with durations scaled by 1.36.
+
+**Regression hedge, three instruments.** `diag_duration_gap.py` extended
+to fit on level/slope/curve when the panel carries `d_curve`. Because dy2
+is now inside the fitted basis, the dy2 out-of-basis test is orthogonal by
+construction and useless; switched to 1yr and 30yr. Caveat recorded and
+reported: corr(dy1,dy2)=0.892, corr(dy30,dy10)=0.954, so these controls
+partly proxy the fitted legs and the test is weaker than dy2-vs-{5,10}.
+
+The answer splits on fitting method, and both were reported rather than
+one being chosen:
+  - in-sample (full window): residual exposure GONE, all 18 t-stats
+    between -0.60 and -0.09
+  - expanding-window (36mo burn-in): residual exposure REMAINS,
+    t_dy1 significant 7/9, t_dy30 9/9
+
+The in-sample arm is fitted on the returns it is then tested against, so
+the expanding-window arm is the honest one. Verified this is not an
+estimation artifact: burn-in swept 24/36/48/60 months, counts invariant
+(7-8 of 9 and 9 of 9 throughout) while coefficient CV falls 0.309->0.102.
+The durations stabilize and the exposure survives anyway.
+
+**Duration scaling — this is the one that works.** Sum of squared
+out-of-basis t-stats across 18 tests: 370.7 unscaled, 20.3 at the
+advisor's 1.36, minimum 17.4 at 1.33. At 1.36, t_dy30 insignificant at
+all nine coupons and t_dy1 at 7 of 9. Leave-one-out across coupons gives
+1.31-1.34 — stable, unlike the Phase 20 Sharpe argmax. The objective is
+smooth and single-minimum over 1.00-1.60. It does NOT reach zero:
+typical |t| at the optimum is ~1.0, so a small residual persists.
+Applied as a scalar on the model durations inside the hedged return;
+the pricer itself was not rerun with scaled durations.
+
+**`(0, 0.3, 0.7)` pass-through — not the explanation.** New
+`--pmms-passthrough` flag (default None preserves the prior pmms-key
+path; control byte-identical). Reallocates duration across legs
+(krd5 1.398->1.061, krd10 1.228->1.562, krd2 unchanged at 0.726 since
+its weight is still 0) but total D_level is 3.352->3.349 and the scale
+factor stays at 1.34. Modest improvement in residual fit at the optimum
+(17.4 -> 14.5). The reallocation direction is consistent with negative
+convexity — a leg that moves PMMS has its duration offset by faster
+prepayment — but that mechanism was NOT tested and is flagged as a guess.
+
+**Verification.** Curvature leg scale checked independently: the
+`D_curve*d_curve` term is 4.2% of the level term's sd (slope is 19.5%),
+so the /6 in the curvature duration is correctly placed and the leg is
+small for economic reasons, not a scaling bug. All headline figures
+re-derived through normal equations in code that does not import the
+scripts that produced them. Every patch control-run to byte-identical
+reproduction before treatment.
+
+**Open:**
+- Residual does not fully vanish at the optimal scale (~1.0 typical |t|)
+  — unexplained.
+- The 1.33-1.36 scalar itself has no derivation; it is fitted, not
+  mechanical. Root cause of the duration under-sizing still unknown.
+- Out-of-basis controls are correlated with the fitted legs; a genuinely
+  orthogonal control does not exist among Treasury tenors once the basis
+  spans 2-10yr.
+- `build_hedge_panel.py` still uses the two-instrument in-sample hedge
+  and `clean.xlsx` treasury source; not updated this session.
