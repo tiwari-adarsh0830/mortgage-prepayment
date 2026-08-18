@@ -68,6 +68,24 @@ REP = dict(credit_score=740.0, orig_ltv=75.0, current_ltv=70.0,
 
 # ── curve ────────────────────────────────────────────────────────────────────
 def bootstrap_zeros(par, n_months=N_MONTHS):
+    if os.environ.get("USE_BOOTSTRAP_V3") == "1":
+        import sys as _s, os as _o
+        _s.path.insert(0, _o.path.join(_o.path.dirname(__file__), "diag"))
+        from bootstrap_v3 import bootstrap_zeros_v3
+        return bootstrap_zeros_v3(par, n_months)
+    return _bootstrap_zeros_orig(par, n_months)
+
+
+def _bootstrap_zeros_orig(par, n_months=N_MONTHS):
+    if os.environ.get("USE_BOOTSTRAP_V3") == "1":
+        import sys as _s, os as _o
+        _s.path.insert(0, _o.path.join(_o.path.dirname(__file__), "diag"))
+        from bootstrap_v3 import bootstrap_zeros_v3
+        return bootstrap_zeros_v3(par, n_months)
+    return _bootstrap_zeros_orig(par, n_months)
+
+
+def _bootstrap_zeros_orig(par, n_months=N_MONTHS):
     z = {}
     for T, lab in zip(MAT_YEARS, MAT_LABELS):
         if T <= 1.0:
