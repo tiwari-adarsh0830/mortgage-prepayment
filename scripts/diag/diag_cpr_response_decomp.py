@@ -60,6 +60,11 @@ def dur(coupon, par, pmms, model, scaler, a, b, asof, w, resp_model, resp_term):
     return (px[-1] - px[+1]) / (2.0 * p0 * (h / 100.0))
 
 
+# terminal_cpr depends on FLOOR_MODE via scurve_params_asof. It defaults to
+# "fitted" at module level and is only set inside main(), which importing
+# bypasses, so match the panel run (--floor-mode pinned-fixed) explicitly.
+M.FLOOR_MODE = "pinned-fixed"
+print("floor mode: %s" % M.FLOOR_MODE, flush=True)
 print("loading hazard model...", flush=True)
 model, scaler, a, b = M.load_hazard()
 
