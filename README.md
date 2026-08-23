@@ -1921,3 +1921,40 @@ tested; much of that literature also uses swap rather than Treasury shocks.
 - Residual ~1% in the Treasury recovery unexplained.
 - Carried forward: bootstrap_v3 off by default; short-end convention vs
   QuantLib; scalar still fitted full-sample; build_hedge_panel.py unchanged.
+
+### Addendum, same session — two gaps closed after the section above was written
+
+TBA RETURN FORMULA — cleared. The known-duration test built the Treasury
+return from yields and so never touched the FNCL price series or the return
+formula; that limit is now removed. `diag_tba_return_check.py` reproduces the
+panel's stated formula to 1e-17 and compares against the workbook's own
+`Raw_MoM_Returns` sheet: correlation 0.9997-0.9999 at all nine coupons, and
+the mean difference tracks c/12 exactly (22.80bp observed vs 20.83 at coupon
+2.5; 47.30 vs 50.00 at 6.0), i.e. the workbook return is price-only and ours
+is total. Critically the difference does NOT load on the level shock —
+t between -0.13 and -1.18, implied duration error 0.001-0.009 years against a
+~1.9y gap. Carry that is near-constant month to month cannot masquerade as
+duration.
+
+SPREAD CHANNEL — measured, and it predicts the opposite sign. The Phase 28
+test asked whether a spread REGRESSOR absorbs the gap. The prior question is
+what the channel predicts. If dP/P = -D_cash*(d_level + d_spread) and
+d_spread = beta*d_level, then regressing on d_level alone recovers
+D_emp = D_cash*(1+beta).
+
+`diag_spread_channel_sign.py`: beta = -0.4734, t = -5.95, n = 98. The spread
+TIGHTENS as rates rise, so the channel predicts D_emp/D_cash = 0.527. We
+observe 1.35. Stable in sign across halves (0.379, 0.573).
+
+Two consequences. First, the advisor's Aug 23 second hypothesis — that
+empirical durations exceed cashflow durations because spreads move with rates
+— predicts the gap in the OPPOSITE direction on this data, so it cannot be
+the explanation. This also supersedes the "literature note" above: the point
+is now measured here, not read from secondary sources. Second, the unexplained
+residual is LARGER than 1.35 implies, since a well-identified channel should
+be pulling the ratio below one and something is overcoming it.
+
+Caveats: the arithmetic assumes the spread enters the discount rate one for
+one, a first-order framing rather than a derivation; and PMMS is the primary
+mortgage rate, not the TBA's own spread, which is the object that properly
+belongs there. Neither affects the sign.
