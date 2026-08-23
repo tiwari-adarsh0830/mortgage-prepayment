@@ -1774,3 +1774,150 @@ economics.
   version was offered to the advisor and is not built.
 -  still on the two-instrument in-sample hedge and
   the  treasury source.
+
+## Phase 28 — Comparison-Side Search: Machinery Clears, Spread and Roll and Anchoring Do Not (August 23, 2026)
+
+Advisor's Aug 23 reply concluded the error is not in the model but in the
+comparison — return construction, factor scaling, Treasuries — and proposed
+running the machinery on an instrument of known duration, or that the spread
+control is broken and TBA empirical durations genuinely exceed cashflow
+durations because spreads move with rates. All four candidates below came back
+negative. The gap is unchanged at ~1.35 and its cause remains unknown.
+
+### Known-duration test — the machinery is sound
+
+A par Treasury put through the panel's own shocks and the same hedge
+regression recovers its closed-form modified duration: 2yr 0.946, 5yr 0.971,
+10yr 0.983 as fitted/analytic ratios. The shortfall is maturity-dependent and
+was traced to a convention in the test, not the machinery — duration was
+compared at start-of-month maturity against a return on a bond that had aged
+one month. Evaluating duration at the aged maturity gives 0.988 / 0.988 /
+0.993, a spread of 0.005 across tenors against 0.038 before. The residual ~1%
+is not accounted for; candidates are the start-of-month yield versus the
+realised end-of-month return, and convexity, neither tested.
+
+The same harness returns a median 1.349 on the nine coupons. So the regression
+path recovers a known duration and does not recover the TBA one.
+
+Scope limit worth stating: the Treasury return was constructed here from
+yields, so this tests the shock construction and the regression, NOT the FNCL
+price series or the TBA total-return formula. `load_excess_returns()` is not
+on this path at all — it still carries `D_MOD_AVG` and is the legacy Phase
+18-21 route; the 1.33 lives in the panel path.
+
+### Spread control — widens the gap
+
+Adding the PMMS minus 10yr change as a fourth regressor moves the median
+ratio from 1.352 to 1.381, rising at eight of nine coupons (6.5 is the
+exception, falling 1.374 to 1.278). The spread coefficient is negative and
+`corr(d_level, d_spread) = -0.519`, so omitting it biased the level
+coefficient toward zero — the same sign mechanism Phase 22 recorded when the
+spread control made the level t-statistic worse.
+
+Note -0.519 here against Phase 22's -0.601: different statistics, not a
+discrepancy. Phase 22 ran on the span panel where `d_level = (dy5+dy10)/2`
+from clean.xlsx; this is tents3 where `d_level = (dy2+dy5+dy10)/3` from the
+daily file.
+
+### Roll/drop — bounded, and it fails where the gap is largest
+
+The panel's TBA return is `(P_curr + c/12 - P_prev)/P_prev`, which omits the
+drop. Using the June 2026 roll snapshot, the drop would have to swing 12.8x
+its own level per 25bp to supply the missing duration at coupon 2.5 and 9.2x
+at 3.0. At 5.5-6.5 the required multiple is 0.6-0.8, within what a drop can
+do over a cycle — but those are the coupons where the gap is smallest, and
+the gap is flat across coupons while the roll's capacity to explain it varies
+twentyfold. Not the mechanism.
+
+LIMITATION: one snapshot, nine coupons, treated as representative of 99
+months. Bounds plausibility; does not measure the realised roll series.
+
+### PMMS pass-through anchoring — total duration is invariant
+
+Phase 26 tested `(0, 0.3, 0.7)`, which moves weight only between the 5yr and
+10yr legs. Phase 24 had found the 2yr leg structurally excluded (`dp=0`), so
+what a short-end anchor does to the TOTAL was never tested. Two arms,
+`(0.3,0.4,0.3)` and `(0.33,0.34,0.33)`, reprice through the pricer rather
+than rescaling after the fact:
+
+    mean D_level : control 3.3520 | 3.3474 | 3.3475
+    coupon 4.0   : krd2 0.668->0.351, krd10 1.758->2.397
+
+Large reallocation, 0.14% change in the total, and the two arms agree to
+three decimals. The total is insensitive to the split, not merely to one
+split. Direction is consistent with the negative-convexity guess from Phase
+26 (a leg that moves PMMS has its duration offset by faster prepayment) —
+still untested, still a guess.
+
+Control run reproduced `_srcdaily.csv` at md5 ecf4d2d2 before the arms ran.
+
+### Ratio has no shape across coupons
+
+Weighted fits on the per-coupon ratio with standard errors: constant-only
+chi2 = 4.98 on 8 dof, linear t = -1.84, quadratic t = -0.24. The 1.21-1.43
+range is inside estimation error (SEs 0.063 to 0.206, widening toward
+premiums). A single scalar is the right description.
+
+Temporal stability: expanding-window fits give median-over-fits 1.314 and
+last-24-window mean 1.371 against full-sample 1.349. The final expanding
+window equals the full sample exactly (0.00e+00), confirming the loop.
+
+### Two retractions from this session
+
+Both were stated as findings before being tested, and both are withdrawn.
+
+A U-SHAPE IN THE RATIO ACROSS COUPONS. Raised on eyeballing 1.21 at coupon
+5.0 against 1.43 at 3.5. The shape test above says noise. Spearman is blind
+to a U, so Phase 23's -0.367/p=0.33 was never evidence either way — the
+quadratic fit is the right test and it is flat.
+
+A TEMPORAL DRIFT IN THE SCALAR. The expanding-window MEAN is 1.245, which
+was read as the scalar drifting. It is early-window noise: minimum fitted
+ratios run 0.317-1.10 in the short windows. Median and last-24 both sit at
+the full-sample value.
+
+### Trap: the panel's d_level spans FORWARD from info_date
+
+`model_hedge_krd.py` pairs `prev = clean["Date"][i-1]` with `curr = Date[i]`
+and writes `info_date = prev`, `ret_month = curr`, while taking
+`d_level3.iloc[i]`, which is the diff from `prev` to `curr`. So the shock on
+a row spans from that row's `info_date` to the NEXT row's `info_date`.
+Joining external data on `info_date` and differencing in place is off by one
+month.
+
+Confirmed numerically: joining the panel's `d_level` against a rebuilt series
+on the row's own `info_date` gives max |diff| 1.107; joining on the NEXT
+`info_date` gives 9.4e-17.
+
+This cost four wrong calls in one session before the join settled it. A
+misaligned spread produces `corr(d_level, d_spread) = -0.0099` and a delta of
+0.000 — a plausible-looking null. The correctly aligned series gives -0.519
+and +0.029. Assert the window against the panel before using it; do not infer
+alignment from a correlation.
+
+Note also that Phase 22's identity `dy10 = d_level + d_slope/2` holds only on
+the two-tent span panel. On tents3 the mean gap is 0.28pp, so pointing
+`diag_spread_control.py` at a tents3 panel silently produces a wrong spread.
+
+### Literature note, not a test
+
+Secondary sources (MSCI, Salomon's effective-vs-empirical duration work)
+report the standard finding as TBA empirical durations coming in SHORTER than
+model durations, attributed to spreads tightening as rates rise. Ours are
+longer, i.e. the opposite sign to what that channel produces — consistent
+with the spread control widening the gap rather than closing it. Read but not
+tested; much of that literature also uses swap rather than Treasury shocks.
+
+### Open
+
+- Root cause of the ~1.35 under-sizing still unknown. Pricer side exhausted
+  (Phase 27); machinery, spread, roll and anchoring now added.
+- The FNCL price series and the TBA total-return formula are NOT covered by
+  the known-duration test.
+- The broad reading of the advisor's second hypothesis — that empirical
+  duration genuinely exceeds cashflow duration through a spread-response
+  channel the pricer structurally cannot have — is untested. Under it, 1.33
+  is an answer rather than a bug.
+- Residual ~1% in the Treasury recovery unexplained.
+- Carried forward: bootstrap_v3 off by default; short-end convention vs
+  QuantLib; scalar still fitted full-sample; build_hedge_panel.py unchanged.
