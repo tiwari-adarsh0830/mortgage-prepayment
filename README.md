@@ -1637,3 +1637,140 @@ reproduction before treatment.
   spans 2-10yr.
 - `build_hedge_panel.py` still uses the two-instrument in-sample hedge
   and `clean.xlsx` treasury source; not updated this session.
+
+## Phase 27 — Pricer-Side Search Exhausted; Bootstrap Defect Found and Fixed (August 18–20, 2026)
+
+Advisor's remaining two candidates for the 1.36 were tested and both
+ruled out. A separate, genuine bug was found in the curve construction
+along the way, fixed, and validated externally — but it is not the cause
+either. Every test in this phase held CPR fixed unless stated.
+
+**Bump normalization — ruled out.** The three tents each peak at exactly
+1.0 (worked through from the piecewise definitions, not read off the
+weight function) and their key-rate durations sum to a single parallel
+bump at the PRICE level, ratio 0.99991–0.99997 across four curve shapes x
+three coupons x two CPR levels. The prior check in Phase 24 was on the
+weights only; this is the stronger claim, and it holds at CPR=0.12 where
+K10 goes negative at coupon 6.5.
+
+**Discounting term — ruled out, after one invalid attempt.** The first
+test bumped the PAR curve and compared against a closed-form duration.
+That test is worthless and the record should say so: Macaulay equals
+modified only under a parallel ZERO shift, and the bootstrap redistributes
+a par bump according to the curve slope. Its deviations tracked curve
+shape (0.93–1.09) and proved nothing. Redone by bumping the zero curve
+directly, max |ratio-1| = 4.19e-04 across three zero levels x three
+coupons x two CPR levels.
+
+**Bootstrap defect — real, not on his list, not the cause.**
+ does not reprice its own par inputs: feeding a real
+curve in and pricing the par bonds back off the resulting zeros gives
+errors up to 3.34pt at the 20yr node.  interpolates zero
+rates linearly between solved nodes and clamps flat above the last solved
+one, so the ~19 coupon PVs between 10yr and 20yr are priced off a guess
+and the solved long node absorbs the error. Flat synthetic curves hide it
+entirely — linear interpolation of a constant is exact — which is why it
+survived this long.
+
+ (log-DF interpolation) FAILED, 3.34 -> 2.99, and is kept in
+the repo as a documented dead end: it still extrapolates past the node
+being solved, which is the same disease.  solves each node
+by root-find on -ln(DF) so coupons inside the gap price off a forward
+consistent with the node being solved; 1mo/3mo/6mo treated as bills, 1yr+
+solved. Par repricing 2.3e-13 across 299 month-end curves.
+
+Externally validated against QuantLib 1.43: v3 sits within ~1bp past 20yr
+while the original swings +18bp to -11bp on the same curve, sign-flipping
+between the 240 and 360 month nodes. Note the aggregate mean|diff| is
+MISLEADING (1.94 for v3 vs 2.00 for the original) because it is dominated
+by short-end noise; the signal is only visible in the maturity split.
+
+Duration impact measured three ways, all ~1.00: frozen CPR 0.997–0.999,
+independent re-derivation 0.9989–0.9990, live pipeline 0.9983–1.0089 per
+coupon. Legs reallocate (krd2 0.947, krd5 1.027) but the total barely
+moves. v3 is OFF BY DEFAULT behind ; the default path
+is byte-identical (md5 ecf4d2d2) and t_lvl is unchanged. Do not enable it
+in production without asking.
+
+**Short-end convention — open but immaterial.** v3 and the original BOTH
+differ from QuantLib by up to 16bp at months 1–6; the convention question
+is shared and unresolved. Four conventions (simple / disc360 / bond-
+equivalent / continuous) move durations by 0.008%, and the forward-kink
+test at the 6mo/1yr boundary does not discriminate between them
+(0.27–0.32bp for all four).
+
+**CPR response — cannot reach the target.** Terminal S-curve saturation
+was checked first: 18.4% of coupon-months sit above incentive +2.0 where
+ is flat-extrapolated at  and its derivative is exactly
+zero. But saturation is 0.0% at coupons 2.5–4.0, which are the four
+worst-hedged, so it cannot be the explanation. The strong pct_sat vs
+D_level correlation is mechanical — incentive rises with coupon by
+construction and premium coupons prepay fast.
+
+Decomposition on coupons 2.5–4.0 by which segment sees the bumped
+incentive: segments are separable (interaction 0.003–0.012, under 0.3%).
+Prepayment feedback SHORTENS duration by 9–20%, rising with coupon
+(BOTH/NONE 0.9103, 0.8496, 0.8200, 0.8006). This is the wrong direction
+and insufficient in magnitude: durations are ~33% too small and feedback
+makes them smaller, so switching the response off entirely recovers only
+9–20%. At coupon 2.5, production 5.47 vs 6.01 with zero response.
+
+Advisor's Aug 20 request — keep the transformer baseline path but take the
+bump response from the realized S-curve — was run under both readings of
+'apply the change', additive and multiplicative. Duration ratios 0.9868
+and 0.9814. The cause is that the two responses are already close in size:
+per 25bp the model mean over months 1–33 is 0.00802 and the S-curve 0.00824.
+Per coupon the S-curve responds ~1.5x more at 2.5–3.0 and ~0.7–0.8x at
+4.5–5.5, and durations shift accordingly — shorter at the discount end,
+longer in the middle, which is the wrong direction for the coupons needing
+the largest increase. Clip on the grafted path binds on 0.10% of elements.
+
+**Two traps recorded so they are not repeated.**
+
+ and  default at module level and are only set
+inside . Any diagnostic that imports  bypasses
+that and silently runs a different configuration. This corrupted a full
+night of decomposition numbers before it was caught; all diagnostics now
+set  explicitly.
+
+The panel  corresponds to a PARALLEL bump with PMMS moving, not
+ with PMMS on the 10yr leg. A reconstruction using the latter
+came out 0.6–1.0 low at every coupon. Validate any reconstruction against
+the panel values (5.478 4.751 4.252 3.850 3.495 3.110 2.513 1.645 1.110)
+before trusting derived ratios.
+
+**Verification.** Every elimination was re-derived in code that does not
+import  — own tent weights from the piecewise
+definitions, own cashflow recursion, own discounting — and reproduced
+every number. The decomposition BOTH column and the graft run parallel-
+bump baseline agree exactly (5.4686 4.7492 4.2558 3.8557) from separately
+written scripts, and both reproduce the panel D_level to within 0.02 at
+every coupon. Control runs byte-identical before every treatment run.
+
+**State at close.** The pricer-side search is exhausted: price denominator
+(Ph24), pass-through (Ph26), bump normalization, discounting term,
+bootstrap, short-end convention, CPR response. The pricer computes correct
+durations for the cashflows it is given and the cashflows respond
+sensibly. Advisor's Aug 23 reply concludes the error is not in the model
+but in the comparison — return construction, factor scaling, Treasuries —
+and proposes running the machinery on an instrument of known duration
+(a 5yr Treasury should return ~5 years), or that the spread control is
+broken and TBA empirical durations genuinely exceed cashflow durations
+because spreads move with rates. These two point opposite ways: the first
+says the machinery is broken, the second says nothing is and the 1.33 is
+economics.
+
+**Open:**
+- Root cause of the 1.33 under-sizing still unknown; the whole pricer side
+  is now eliminated.
+- Known-duration test on a 5yr Treasury — not built. Must go through the
+  identical  and hedge-regression path, not a
+  parallel reimplementation.
+- Spread control / spreads-move-with-rates hypothesis — untested.
+-  is off by default; enabling it means re-running
+  everything downstream.
+- Short-end convention vs QuantLib (~16bp at months 1–6) unresolved.
+- The 1.33 scalar is still fitted full-sample; the expanding-window
+  version was offered to the advisor and is not built.
+-  still on the two-instrument in-sample hedge and
+  the  treasury source.
