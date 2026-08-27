@@ -1958,3 +1958,128 @@ Caveats: the arithmetic assumes the spread enters the discount rate one for
 one, a first-order framing rather than a derivation; and PMMS is the primary
 mortgage rate, not the TBA's own spread, which is the object that properly
 belongs there. Neither affects the sign.
+
+## Phase 29 — Secondary Market Spread: Sign Flips as Predicted, Gap Narrows but Does Not Close (August 27, 2026)
+
+Phase 28 closed by naming its own limitation: PMMS is the primary mortgage
+rate, not the TBA's own spread. The advisor's Aug 27 reply made that the
+diagnosis — the item discounting the TBA is the secondary market spread, and
+the two move differently. He asked for a secondary series (Urban Institute
+dealer OAS, or Bloomberg current coupon), a regression of the spread change on
+the level shock expecting a large positive beta, and then that spread swapped
+in as the control in place of PMMS − 10yr.
+
+All three were run. The beta comes out positive as predicted and the control
+moves the ratio in the right direction, but it does not close the gap.
+
+### Current coupon from the FNCL price grid
+
+The secondary rate is built as the FNCL coupon that prices at par, interpolated
+each month between the two coupons that BRACKET par. The bracketing is done in
+coupon order, never by sorting on price: FNCL prices are non-monotonic in
+coupon at the premium end — 2018-01 has 6.0 at 111.33 and 6.5 at 109.61 — so a
+price sort scrambles coupon order and corrupts the interpolation.
+
+The current coupon is NOT IDENTIFIED in 26 of 101 months, almost all of them
+2020-01 through 2021-12. In those months every quoted coupon is above par and
+the 2.5/3.0 price slope is flat or inverted, so extrapolating below 2.5 gives
+implied coupons ranging from −8.09 to +22.06 with a standard deviation of 6.20
+on a quantity that should sit near 2%. Those months are DROPPED, not
+extrapolated. The working sample is therefore 69 months and EXCLUDES the QE
+window.
+
+`secondary_spread = current_coupon − 10yr`. Mean level 1.186 against 2.244 for
+PMMS − 10yr on the same months.
+
+### The channel — sign flips, and it is the definition not the sample
+
+`diag_secondary_spread.py`: beta of d_spread on d_level = **+0.3042, t = +6.05,
+n = 69**, against the Phase 28 PMMS result of −0.4734.
+
+The obvious objection is that the sample changed. It did not do the work: PMMS
+re-run on the SAME 69 months gives −0.4354, t = −4.31. corr(d_level, d_spread)
+is +0.5944 for the secondary spread and −0.4658 for PMMS on identical months,
+and corr between the two spread changes is −0.3301. The sign flip is
+attributable to the spread definition.
+
+Implied D_emp/D_cash = 1 + beta = 1.3042, against an observed 1.35 and a
+required +0.35. The advisor's mechanism now predicts the right direction and
+close to the right magnitude.
+
+### The control — 1.349 → 1.197
+
+`verify_secondary_spread_effect.py`, cloned from `verify_spread_effect_v2.py`
+with only the spread series changed:
+
+| control | median ratio3 | median ratio_spr | change |
+|---|---|---|---|
+| PMMS − 10yr (reduced sample) | 1.349 | 1.382 | +0.033 |
+| current coupon − 10yr | 1.349 | **1.197** | **−0.153** |
+
+The PMMS arm reproduces the Phase 28 result (1.352 → 1.381) on the reduced
+sample, so the comparison is like-for-like. The t on the spread regressor runs
+−8.26 to −4.08 at coupons 2.5 through 5.5, against roughly −2 to 0 for PMMS.
+
+### Verification
+
+- ASSERT 1 kept verbatim from v2: d_level rebuilt from the two window
+  endpoints matches the panel column to 9.4e-17, so the spread is measured
+  over the same forward window as d_level.
+- ASSERT 2 could NOT be carried over. v2 checked start-of-window PMMS against
+  the panel's own `pmms` column; the secondary spread has no panel counterpart,
+  so there is nothing to assert against. Replaced by a coverage guard, which is
+  a weaker guarantee and is labelled as such in the script.
+- Current coupon re-derived by a SECOND construction — quadratic through the
+  three coupons nearest par, solved for price = 100 — giving beta +0.3107
+  (t +6.16) and ratio 1.193. Max disagreement with the bracketing method is
+  2.8bp, mean 0.8bp, corr 0.999983, identical 75-month coverage.
+- Leave-one-coupon-out: change ranges −0.150 to −0.160 across all nine drops.
+  Mean instead of median gives −0.148. Excluding 6.0/6.5 gives 1.346 → 1.188.
+- Input file structure checked directly: 103 rows = title row + header row +
+  101 months, no all-NaN rows, no unparseable dates, coupon labels read from
+  the header and spot-checked against raw values.
+
+### What does NOT work
+
+**It does not close to 1.0.** 1.197 leaves roughly 60% of the excess standing.
+The advisor's expectation was that this "should finally close the issue"; it
+does not.
+
+**It fails where the gap is worst.** At coupons 6.0 and 6.5 the ratio is 1.428
+and 1.856 and the spread t is −1.81 and −0.55 — the control does essentially
+nothing there. This is the SECOND independent test to fail at the premium
+coupons after the Phase 28 roll bound, which also could not reach them. Two
+tests failing in the same place is a pattern, not a coincidence, and it
+suggests the premium residual is a different mechanism.
+
+**Pre-2020 the channel is not identified.** beta +0.0347, t +0.48, n 21,
+95% CI [−0.106, +0.175], against 2022+ beta +0.3385, t +5.55, CI
+[+0.219, +0.458]. The CIs do not overlap, but sd(d_level) is 0.1621 pre-2020
+against 0.3102 after 2022 — rates barely moved. This is a low-variation period
+rather than a demonstrated regime break, and should not be written up as
+"the channel is post-2022 only."
+
+**Circularity caveat.** With beta = +0.30 measured against the same d_level,
+a controlled ratio near 1.35/1.30 is close to what the arithmetic already
+implies. The control test is not fully independent evidence of the channel.
+
+### Repo anomaly — shock-source robustness arm could not be run
+
+`outputs/model_hedge_panel_10_tents3_pinnedfixed_srcdaily.csv` is
+BYTE-IDENTICAL to the base panel (both md5 `ecf4d2d2`), so re-running the
+result on the alternative Treasury source tests nothing. The flag itself works:
+the span pair (`27dc2d07` vs `7b1d9af8`) genuinely differs, and the two
+`srcdaily_pt*` variants from the same Aug 23 session have distinct md5s. No
+committed sbatch combines tents3 with daily shocks —
+`run_hedge_srcB.sbatch` passes `--spanning`, not `--bump-shape tents3`. That
+file was hand-launched and dropped `--shock-source daily`. Regenerating it is
+open work; until then no source-robustness claim should be made for tents3.
+
+### Scripts
+
+- `scripts/diag/diag_secondary_spread.py` — builds the current coupon and
+  measures the channel; clone of `diag_spread_channel_sign.py` with the spread
+  series swapped.
+- `scripts/diag/verify_secondary_spread_effect.py` — the control test; clone of
+  `verify_spread_effect_v2.py`, runs both spread definitions on the same
+  reduced sample.
