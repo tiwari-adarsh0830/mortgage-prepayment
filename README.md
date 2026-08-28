@@ -2083,3 +2083,96 @@ open work; until then no source-robustness claim should be made for tents3.
 - `scripts/diag/verify_secondary_spread_effect.py` — the control test; clone of
   `verify_spread_effect_v2.py`, runs both spread definitions on the same
   reduced sample.
+
+## Known Defect — Prepayment Label Column (found August 28, 2026)
+
+Found while starting the historical buildout. The hazard model's training
+label has been read from the wrong column in both sequence builders. Recorded
+here rather than as a Phase because it is a pipeline defect, not a step in the
+duration investigation.
+
+### What is wrong
+
+Both builders map the label the same way — `prepare_sequences_rolling.py` at
+line 123 and `prepare_sequences_extended.py` at line 106 both use
+`index('extra_13') + 1` for `zero_balance_code_actual`, then set `prepaid`
+from `== 1.0` on it. But `extra_13` is usecols 106 (awk field 107) and is not
+the zero-balance code. The zero-balance code is usecols 43 (awk field 44).
+
+### Evidence
+
+2013Q1, full file, censored at the cutoff exactly as the rolling builder does
+it (MMYYYY converted to YYYYMM before any comparison):
+
+| cutoff | loans | zero_balance_code == 01 | extra_13 == 1 |
+|---|---|---|---|
+| Dec 2018 | 681,364 | 236,823 (34.8%) | 0 (0.00%) |
+| Dec 2020 | 681,364 | 354,363 (52.0%) | 3,421 (0.50%) |
+| Dec 2022 | 681,364 | 459,279 (67.4%) | 6,791 (1.00%) |
+
+Censoring affects both columns identically, so it does not explain the gap.
+
+`extra_13` is not an under-inclusive subset of true prepayments either. On
+2016Q1 at cutoff 202212, of the 7,940 loans it flags only 2,681 (34%) are also
+`zero_balance_code == 01`. Mean borrower credit score is 751.7 for the
+population, 751.5 for true prepayments, and 723.1 for `extra_13` loans, so
+true prepayments look like the population while `extra_13` selects roughly 28
+points lower.
+
+Existing artefacts are consistent with this: rolling cutoffs 2020 through 2023
+have label rates 0.0090 / 0.0147 / 0.0155 / 0.0166, and `sequences_extended`
+0.0254. Rebuilding cutoff_2020 with the correct column gives 52.15% on 2013Q1
+and 53.85% on 2013Q2.
+
+What `extra_13` actually is remains unidentified. It is systematic — roughly
+7,000 to 8,000 loans per vintage regardless of vintage size, co-occurring with
+C/7/P/D codes in the adjacent field. It should not be named without evidence.
+
+### Downstream signature — consistent, not demonstrated
+
+`outputs/forecast_vs_realized_cpr_gfee050.csv`, 2020 onward, binned by refi
+incentive, forecast divided by realized:
+
+| incentive | ratio |
+|---|---|
+| -2.5 to -0.5 | 0.86 to 0.95 |
+| -0.5 to +0.5 | 0.95 to 0.98 |
+| +0.5 to +1.5 | 0.70, 0.60 |
+| +1.5 to +2.5 | 0.64, 0.67 |
+
+The model captures about 60% of realized CPR precisely where refinancing
+happens, and tracks well where it does not. That is a shape distortion rather
+than a level shift, so no single Platt scalar repairs it. It matches the
+earlier finding that the model peaks 0.5 to 1.25 incentive points below where
+realized loans respond, and is consistent with the credit-score skew, since
+lower-score borrowers refinance less readily at a given incentive.
+
+This is a consistent signature, NOT a demonstrated causal link. The test is a
+retrain on corrected labels, which has not yet been run.
+
+### Scope
+
+Affected: the training target in both builders, therefore the production model
+and every rolling cutoff.
+
+Not affected: realized CPR, which `realized_cpr_v6_upb.py` derives from UPB
+disappearance without touching this column; the DER regression's realized leg;
+and the Phase 29 duration and spread work, which uses TBA prices and Treasury
+yields only.
+
+### Trap for anyone fixing this
+
+Do not swap in a name lookup. `_ALL_COLS` holds 109 names for 113 fields and
+drifts, so `_ALL_COLS.index('zero_balance_code') + 1` returns usecols 42,
+which is not the verified column. Hardcode 43 with a comment. All other mapped
+columns were checked against 2018Q1 values and the features are correct — rate
+4.250, loan_age 0/1/2, credit score 791, origination date 012018 — so only the
+label is affected.
+
+### Status
+
+`scripts/prepare_sequences_rolling_zbc.py` is a copy with the one-line label
+fix, writing to `data/sequences_rolling/cutoff_{year}_zbc/`. A cutoff-2020
+rebuild is running at `--sample_frac 0.3`, which subsets unique loan IDs at
+discovery and so does not affect the label logic. The retrain and the
+forecast comparison have not yet been run.
