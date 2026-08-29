@@ -284,7 +284,25 @@ def load_vintage_filtered(
         (df['original_home_value'] * df['price_appreciation']).replace(0, np.nan)
     ) * 100
 
-    df['loan_age_months'] = df['loan_age'].astype(float)
+    # LOAN AGE -- derived from origination, NOT read from the file's loan_age.
+    # Fannie leaves loan_age BLANK on the payoff row (verified: 71,559 of
+    # 71,559 zbc==1 rows in 2015Q1 have it null). Since loan_age_months is in
+    # FEATURE_COLS, the dropna below then deleted 100% of prepayment rows,
+    # leaving prepay_timestep all -1 while the loan-level label (computed
+    # before the dropna) survived. Same root cause as the age-keyed realized
+    # CPR bug.
+    # Offset: the file's loan_age runs one month behind months-elapsed-since
+    # origination (382,207 of ~400k non-null rows at derived-minus-field == 1).
+    # A ~4.4% tail sits at 0/2/6/9, most likely first-payment-date variation
+    # (Fannie counts from when interest begins accruing, not the note date) --
+    # not investigated further; immaterial at sequence granularity.
+    _orig = pd.to_numeric(df['origination_date'], errors='coerce').map(
+        mmyyyy_to_yyyymm, na_action='ignore')
+    df['loan_age_months'] = (
+        (df['yyyymm'] // 100 - _orig // 100) * 12
+        + (df['yyyymm'] % 100 - _orig % 100)
+        - 1
+    ).clip(lower=0).astype(float)  # clip: reporting month == origination gives -1
     df['dti']             = pd.to_numeric(df['dti'], errors='coerce')
 
     # ── FIXED categorical encodings ───────────────────────────────────────────

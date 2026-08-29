@@ -162,10 +162,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--cutoff_year', type=int, required=True)
     parser.add_argument('--n_epochs',    type=int, default=N_EPOCHS)
+    parser.add_argument('--label_suffix', type=str, default='',
+                         help="e.g. '_zbc' to read/write a corrected-label "
+                              "run without touching the original cutoff dir")
     args = parser.parse_args()
 
-    SEQ_DIR = os.path.join(BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}')
-    OUT_DIR = os.path.join(BASE, f'outputs/rolling/cutoff_{args.cutoff_year}')
+    SEQ_DIR = os.path.join(BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}{args.label_suffix}')
+    OUT_DIR = os.path.join(BASE, f'outputs/rolling/cutoff_{args.cutoff_year}{args.label_suffix}')
     os.makedirs(OUT_DIR, exist_ok=True)
 
     print(f'Device: {DEVICE}  |  cutoff: {args.cutoff_year}', flush=True)

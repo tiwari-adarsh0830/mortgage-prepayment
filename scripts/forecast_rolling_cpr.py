@@ -75,7 +75,12 @@ _RAW_COL_MAP = dict(sorted({
     _ALL_COLS.index('loan_id') + 1:                  'loan_id',
     _ALL_COLS.index('monthly_reporting_period') + 1: 'monthly_reporting_period',
     _ALL_COLS.index('original_interest_rate') + 1:   'original_interest_rate',
-    _ALL_COLS.index('extra_13') + 1:                 'zero_balance_code_actual',
+    # LABEL COLUMN -- hardcoded, do NOT switch to a name lookup.
+    # extra_13 (usecols 106) is NOT the zero-balance code -- verified
+    # against raw field values across 2000Q1/2012Q4/2018Q1 (see
+    # prepare_sequences_rolling_zbc.py comment for the same finding).
+    # The real zero-balance code is usecols 43.
+    43:                                              'zero_balance_code_actual',
 }.items()))
 
 ALL_VINTAGES = [
@@ -123,8 +128,8 @@ class PrepaymentTransformer(nn.Module):
         return self.classifier(out).squeeze(-1)
 
 
-def load_model(cutoff_year: int) -> PrepaymentTransformer:
-    path = os.path.join(BASE, f'outputs/rolling/cutoff_{cutoff_year}/hazard_best.pt')
+def load_model(cutoff_year: int, label_suffix: str = '') -> PrepaymentTransformer:
+    path = os.path.join(BASE, f'outputs/rolling/cutoff_{cutoff_year}{label_suffix}/hazard_best.pt')
     ckpt = torch.load(path, map_location=DEVICE)
     cfg  = ckpt.get('config', {})
     m = PrepaymentTransformer(
@@ -140,8 +145,8 @@ def load_model(cutoff_year: int) -> PrepaymentTransformer:
 
 
 # ── Step 1: inference on prep TEST sequences (mmap, GPU, vectorized) ──────────
-def infer_test_set(cutoff_year: int, model, batch_size: int = 8192):
-    seq_dir = os.path.join(BASE, f'data/sequences_rolling/cutoff_{cutoff_year}')
+def infer_test_set(cutoff_year: int, model, batch_size: int = 8192, label_suffix: str = ''):
+    seq_dir = os.path.join(BASE, f'data/sequences_rolling/cutoff_{cutoff_year}{label_suffix}')
     seqs  = np.load(os.path.join(seq_dir, 'test_seq.npy'),       mmap_mode='r')
     masks = np.load(os.path.join(seq_dir, 'test_mask.npy'),      mmap_mode='r')
     ids   = np.load(os.path.join(seq_dir, 'test_loan_ids.npy'),  allow_pickle=True)
@@ -265,19 +270,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--cutoff_year', type=int, required=True)
     ap.add_argument('--batch_size',  type=int, default=8192)
+    ap.add_argument('--label_suffix', type=str, default='',
+                     help="e.g. '_zbc' to use a corrected-label model/sequences "
+                          "without touching the original cutoff dir")
     args = ap.parse_args()
 
-    out_dir  = os.path.join(BASE, f'outputs/rolling/cutoff_{args.cutoff_year}')
+    out_dir  = os.path.join(BASE, f'outputs/rolling/cutoff_{args.cutoff_year}{args.label_suffix}')
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, 'rolling_cpr_forecast.csv')
 
-    print(f'=== Rolling forecast cutoff={args.cutoff_year} '
+    print(f'=== Rolling forecast cutoff={args.cutoff_year}{args.label_suffix} '
           f'→ FY{args.cutoff_year+1} | device={DEVICE} ===', flush=True)
 
-    model = load_model(args.cutoff_year)
+    model = load_model(args.cutoff_year, args.label_suffix)
 
     print('\n[1/3] Inference on test sequences...', flush=True)
-    loan_ids, h_vals = infer_test_set(args.cutoff_year, model, args.batch_size)
+    loan_ids, h_vals = infer_test_set(args.cutoff_year, model, args.batch_size, args.label_suffix)
 
     test_id_set = set(loan_ids.tolist())
 
