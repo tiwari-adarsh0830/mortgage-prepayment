@@ -335,7 +335,8 @@ else at median:
 - Calendar-truncated, expanding-window prep per cutoff year; per-cutoff scaler + Platt calibration.
 - Train through Dec Y on GPU array; forecast Jan–Dec Y+1 CPR vs realized per coupon.
 
-### Key finding — the t→t+1 design only has signal from cutoff_2020 onward
+### ~~Key finding — the t→t+1 design only has signal from cutoff_2020 onward~~ (RETRACTED 2026-08-29)
+**This finding was an artifact of reading the wrong column. See "Label column defect" below.**
 Calendar-censoring at any cutoff ≤ Dec 2019 yields a training set with 0.00% prepay events.
 Quantified: cutoff_2019 across 13.9M loans → 0.00% prepay. Every prepayment in the 2013–2023
 panel occurs in the 2020–21 refi boom. This is the same regime-concentration result from the
@@ -354,14 +355,19 @@ June 17 analysis, now measured at cutoff level. Usable cutoffs:
 - Pass-2 scaler speedup: sampled fit (50k train rows/vintage) replaces full re-read; ~2hr → ~5min.
 
 ### Diagnostics added
-`scripts/diag_zbc_column.py`, `scripts/diag_prepay_vanish.py` — confirmed zero_balance_code is
+~~`scripts/diag_zbc_column.py`, `scripts/diag_prepay_vanish.py` — confirmed zero_balance_code is
 at col 106 across all vintages and isolated the 0% prepay to the cutoff filter (genuine
-regime concentration, not a column/label bug).
+regime concentration, not a column/label bug).~~
+
+**RETRACTED 2026-08-29.** Both diagnostics read col 106 themselves, so neither could detect
+the error. `diag_zbc_column.py`'s own docstring in fact states the opposite of what this
+line claims. Col 106 is Alternative Delinquency Resolution Count; the zero-balance code is
+usecols 43. See "Label column defect" below.
 
 ## Phase 16 (cont.) — Rolling forecast completion + pipeline hardening (June 21–22, 2026)
 
 Recovered and completed the rolling t→t+1 pipeline after a series of SLURM/memory issues. Key fixes:
-- **cutoff ≤ 2019 has zero prepay signal** (confirmed: cutoff_2019 = 13.9M loans, 0.00% prepay; all prepayments are in the 2020–21 boom). Rolling estimation runs cutoffs 2020–2021: cutoff_2020 (0.90% prepay) → forecast 2021; cutoff_2021 (1.47%) → forecast 2022.
+- ~~**cutoff ≤ 2019 has zero prepay signal** (confirmed: cutoff_2019 = 13.9M loans, 0.00% prepay; all prepayments are in the 2020–21 boom).~~ **RETRACTED 2026-08-29 — artifact of the label column defect; col 106 is only populated from July 2020, so every pre-2020 cutoff necessarily read 0.00%. Corrected, cutoff_2018 = 23.31%.** Rolling estimation runs cutoffs 2020–2021: cutoff_2020 (0.90% prepay) → forecast 2021; cutoff_2021 (1.47%) → forecast 2022.
 - **Trained AUCs**: cutoff_2020 = 0.7006, cutoff_2021 = 0.7159 (below production 0.7999). Likely depressed by the first-33-month window vs full-cutoff-window label mismatch in the eval set — the model trains on in-window-33 positives but eval labels count any in-window prepay. Forecast-vs-realized CPR is the primary metric, not AUC.
 - **Pipeline hardening**: (1) resume guards skip completed passes (loan-IDs, scaler, train/test sequence shards) so timed-out jobs restart where they stopped; (2) single-read prep — each vintage read once, train+test built together, per-vintage shard checkpoints (was 2× full reads, ~6h → ~3h); (3) forecast load_panel pre-filters vintages by origination window (skips files that can't contribute), and writes CPR output incrementally per month to avoid end-of-run OOM.
 
@@ -2176,3 +2182,64 @@ fix, writing to `data/sequences_rolling/cutoff_{year}_zbc/`. A cutoff-2020
 rebuild is running at `--sample_frac 0.3`, which subsets unique loan IDs at
 discovery and so does not affect the label logic. The retrain and the
 forecast comparison have not yet been run.
+
+## Label column defect (Aug 29, 2026) — supersedes the Phase 16 "no signal before 2020" finding
+
+**What was wrong.** Both sequence builders (`prepare_sequences_rolling.py` line 123,
+`prepare_sequences_extended.py` line 106) and the realized leg of
+`forecast_rolling_cpr.py` read the prepayment label from `_ALL_COLS.index('extra_13')+1`
+= usecols 106. That is not the zero-balance code.
+
+**What col 106 actually is.** Field position 107 in the vendor's published file layout is
+Alternative Delinquency Resolution Count. Verified in data: every non-empty value
+co-occurs with P/C/D/7 in field 106 (Alternative Delinquency Resolution), and the dominant
+pair is `1|C` — one COVID-19 payment deferral — at 546,498 rows in 2018Q1. The counts run
+1, 2, 3. So the models were trained to predict how many payment deferrals a loan received.
+
+**The correct column.** Field position 44 = usecols 43, code 01 = Prepaid. Confirmed
+against the published layout and by direct read across 2000Q1 / 2012Q4 / 2018Q1.
+Hardcode 43 — do NOT use a name lookup: `_ALL_COLS` holds 109 names for 113 fields and
+`index('zero_balance_code')+1` returns 42.
+
+**Why this produced the false "no signal before 2020" result.** Field 107 is only populated
+from the July 2020 activity period. It does not exist in earlier windows, so every pre-2020
+cutoff necessarily measured 0.00% prepay. That was read as regime concentration.
+
+Corrected, cutoff_2018 gives **23.31%** pooled prepay across 1,178,894 loans, per-vintage
+35.40% (2015Q1) declining monotonically to 0.19% (2018Q4) — the right shape for a
+cumulative ever-prepaid-by-cutoff label. Corroborated by `realized_cpr_v6_upb`, which
+derives payoff from UPB disappearance and never reads this column: annual CPR
+6.2 / 12.3 / 15.5 / 9.3 / 7.8 / 13.3% for 2014–2019.
+
+**Second defect, found while fixing the first.** `loan_age` is blank on every payoff row
+(71,559 of 71,559 zbc==1 rows in 2015Q1). Since `loan_age_months` is in `FEATURE_COLS`,
+the `dropna` in `load_vintage_filtered` deleted 100% of prepayment rows, leaving
+`prepay_timestep` all -1 while the loan-level label — computed before the dropna —
+survived. Same root cause as the Aug 5 age-keyed realized CPR bug. `loan_age_months` is
+now derived from origination date minus a one-month offset (measured: 382,207 of ~400k
+non-null rows at derived-minus-field == 1; a ~4.4% tail sits at 0/2/6/9), clipped at 0.
+
+**Also corrected.** `zero_balance_code` at usecols 43 IS a one-time stamp (71,559 loans,
+min/median/max rows per loan all 1), so `.min()` in `build_sequences` is the right reducer.
+This supersedes the June 26 note that "col 106 persists for many months post-payoff" —
+true of the deferral counter, not of field 44.
+
+**Scope.** Affects the training target in both builders, the production model, all rolling
+cutoffs, and the realized leg every forecast-vs-realized comparison was scored against.
+Does NOT affect `realized_cpr_v6_upb.py`, the DER realized leg, the pre-2013 event count
+table (`count_prepay_events_pre2013.py` already reads col 43), or Phase 29.
+
+**Retrain on corrected labels.** cutoff_2020: AUC 0.5966, Platt a=2.4245, b=-2.4348.
+Weak, and NOT comparable to the prior 0.7006 — that number measured deferral prediction,
+a different and easier task. These Platt params are a third calibration and must not be
+mixed with the OAS loan-level (0.4934 / -4.840) or cohort-CPR forecast (0.4559 / -3.1376)
+sets.
+
+**Open design question — the 33-month window.** 242,289 of 571,561 prepaid loans at
+cutoff_2020 prepay outside the 33-month sequence window and are correctly treated as
+censored non-events (58% of positives placeable at cutoff_2020, 69.5% at cutoff_2018).
+The sampler draws its target from `prepay_t`, not from the label array, so this is proper
+discrete-time censoring rather than mislabeling. But it means the model estimates
+early-life prepayment hazard only. The window was flagged as an open question in June and
+held at 33 to keep an old-vs-new model comparison clean; that rationale no longer applies.
+Not yet resolved.
