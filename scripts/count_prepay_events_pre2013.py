@@ -1,5 +1,12 @@
 """
-Prepayment-event counts per vintage-quarter x coupon cell, 2000Q1-2012Q4.
+Prepayment-event counts per vintage-quarter x coupon cell.
+Input files are the 2000Q1-2012Q4 acquisition quarters, but vintage_quarter
+is derived from each loan's origination_date (col 13), so the output spans
+1999Q1-2012Q4: the early files carry loans originated shortly before
+acquisition (2000Q1 is 5.3M rows originated 1999 vs 3.9M originated 2000;
+the 1999 share decays to 374 rows by 2005Q1). 55 of 729 output cells are
+pre-2000, covering 159,981 loans. These are real originations but 1999 is
+survivor-selected -- only loans acquired 2000Q1 or later appear.
 
 Needed before the historical sample can be drawn: the spec targets a number
 of prepayment EVENTS per cell (roughly 1-5k, floor a few hundred, 2-4M loans
