@@ -60,7 +60,8 @@ ALL_VINTAGES = [
     '2023Q1',
 ]
 
-MAX_SEQ_LEN  = 33
+MAX_SEQ_LEN  = 33   # default; override per-run with --max_seq_len
+_DEFAULT_SEQ_LEN = 33   # frozen reference — MAX_SEQ_LEN is rebound at runtime
 N_FEATURES   = 9
 FEATURE_COLS = [
     'refi_incentive',       # [0] original_rate - PMMS (time-varying)
@@ -381,10 +382,16 @@ def main():
                         help='Train through December of this year (e.g. 2018)')
     parser.add_argument('--sample_frac', type=float, default=1.0,
                         help='Loan subsampling fraction for pass 1 (default=1.0)')
+    parser.add_argument('--max_seq_len', type=int, default=_DEFAULT_SEQ_LEN,
+                        help='Months of history per loan (default=33). '
+                             'Non-default values append _L{n} to the output dir.')
     args = parser.parse_args()
 
+    global MAX_SEQ_LEN
+    MAX_SEQ_LEN = args.max_seq_len
+
     cutoff_ym = dec_yyyymm(args.cutoff_year)     # e.g. 201812
-    SAVE_DIR  = os.path.join(BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}_zbc')
+    SAVE_DIR  = os.path.join(BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}_zbc' + ('' if args.max_seq_len == _DEFAULT_SEQ_LEN else f'_L{args.max_seq_len}'))
     os.makedirs(SAVE_DIR, exist_ok=True)
 
     print(f'Rolling builder | cutoff = Dec {args.cutoff_year} (YYYYMM={cutoff_ym})', flush=True)

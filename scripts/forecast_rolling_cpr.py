@@ -136,6 +136,7 @@ def load_model(cutoff_year: int, label_suffix: str = '') -> PrepaymentTransforme
         input_dim=cfg.get('input_dim', N_FEATURES), d_model=cfg.get('d_model', 64),
         n_heads=cfg.get('n_heads', 4), n_layers=cfg.get('n_layers', 2),
         dim_ff=cfg.get('dim_ff', 256), dropout=cfg.get('dropout', 0.1),
+        max_seq=cfg.get('max_seq', MAX_SEQ),
     ).to(DEVICE)
     m.load_state_dict(ckpt['model_state'])
     m.eval()
@@ -242,7 +243,44 @@ def read_coupon_and_realized(cutoff_year: int, test_id_set: set):
 
 
 # ── Step 3: aggregate to coupon-level CPR ────────────────────────────────────
-def aggregate(loan_ids, h_vals, coupon_map, active_set, prepaid_set):
+def prior_shift_offset(seq_dir: str, seed: int = 0) -> float:
+    """Logit offset undoing the training sampler's oversampling of prepayments.
+
+    HazardSampler draws half its loans from prepaid_idx, then picks ONE timestep
+    uniformly per loan and labels it (t == prepay_t). Most draws in the positive
+    half therefore land on non-event timesteps, so the effective positive rate is
+    well below 0.5 and must be measured, not assumed.
+
+    Returns log-odds(p_true) - log-odds(p_train), where p_true is the empirical
+    per-person-month hazard on the same training arrays. No free parameters and
+    nothing fitted to realized CPR -- this undoes a known sampling distortion, it
+    does not fit the forecast to its target.
+    """
+    mask = np.asarray(np.load(os.path.join(seq_dir, 'train_mask.npy'), mmap_mode='r'))
+    pt   = np.load(os.path.join(seq_dir, 'train_prepay_timestep.npy'))
+    L     = mask.sum(axis=1).astype(np.int32)
+    max_t = np.where(pt >= 0, pt, L - 1).astype(np.int32)
+    valid = np.where(max_t >= 0)[0]
+    prep  = np.where(pt >= 0)[0]
+
+    rng = np.random.default_rng(seed)
+    B   = 2_000_000
+    li  = np.concatenate([rng.choice(prep, B // 2), rng.choice(valid, B // 2)])
+    mt  = max_t[li]
+    ts  = np.clip((rng.random(len(li)) * (mt + 1)).astype(np.int32), 0, mt)
+    p_train = float((ts == pt[li]).mean())
+
+    p_true = float((pt >= 0).sum() / L.sum())
+
+    assert 0 < p_true < p_train < 1, f'p_true={p_true} p_train={p_train}'
+    off = np.log(p_true / (1 - p_true)) - np.log(p_train / (1 - p_train))
+    print(f'  prior shift: p_train={p_train:.5f} p_true={p_true:.5f} '
+          f'offset={off:+.4f}', flush=True)
+    return off
+
+
+def aggregate(loan_ids, h_vals, coupon_map, active_set, prepaid_set,
+              logit_offset: float = 0.0):
     df = pd.DataFrame({'loan_id': loan_ids, 'h_t': h_vals})
     # restrict to loans active in the forecast year
     df = df[df['loan_id'].isin(active_set)].copy()
@@ -251,7 +289,11 @@ def aggregate(loan_ids, h_vals, coupon_map, active_set, prepaid_set):
     df['coupon']    = ((df['note_rate'] - 0.5) * 2).round() / 2
     df['realized']  = df['loan_id'].isin(prepaid_set).astype(int)
     # per-loan annual prepay prob from monthly hazard
-    df['annual_pp'] = 1.0 - (1.0 - df['h_t'].clip(0, 1 - 1e-7)) ** 12
+    _h = df['h_t'].clip(1e-7, 1 - 1e-7)
+    if logit_offset != 0.0:
+        _h = 1.0 / (1.0 + np.exp(-(np.log(_h / (1 - _h)) + logit_offset)))
+    df['h_adj']     = _h
+    df['annual_pp'] = 1.0 - (1.0 - _h.clip(0, 1 - 1e-7)) ** 12
 
     rows = []
     for coupon, g in df.groupby('coupon'):
@@ -270,6 +312,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--cutoff_year', type=int, required=True)
     ap.add_argument('--batch_size',  type=int, default=8192)
+    ap.add_argument('--no_prior_shift', action='store_true',
+                    help='Disable the sampler prior-shift correction '
+                         '(reproduces the pre-2026-08-30 uncorrected path).')
     ap.add_argument('--label_suffix', type=str, default='',
                      help="e.g. '_zbc' to use a corrected-label model/sequences "
                           "without touching the original cutoff dir")
@@ -294,7 +339,12 @@ def main():
         args.cutoff_year, test_id_set)
 
     print('\n[3/3] Aggregating to coupon-level CPR...', flush=True)
-    result = aggregate(loan_ids, h_vals, coupon_map, active_set, prepaid_set)
+    seq_dir = os.path.join(
+        BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}{args.label_suffix}')
+    off = 0.0 if args.no_prior_shift else prior_shift_offset(seq_dir)
+    result = aggregate(loan_ids, h_vals, coupon_map, active_set,
+                       prepaid_set, logit_offset=off)
+    result['logit_offset']  = off
     result['cutoff_year']   = args.cutoff_year
     result['forecast_year'] = args.cutoff_year + 1
     result.to_csv(out_path, index=False)

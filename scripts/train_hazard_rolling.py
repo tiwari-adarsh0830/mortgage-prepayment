@@ -34,6 +34,7 @@ WEIGHT_DECAY    = 1e-4
 GRAD_CLIP       = 1.0
 STEPS_PER_EPOCH = 10_000  # steps not full passes — keeps epoch wall-clock predictable
 MAX_SEQ         = 33
+_DEFAULT_SEQ    = 33   # frozen reference — do not rebind
 N_FEATURES      = 9
 DEVICE          = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -82,6 +83,7 @@ class HazardSampler:
         self.masks     = masks
         self.prepay_t  = prepay_timesteps
         self.seq_lens  = masks.sum(axis=1).astype(np.int32)
+        self.max_seq   = int(sequences.shape[1])   # width from data, never a constant
         self.max_t     = np.where(
             self.prepay_t >= 0, self.prepay_t, self.seq_lens - 1
         ).astype(np.int32)
@@ -107,8 +109,8 @@ class HazardSampler:
         )
         labels = (t_sampled == self.prepay_t[loan_idx]).astype(np.float32)
 
-        batch_seq  = np.zeros((batch_size, MAX_SEQ, N_FEATURES), dtype=np.float32)
-        batch_mask = np.zeros((batch_size, MAX_SEQ), dtype=bool)
+        batch_seq  = np.zeros((batch_size, self.max_seq, N_FEATURES), dtype=np.float32)
+        batch_mask = np.zeros((batch_size, self.max_seq), dtype=bool)
         for i in range(batch_size):
             t = t_sampled[i]; l = loan_idx[i]
             batch_seq[i, :t+1, :] = self.sequences[l, :t+1, :]
@@ -165,10 +167,14 @@ def main():
     parser.add_argument('--label_suffix', type=str, default='',
                          help="e.g. '_zbc' to read/write a corrected-label "
                               "run without touching the original cutoff dir")
+    parser.add_argument('--max_seq', type=int, default=_DEFAULT_SEQ,
+                        help='Sequence length the arrays were built at '
+                             '(default=33). Non-default appends _L{n} to paths.')
     args = parser.parse_args()
 
-    SEQ_DIR = os.path.join(BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}{args.label_suffix}')
-    OUT_DIR = os.path.join(BASE, f'outputs/rolling/cutoff_{args.cutoff_year}{args.label_suffix}')
+    _cap = '' if args.max_seq == _DEFAULT_SEQ else f'_L{args.max_seq}'
+    SEQ_DIR = os.path.join(BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}{args.label_suffix}{_cap}')
+    OUT_DIR = os.path.join(BASE, f'outputs/rolling/cutoff_{args.cutoff_year}{args.label_suffix}{_cap}')
     os.makedirs(OUT_DIR, exist_ok=True)
 
     print(f'Device: {DEVICE}  |  cutoff: {args.cutoff_year}', flush=True)
@@ -187,10 +193,13 @@ def main():
     test_labels  = np.load(os.path.join(SEQ_DIR, 'test_labels.npy'))
 
     print(f'train: {train_seq.shape} | test: {test_seq.shape}', flush=True)
+    assert train_seq.shape[1] == args.max_seq, (
+        f'--max_seq={args.max_seq} but arrays are width {train_seq.shape[1]} '
+        f'({SEQ_DIR})')
 
     # ── Training ──────────────────────────────────────────────────────────────
     sampler   = HazardSampler(train_seq, train_mask, train_prepay)
-    model     = PrepaymentTransformer().to(DEVICE)
+    model     = PrepaymentTransformer(max_seq=args.max_seq).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-5
@@ -234,7 +243,8 @@ def main():
             torch.save({
                 'model_state': model.state_dict(),
                 'config': {'input_dim': N_FEATURES, 'n_heads': 4, 'n_layers': 2,
-                           'd_model': 64, 'dim_ff': 256, 'dropout': 0.1},
+                           'd_model': 64, 'dim_ff': 256, 'dropout': 0.1,
+                           'max_seq': args.max_seq},
                 'cutoff_year': args.cutoff_year,
                 'epoch': epoch,
                 'auc':   float(auc),

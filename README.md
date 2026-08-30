@@ -2243,3 +2243,76 @@ discrete-time censoring rather than mislabeling. But it means the model estimate
 early-life prepayment hazard only. The window was flagged as an open question in June and
 held at 33 to keep an old-vs-new model comparison clean; that rationale no longer applies.
 Not yet resolved.
+
+## Prior-shift correction to the rolling forecast (Aug 30, 2026)
+
+With corrected labels, the first forecast run on `cutoff_2020_zbc` gave forecast CPR of
+31–86% against realized 6–36% — wrong by 2–8x at every coupon. The cause is not the
+label fix. It is that `forecast_rolling_cpr.py` compounds the raw sigmoid without any
+correction for the training sampler's oversampling.
+
+**The fix was verified as necessary before it was written.** The old deferral-trained
+`outputs/rolling/cutoff_2020/rolling_cpr_forecast.csv` (Jun 23) uses the same script and
+the same construction, and shows the same inflation: 8.5% forecast against 0.30% realized
+at coupon 2.0, 99.8% against 14.6% at coupon 6.0. The raw-sigmoid path has never produced
+calibrated levels. Note this file is NOT the same object as
+`outputs/rolling_forecast_vs_realized.csv`, which is the stage2 synthetic
+representative-loan construction and does carry a calibration.
+
+**The correction.** `HazardSampler` draws half its loans from `prepaid_idx`, then samples
+one timestep per loan and labels it `t == prepay_t`, so most draws in the positive half
+land on non-event timesteps. The effective positive rate must be measured, not assumed —
+an initial attempt using 0.5 overshot and produced 1.42% against an 11.55% target.
+Simulating the sampler's own draw gives **p_train = 0.04732** against a per-person-month
+**p_true = 0.01017**, for a logit offset of **−1.5758**.
+
+`prior_shift_offset()` derives both rates from the training arrays at runtime. It has no
+free parameters and nothing fitted to realized CPR. This was deliberate: a two-parameter
+calibration against realized would land the forecast almost exactly on target and thereby
+make "calibration against realized CPR" circular as a criterion for choosing between
+window lengths. `--no_prior_shift` reproduces the uncorrected path.
+
+**Result** (job 16616280, `outputs/rolling/cutoff_2020_zbc/rolling_cpr_forecast.csv`).
+Pooled over the seven coupons with ≥5,000 loans (229,017 loans): forecast **22.78%**
+against realized **26.39%**, ratio **0.863**.
+
+| coupon | forecast | realized | ratio | n_loans |
+|---|---|---|---|---|
+| 2.0 | 21.75 | 11.33 | 1.92 | 22,858 |
+| 2.5 | 22.69 | 15.03 | 1.51 | 38,641 |
+| 3.0 | 20.02 | 26.11 | 0.77 | 70,896 |
+| 3.5 | 21.12 | 33.84 | 0.62 | 39,043 |
+| 4.0 | 25.49 | 35.17 | 0.72 | 41,497 |
+| 4.5 | 32.73 | 35.33 | 0.93 | 10,628 |
+| 5.0 | 35.44 | 36.01 | 0.98 | 5,454 |
+
+Coupons 1.0 and 1.5 (21 and 786 loans) are too thin to characterise and are excluded.
+
+**What remains is shape, not level.** The error changes sign across the curve — too high
+at 2.0–2.5, too low at 3.0–4.0, calibrated at 4.5–6.0. Forecast CPR spans 1.79x across
+coupons 2.0–6.0 where realized spans 3.21x. The model's incentive response is too flat.
+This is consistent with the long-standing finding that the model peaks 0.5–1.25 incentive
+points below where realized loans respond, but that was measured on the pre-fix model and
+does not transfer automatically.
+
+**Sampler defect found and fixed before it could run.** `HazardSampler.sample_batch`
+allocated batches at the module constant `MAX_SEQ` rather than at the array width, so a
+48-month run would have trained on 33-wide batches under a 48-row embedding with 15 rows
+never updated — silent, and only visible as an unexplained result later. Width is now
+`sequences.shape[1]`, and `train_hazard_rolling.py` asserts `--max_seq` against the loaded
+array width.
+
+**Sequence cap parameterised.** `--max_seq_len` on both prep builders, `--max_seq` on the
+trainer, `max_seq` written into the saved checkpoint config, and `load_model` reads it via
+`cfg.get('max_seq', MAX_SEQ)` so pre-existing checkpoints fall back to 33 unchanged.
+Non-default caps append `_L{n}` to output directories. Note the constant is `MAX_SEQ_LEN`
+in the prep scripts and `MAX_SEQ` in the model-side ones, and it appears in ~40 files —
+only these four are on this path; the rest hold independent literals and are unaffected.
+
+**Three hypotheses raised and killed by testing.** Mask-based label leakage (sequence
+length alone gives AUC 0.415 / 0.545 against the label, near chance — the exact match
+between `prepay_t >= 0` and the label below the cap is a definitional tautology, not an
+information channel); a last-timestep sampling bias in `infer_test_set` (hazard at the
+last real timestep is 0.97x the all-timestep mean, not hotter); and the assumption that
+the sampler's positive rate is 0.5. Recorded because each looked convincing before it was
+measured.
