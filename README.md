@@ -2316,3 +2316,94 @@ information channel); a last-timestep sampling bias in `infer_test_set` (hazard 
 last real timestep is 0.97x the all-timestep mean, not hotter); and the assumption that
 the sampler's positive rate is 0.5. Recorded because each looked convincing before it was
 measured.
+
+## Time-varying inference (Aug 31, 2026) — implemented, one cutoff validated, one blocked
+
+`forecast_rolling_cpr.py --time_varying` replaces the single-hazard extrapolation with a
+twelve-pass forward loop. For each forecast month it recomputes `refi_incentive` from
+contemporaneous PMMS, `current_ltv` from contemporaneous ZHVI, and `loan_age_months`,
+scales them with the training `scaler.pkl`, substitutes them into the sequence's last
+valid timestep, and compounds the twelve monthly hazards into `1 - prod(1 - h_m)`. The
+training window is untouched — the builder still truncates at the cutoff, so only the
+inference inputs move. Substitution into the last slot was chosen over extending the
+sequence because extension would index position embeddings beyond the trained `max_seq`
+and require a retrain.
+
+`zip3` and `origination_date` were added to `_RAW_COL_MAP` for this, with a runtime range
+check that asserts zip3 in [1,999] and a decodable month in [1,12] before the values are
+used anywhere.
+
+### cutoff_2020 → 2021: the fix did not improve calibration
+
+Pooled over the seven coupons with at least 5,000 loans (229,017 loans), forecast/realized
+moved 0.8631 → 0.7691 — further from one, not closer. Every coupon's forecast moved down.
+That helped where the model over-forecast (2.0: 1.920 → 1.676; 2.5: 1.510 → 1.206) and hurt
+where it already under-forecast (3.0: 0.766 → 0.618; 3.5: 0.624 → 0.588). Coupon 4.0 and 5.0
+are unchanged to three decimals. Dispersion across the seven tightened (sd 0.4752 → 0.3845,
+spread 1.297 → 1.088), so the bias is more uniform, but a more uniform bias that is further
+from one is not a calibration win and is not reported as one. Why the shift is uniformly
+downward rather than concentrated near the money is NOT established.
+
+### cutoff_2022 built; its forecast is INVALID
+
+`cutoff_2022_zbc` was prepped (job 16637540) and trained (job 16653509, best AUC 0.7627 at
+epoch ~45, epoch 50 ended 0.7480) because `cutoff_2020_zbc` was the only cutoff with a
+corrected-label model, which silently blocked any multi-cutoff validation. Sequences:
+train (20391761, 33, 9), test (5097941, 33, 9). Both splits report prepay 45.37% — identical
+by construction, not coincidence: `train_test_split(..., stratify=labels_1p)` at line 441
+of the zbc builder forces it. Train/test loan-id overlap measured at 0.
+
+The forecast output in `outputs/rolling/cutoff_2022_zbc_tv/` is NOT usable. See below.
+
+### Invariant — `loan_age_months` is window-relative, not calendar age
+
+**This is the defect that invalidated the cutoff_2022 time-varying forecast, and it is the
+kind of convention that is expensive to relearn.** In the training sequences, `loan_age_months`
+is measured from the start of each loan's observation window, not from origination. Printed
+directly from `train_seq.npy`: row 0 runs 1,2,3,…,33; row 1 runs 0,1,…,18; row 2 runs 0,1,…,32.
+A loan originated December 2012 has sequence age starting near 0. The feature is a window
+position bounded by the cap, not a calendar age. Measured distribution at the last timestep:
+min −0.0, max 82.0, p99 34.0, median 26.0.
+
+The `--time_varying` path computed calendar age from `origination_date` instead, producing
+128–142 months (median 130) for seasoned loans — roughly 4x the p99 of the training range.
+The model extrapolates to near-zero hazard there. Signature: coupons 2.0–4.0 forecast
+0.41–0.56% CPR against realized 5.45–6.60%, while the frozen run over-forecast the same
+coupons by up to 2.9x. Pooled over all 14 coupons (2,773,315 loans), frozen 1.198 vs
+time-varying 0.156.
+
+That the training data supports a real floor here was checked independently: the empirical
+per-person-month rate in the `[-4,-2)` incentive bucket is 3.1168% (n=6,892,113), which under
+the same prior-shift offset implies ~7.65% annual CPR — close to realized, and an order of
+magnitude above what the model produced. So the collapse is not the model faithfully
+reporting an absent floor.
+
+`current_ltv` was checked separately and is NOT a second defect of this kind: the training
+convention is a true LTV in percent units declining from `original_ltv` by amortization
+(row 0: 80.0 → 69.7 → … → 53.9), the same scale the `--time_varying` path computes. However,
+the recomputed Dec-2023 median (33.3) sits well below the training median (63.6) while
+remaining inside the training range (min 2.4), and whether that is correct for seasoned
+loans after 2020–23 house-price appreciation is NOT established.
+
+### Two root causes proposed and refuted before the real one
+
+Recorded because both were argued confidently from structure before anything was printed.
+
+**A raw-file field offset.** Proposed on the reasoning that the raw rows begin with a leading
+delimiter, so `_ALL_COLS.index(name) + 1` would be off by one. Refuted by reading the columns
+back: `usecols=13` returns `122012` for a loan whose reporting period is `022013`, and `zip3`
+at `usecols=32` returns a valid prefix. The `+1` is correct for these fields; the prep script
+uses the identical expressions and its features are sound.
+
+**loan-id reuse across vintages.** Proposed to explain an apparent 85–87 month age gap. Not
+supported: the gap is fully explained by comparing a window-relative age against a calendar
+age, with no reuse required. The diagnostic written to test it was itself broken (it matched
+`$1`, but the leading delimiter puts `loan_id` in `$2`) and returned empty for every id; it
+was deleted rather than committed.
+
+### Status
+
+Blocked: `loan_age_months` must be fed as a window-relative value continuing from the last
+observed timestep, not as calendar age, and the cutoff_2022 forecast rerun both ways. The
+33/48/60 window comparison stays blocked behind that, since all three windows would inherit
+the same defect.
