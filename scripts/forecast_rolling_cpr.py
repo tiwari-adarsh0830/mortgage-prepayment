@@ -22,11 +22,16 @@ Usage:
 import argparse
 import os
 import gc
+import pickle
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+
+# Reused, not redefined: prepare_sequences_rolling_zbc.py already verified these
+# column positions and PMMS/ZHVI loading against real data during the label fix.
+from prepare_sequences_rolling_zbc import load_pmms, load_zhvi
 
 BASE     = '/scratch/at7095/mortgage_prepayment'
 DATA_DIR = os.path.join(BASE, 'data/raw')
@@ -81,6 +86,15 @@ _RAW_COL_MAP = dict(sorted({
     # prepare_sequences_rolling_zbc.py comment for the same finding).
     # The real zero-balance code is usecols 43.
     43:                                              'zero_balance_code_actual',
+    # zip3 and origination_date: needed only by the --time_varying path
+    # (recomputing current_ltv/loan_age per forecast month). Both sit
+    # BEFORE the drift point that forced the zero_balance_code hardcode
+    # above (verified in prepare_sequences_rolling_zbc.py's _COL_MAP,
+    # which uses these same name-lookups to build training features) --
+    # but read_coupon_and_realized() below still prints and range-checks
+    # sampled values before trusting them, same discipline as the label fix.
+    _ALL_COLS.index('zip') + 1:                      'zip3',
+    _ALL_COLS.index('origination_date') + 1:         'origination_date',
 }.items()))
 
 ALL_VINTAGES = [
@@ -178,22 +192,175 @@ def infer_test_set(cutoff_year: int, model, batch_size: int = 8192, label_suffix
     return ids, h_vals
 
 
+def yyyymm_to_mmyyyy(yyyymm: int) -> int:
+    """Inverse of mmyyyy_to_yyyymm. PMMS/ZHVI dicts are keyed by the raw
+    MMYYYY-style integer (month*10000 + year), same convention Fannie's
+    monthly_reporting_period uses -- NOT by the YYYYMM sort key."""
+    year, month = yyyymm // 100, yyyymm % 100
+    return month * 10000 + year
+
+
+# ── Step 1b: time-varying inference (--time_varying) ─────────────────────────
+def infer_test_set_time_varying(cutoff_year: int, model, coupon_map: dict,
+                                 zip3_map: dict, origdate_map: dict,
+                                 h_frozen: dict, logit_offset: float,
+                                 batch_size: int = 8192, label_suffix: str = ''):
+    """Recompute refi_incentive / current_ltv / loan_age per forecast month
+    using contemporaneous PMMS + ZHVI, substituted into the sequence's last
+    valid (already-masked) timestep -- training data still ends at cutoff,
+    only the inference-time features move. Position embeddings are reused
+    as-is (no retrain): each of the 12 forecast months is scored at the SAME
+    last_t slot with that month's features, not appended positions.
+
+    Falls back to the frozen single-hazard^12 extrapolation (h_frozen) for
+    any loan missing zip3, origination_date, or a PMMS/ZHVI value for a given
+    month -- reported as a count, never silently dropped or NaN-propagated.
+
+    Returns: loan_ids, annual_pp (12-month cumulative prepay probability),
+             n_fallback (count of loans using the frozen path for >=1 month)
+    """
+    seq_dir = os.path.join(BASE, f'data/sequences_rolling/cutoff_{cutoff_year}{label_suffix}')
+    seqs  = np.load(os.path.join(seq_dir, 'test_seq.npy'),      mmap_mode='r')
+    masks = np.load(os.path.join(seq_dir, 'test_mask.npy'),     mmap_mode='r')
+    ids   = np.load(os.path.join(seq_dir, 'test_loan_ids.npy'), allow_pickle=True)
+    n = len(seqs)
+
+    with open(os.path.join(seq_dir, 'scaler.pkl'), 'rb') as f:
+        scaler = pickle.load(f)
+    mean_, scale_ = scaler.mean_, scaler.scale_   # index order == FEATURE_COLS
+    IDX_INCENTIVE, IDX_LTV_NOW, IDX_LOAN_AGE = 0, 3, 5   # refi_incentive, current_ltv, loan_age_months
+    IDX_LTV_ORIG = 2                                      # original_ltv (static, inverse-transform to get raw)
+
+    pmms_rates = load_pmms()
+    zhvi_df    = load_zhvi()
+    zhvi_lookup = dict(zip(zip(zhvi_df['zip3'].astype(int), zhvi_df['reporting_period'].astype(int)),
+                           zhvi_df['zhvi'].values))
+
+    # Per-loan static inputs, aligned to `ids` order
+    orig_rate = np.array([coupon_map.get(lid, np.nan) for lid in ids], dtype=np.float64)
+    zip3      = np.array([zip3_map.get(lid, np.nan) for lid in ids], dtype=np.float64)
+    origdate  = np.array([origdate_map.get(lid, np.nan) for lid in ids], dtype=np.float64)
+
+    n_batches = (n + batch_size - 1) // batch_size
+    fy = cutoff_year + 1
+    forecast_yyyymms = [fy * 100 + m for m in range(1, 13)]
+
+    surv       = np.ones(n, dtype=np.float64)
+    fallback   = np.zeros(n, dtype=bool)
+    model.eval()
+
+    with torch.no_grad():
+        for b, i in enumerate(range(0, n, batch_size)):
+            sb = np.ascontiguousarray(seqs[i:i+batch_size]).astype(np.float32)
+            mb = np.ascontiguousarray(masks[i:i+batch_size])
+            bsz = sb.shape[0]
+            seq_len = mb.sum(axis=1).clip(min=1)
+            last_t  = (seq_len - 1).astype(int)
+            rows    = np.arange(bsz)
+
+            b_rate  = orig_rate[i:i+bsz]
+            b_zip3  = zip3[i:i+bsz]
+            b_od    = origdate[i:i+bsz]
+
+            # Raw original_ltv, inverse-transformed from the (already scaled)
+            # last-timestep row -- avoids a separate raw pass for a value we
+            # already have in the training array.
+            b_ltv_scaled = sb[rows, last_t, IDX_LTV_ORIG]
+            b_ltv_raw    = b_ltv_scaled * scale_[IDX_LTV_ORIG] + mean_[IDX_LTV_ORIG]
+
+            b_zhvi_orig = np.array([
+                zhvi_lookup.get((int(z), int(d)), np.nan) if not (np.isnan(z) or np.isnan(d)) else np.nan
+                for z, d in zip(b_zip3, b_od)
+            ])
+            orig_yyyymm = np.array([
+                mmyyyy_to_yyyymm(int(d)) if not np.isnan(d) else np.nan for d in b_od
+            ])
+
+            for yyyymm_m in forecast_yyyymms:
+                mmyyyy_m = yyyymm_to_mmyyyy(yyyymm_m)
+                pmms_m   = pmms_rates.get(mmyyyy_m, np.nan)
+                zhvi_now = np.array([
+                    zhvi_lookup.get((int(z), mmyyyy_m), np.nan) if not np.isnan(z) else np.nan
+                    for z in b_zip3
+                ])
+
+                incentive_m = b_rate - pmms_m
+                ltv_now_m   = b_ltv_raw * b_zhvi_orig / zhvi_now
+                age_m       = np.where(
+                    np.isnan(orig_yyyymm), np.nan,
+                    np.maximum(
+                        (yyyymm_m // 100 - orig_yyyymm // 100) * 12
+                        + (yyyymm_m % 100 - orig_yyyymm % 100) - 1, 0)
+                )
+
+                missing = (np.isnan(incentive_m) | np.isnan(ltv_now_m) | np.isnan(age_m))
+                fallback[i:i+bsz] |= missing
+
+                sb_m = sb.copy()
+                # only overwrite where inputs are valid; missing rows keep the
+                # original (frozen, cutoff-month) values at this position, and
+                # are excluded from the survival product for this batch below
+                valid = ~missing
+                sb_m[rows[valid], last_t[valid], IDX_INCENTIVE] = (
+                    (incentive_m[valid] - mean_[IDX_INCENTIVE]) / scale_[IDX_INCENTIVE])
+                sb_m[rows[valid], last_t[valid], IDX_LTV_NOW] = (
+                    (ltv_now_m[valid] - mean_[IDX_LTV_NOW]) / scale_[IDX_LTV_NOW])
+                sb_m[rows[valid], last_t[valid], IDX_LOAN_AGE] = (
+                    (age_m[valid] - mean_[IDX_LOAN_AGE]) / scale_[IDX_LOAN_AGE])
+
+                bt = torch.from_numpy(sb_m).to(DEVICE)
+                bm = torch.from_numpy(mb).to(DEVICE)
+                logits = model(bt, mask=bm, return_per_timestep=True)
+                h_pt   = torch.sigmoid(logits).cpu().numpy()
+                h_m    = h_pt[rows, last_t]
+
+                if logit_offset != 0.0:
+                    hc = np.clip(h_m, 1e-7, 1 - 1e-7)
+                    h_m = 1.0 / (1.0 + np.exp(-(np.log(hc / (1 - hc)) + logit_offset)))
+
+                # only compound for loans with valid inputs this month;
+                # for missing-input loans this month contributes nothing yet
+                # -- they get the frozen fallback applied after the loop.
+                surv[i:i+bsz][valid] *= (1.0 - np.clip(h_m[valid], 0, 1 - 1e-7))
+
+            if b % 20 == 0 or b == n_batches - 1:
+                print(f'  time-varying batch {b+1}/{n_batches} '
+                      f'({i+bsz:,}/{n:,})', flush=True)
+
+    annual_pp = 1.0 - surv
+    # fallback: any loan missing a required static input for ANY forecast
+    # month reverts entirely to the frozen single-hazard extrapolation
+    for idx, lid in enumerate(ids):
+        if fallback[idx]:
+            annual_pp[idx] = h_frozen.get(lid, np.nan)
+
+    n_fallback = int(fallback.sum())
+    print(f'  time-varying: n={n:,}  fallback(frozen)={n_fallback:,} '
+          f'({100*n_fallback/max(n,1):.2f}%)', flush=True)
+    return ids, annual_pp, n_fallback
+
+
 # ── Step 2: single raw pass for coupon + realized (4 cols, Y+1 + test filter) ─
 def read_coupon_and_realized(cutoff_year: int, test_id_set: set):
     """One pass over raw files. Keep only forecast-year rows for test loans.
 
     Returns:
-      coupon_map  : {loan_id: original_interest_rate}
-      active_set  : test loans appearing in any forecast-year month
-      prepaid_set : test loans with zbc==1 in any forecast-year month
+      coupon_map   : {loan_id: original_interest_rate}
+      active_set   : test loans appearing in any forecast-year month
+      prepaid_set  : test loans with zbc==1 in any forecast-year month
+      zip3_map     : {loan_id: zip3}         -- only used by --time_varying
+      origdate_map : {loan_id: origination_date (raw MMYYYY)} -- ditto
     """
     fy       = cutoff_year + 1
     ym_start = fy * 100 + 1
     ym_end   = fy * 100 + 12
 
     coupon_map  = {}
+    zip3_map    = {}
+    origdate_map = {}
     active_set  = set()
     prepaid_set = set()
+    _checked_ranges = False
 
     # Only vintages whose loans could still be active in the forecast year:
     # originated on or before the cutoff year (test set was built ≤ Dec cutoff).
@@ -224,13 +391,44 @@ def read_coupon_and_realized(cutoff_year: int, test_id_set: set):
                 del chunk; continue
             chunk['zero_balance_code_actual'] = pd.to_numeric(
                 chunk['zero_balance_code_actual'], errors='coerce')
+            chunk['zip3']            = pd.to_numeric(chunk['zip3'], errors='coerce')
+            chunk['origination_date'] = pd.to_numeric(chunk['origination_date'], errors='coerce')
+
+            if not _checked_ranges:
+                # Sanity-check the two new columns before trusting them anywhere
+                # downstream -- same discipline as the label-column fix. zip3
+                # should look like a 3-digit prefix (1-999); origination_date
+                # should parse as a valid MMYYYY/YYYYMM-ish value with month 1-12.
+                zc = chunk['zip3'].dropna()
+                oc = chunk['origination_date'].dropna()
+                print(f'  [range check] zip3 sample: {zc.head(5).tolist()} '
+                      f'min={zc.min()} max={zc.max()}', flush=True)
+                print(f'  [range check] origination_date sample: {oc.head(5).tolist()}',
+                      flush=True)
+                assert zc.between(1, 999).mean() > 0.99, (
+                    f'zip3 column looks wrong -- {zc.between(1,999).mean():.3f} '
+                    f'of sampled values in [1,999]. STOP and re-derive the column '
+                    f'position, do not proceed.')
+                _od_month = oc.astype(np.int64).map(mmyyyy_to_yyyymm) % 100
+                assert _od_month.between(1, 12).mean() > 0.99, (
+                    f'origination_date column looks wrong -- decoded month out '
+                    f'of [1,12] for {(1 - (_od_month.between(1,12).mean())):.3f} '
+                    f'of sample. STOP and re-derive the column position.')
+                _checked_ranges = True
+                print('  [range check] PASSED for zip3 and origination_date.', flush=True)
 
             active_set.update(chunk['loan_id'].tolist())
-            # coupon: one rate per loan (first seen)
-            for lid, rate in zip(chunk['loan_id'].values,
-                                 chunk['original_interest_rate'].values):
+            # coupon / zip3 / origination_date: one static value per loan (first seen)
+            for lid, rate, z3, od in zip(chunk['loan_id'].values,
+                                        chunk['original_interest_rate'].values,
+                                        chunk['zip3'].values,
+                                        chunk['origination_date'].values):
                 if lid not in coupon_map:
                     coupon_map[lid] = rate
+                if lid not in zip3_map and not pd.isna(z3):
+                    zip3_map[lid] = z3
+                if lid not in origdate_map and not pd.isna(od):
+                    origdate_map[lid] = od
             prepaid_set.update(
                 chunk.loc[chunk['zero_balance_code_actual'] == 1.0, 'loan_id'].tolist())
             del chunk; gc.collect()
@@ -238,8 +436,9 @@ def read_coupon_and_realized(cutoff_year: int, test_id_set: set):
               flush=True)
 
     print(f'Done raw pass. active={len(active_set):,} '
-          f'prepaid={len(prepaid_set):,} coupons={len(coupon_map):,}', flush=True)
-    return coupon_map, active_set, prepaid_set
+          f'prepaid={len(prepaid_set):,} coupons={len(coupon_map):,} '
+          f'zip3={len(zip3_map):,} origdate={len(origdate_map):,}', flush=True)
+    return coupon_map, active_set, prepaid_set, zip3_map, origdate_map
 
 
 # ── Step 3: aggregate to coupon-level CPR ────────────────────────────────────
@@ -280,7 +479,10 @@ def prior_shift_offset(seq_dir: str, seed: int = 0) -> float:
 
 
 def aggregate(loan_ids, h_vals, coupon_map, active_set, prepaid_set,
-              logit_offset: float = 0.0):
+              logit_offset: float = 0.0, already_annual: bool = False):
+    """already_annual=True: h_vals is already a per-loan 12-month cumulative
+    probability (the --time_varying path, offset applied per-month inside
+    infer_test_set_time_varying) -- used as-is, no further (1-h)^12 or offset."""
     df = pd.DataFrame({'loan_id': loan_ids, 'h_t': h_vals})
     # restrict to loans active in the forecast year
     df = df[df['loan_id'].isin(active_set)].copy()
@@ -288,12 +490,15 @@ def aggregate(loan_ids, h_vals, coupon_map, active_set, prepaid_set,
     df = df.dropna(subset=['note_rate'])
     df['coupon']    = ((df['note_rate'] - 0.5) * 2).round() / 2
     df['realized']  = df['loan_id'].isin(prepaid_set).astype(int)
-    # per-loan annual prepay prob from monthly hazard
-    _h = df['h_t'].clip(1e-7, 1 - 1e-7)
-    if logit_offset != 0.0:
-        _h = 1.0 / (1.0 + np.exp(-(np.log(_h / (1 - _h)) + logit_offset)))
-    df['h_adj']     = _h
-    df['annual_pp'] = 1.0 - (1.0 - _h.clip(0, 1 - 1e-7)) ** 12
+    if already_annual:
+        df['annual_pp'] = df['h_t'].clip(0, 1 - 1e-7)
+    else:
+        # per-loan annual prepay prob from monthly hazard
+        _h = df['h_t'].clip(1e-7, 1 - 1e-7)
+        if logit_offset != 0.0:
+            _h = 1.0 / (1.0 + np.exp(-(np.log(_h / (1 - _h)) + logit_offset)))
+        df['h_adj']     = _h
+        df['annual_pp'] = 1.0 - (1.0 - _h.clip(0, 1 - 1e-7)) ** 12
 
     rows = []
     for coupon, g in df.groupby('coupon'):
@@ -318,35 +523,67 @@ def main():
     ap.add_argument('--label_suffix', type=str, default='',
                      help="e.g. '_zbc' to use a corrected-label model/sequences "
                           "without touching the original cutoff dir")
+    ap.add_argument('--time_varying', action='store_true',
+                     help="Recompute refi_incentive/current_ltv/loan_age per "
+                          "forecast month from contemporaneous PMMS+ZHVI, "
+                          "substituted into the last valid timestep, instead "
+                          "of extrapolating one frozen cutoff-month hazard^12. "
+                          "Falls back to the frozen value per-loan where "
+                          "zip3/origination_date/PMMS/ZHVI is missing.")
     args = ap.parse_args()
 
-    out_dir  = os.path.join(BASE, f'outputs/rolling/cutoff_{args.cutoff_year}{args.label_suffix}')
+    suffix = args.label_suffix + ('_tv' if args.time_varying else '')
+    out_dir  = os.path.join(BASE, f'outputs/rolling/cutoff_{args.cutoff_year}{suffix}')
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, 'rolling_cpr_forecast.csv')
 
     print(f'=== Rolling forecast cutoff={args.cutoff_year}{args.label_suffix} '
-          f'→ FY{args.cutoff_year+1} | device={DEVICE} ===', flush=True)
+          f'→ FY{args.cutoff_year+1} | time_varying={args.time_varying} '
+          f'| device={DEVICE} ===', flush=True)
 
     model = load_model(args.cutoff_year, args.label_suffix)
 
-    print('\n[1/3] Inference on test sequences...', flush=True)
+    print('\n[1/3] Inference on test sequences (frozen baseline, also used '
+          'as the time-varying path\'s fallback)...', flush=True)
     loan_ids, h_vals = infer_test_set(args.cutoff_year, model, args.batch_size, args.label_suffix)
 
     test_id_set = set(loan_ids.tolist())
 
     print('\n[2/3] Raw pass for coupon + realized...', flush=True)
-    coupon_map, active_set, prepaid_set = read_coupon_and_realized(
+    coupon_map, active_set, prepaid_set, zip3_map, origdate_map = read_coupon_and_realized(
         args.cutoff_year, test_id_set)
 
-    print('\n[3/3] Aggregating to coupon-level CPR...', flush=True)
     seq_dir = os.path.join(
         BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}{args.label_suffix}')
     off = 0.0 if args.no_prior_shift else prior_shift_offset(seq_dir)
-    result = aggregate(loan_ids, h_vals, coupon_map, active_set,
-                       prepaid_set, logit_offset=off)
+
+    if args.time_varying:
+        print('\n[3/4] Building frozen fallback (offset-applied annual_pp per loan)...',
+              flush=True)
+        _h = np.clip(h_vals, 1e-7, 1 - 1e-7)
+        if off != 0.0:
+            _h = 1.0 / (1.0 + np.exp(-(np.log(_h / (1 - _h)) + off)))
+        annual_pp_frozen = 1.0 - (1.0 - np.clip(_h, 0, 1 - 1e-7)) ** 12
+        h_frozen = dict(zip(loan_ids, annual_pp_frozen))
+
+        print('\n[4/4] Time-varying inference (12 monthly forward passes)...',
+              flush=True)
+        loan_ids, annual_pp, n_fallback = infer_test_set_time_varying(
+            args.cutoff_year, model, coupon_map, zip3_map, origdate_map,
+            h_frozen, logit_offset=off, batch_size=args.batch_size,
+            label_suffix=args.label_suffix)
+        result = aggregate(loan_ids, annual_pp, coupon_map, active_set,
+                           prepaid_set, already_annual=True)
+        result['n_fallback'] = n_fallback
+    else:
+        print('\n[3/3] Aggregating to coupon-level CPR...', flush=True)
+        result = aggregate(loan_ids, h_vals, coupon_map, active_set,
+                           prepaid_set, logit_offset=off)
+
     result['logit_offset']  = off
     result['cutoff_year']   = args.cutoff_year
     result['forecast_year'] = args.cutoff_year + 1
+    result['time_varying']  = args.time_varying
     result.to_csv(out_path, index=False)
 
     print(f'\nSaved: {out_path}', flush=True)
