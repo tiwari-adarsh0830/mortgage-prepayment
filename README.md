@@ -2466,3 +2466,84 @@ real, the implementation description, and both refuted hypotheses all stand. The
 reuse refutation holds, but its stated reasoning changes: the age gap is explained by the
 window sitting years before the forecast month, not by a window-relative vs calendar
 mismatch.
+
+## Trailing-window anchor test (Sep 1, 2026) — large AUC gain, calibration regression
+
+**Why this was run.** The advisor's July 3 message specified the training design as "the full
+rolling prediction window (predict t+1 every period based on date-t information)." The shipped
+builder does not implement that: `build_sequences` takes the FIRST `MAX_SEQ_LEN` rows per loan
+(line 343/353), so a loan originated in 2013 and still alive at a 2020 cutoff is scored from a
+2013-2015 window. `prepare_sequences_trailing_zbc.py` is a copy of the zbc builder with the window
+selection changed to the LAST `MAX_SEQ_LEN` rows (`cumcount(ascending=False)`), writing to
+`data/sequences_rolling/cutoff_{YEAR}_zbc_trail`. Nothing else differs.
+
+**No event truncation is needed.** Fannie stops reporting a loan after its zero-balance row:
+121 of 121 payoff loans in a 2015Q1 slice have zero rows after payoff. So for a prepaid loan the
+last row IS the payoff row, and a trailing window terminates at the event automatically.
+
+**Window verified before training.** Job 16697085 on one vintage: last kept row equals the loan's
+max month for every loan; first-row age median 33 against ~0 for the origination-anchored build.
+On the full build (job 16697151), the highest-age sampled loan runs 65, 66, ..., 97 — 33
+consecutive months ending at the cutoff, a loan being scored at age 97 that the origination-anchored
+build could only ever show at age <= 33. Young loans (62% of the sample) still start near age 0
+because they have not lived 33 months; that is correct, not a failed flip.
+
+**Result 1 — discrimination improves substantially.** Identical loans, identical split
+(n_train 1,496,727 / n_test 374,182 in both), identical labels, identical architecture and epoch
+count. Best AUC 0.5966 -> 0.7553. The trajectories matter more than the headline: the
+origination-anchored model starts at 0.5849 and ends at 0.5713 — fifty epochs and the last epoch
+is worse than the first, i.e. it never learned. The trailing model starts at 0.6823 (already above
+anything the other reached) and climbs to 0.7238 by epoch 50. Late-epoch AUC oscillates roughly
+0.72-0.76, so 0.7553 is the best draw rather than a stable level.
+
+**Result 2 — coupon-level calibration gets WORSE.** Per-coupon forecast/realized, seven coupons
+with n >= 5,000:
+
+| coupon | realized | origination | trailing | orig ratio | trail ratio |
+|---|---|---|---|---|---|
+| 2.0 | 11.33 | 21.75 | 37.28 | 1.920 | 3.291 |
+| 2.5 | 15.03 | 22.69 | 39.10 | 1.510 | 2.602 |
+| 3.0 | 26.11 | 20.02 | 31.07 | 0.766 | 1.190 |
+| 3.5 | 33.84 | 21.12 | 21.08 | 0.624 | 0.623 |
+| 4.0 | 35.17 | 25.49 | 19.66 | 0.725 | 0.559 |
+| 4.5 | 35.33 | 32.73 | 34.20 | 0.926 | 0.968 |
+| 5.0 | 36.01 | 35.44 | 44.82 | 0.984 | 1.245 |
+
+Realized CPR rises monotonically 11.3 -> 35.2 across coupons 2.0-4.0. The trailing forecast runs
+37.3 -> 39.1 -> 31.1 -> 21.1 -> 19.7 across the same range — declining where the truth rises.
+The origination-anchored forecast was nearly flat (20-25% across 2.0-4.0), consistent with its
+AUC of 0.57; the trailing forecast has structure but the structure is inverted through the middle.
+
+Dispersion widened from 1.920..0.624 to 3.291..0.559. The loan-weighted pooled ratio moved
+0.8631 -> 1.1273, which is nominally closer to one, but only because larger errors in opposing
+directions cancel more completely. Applying the same standard used for the Aug 31 time-varying
+result: a pooled number closer to one produced by LESS uniform bias is not a calibration win and
+is not reported as one.
+
+**What is ruled out as the cause.** The realized leg is byte-identical across both runs, so this
+is entirely model-side. Same loans and same split, so it is not sample composition. The forecast
+path uses raw sigmoid plus the prior-shift offset and never reads a Platt file (`grep -ic calib
+scripts/forecast_rolling_cpr.py` returns 0), so the extreme trailing Platt fit is not acting here.
+The prior-shift offset does differ (-0.8291 trailing vs -1.5758 origination-anchored, from
+p_train 0.03954 vs p_true 0.01765), but a constant logit shift moves the level uniformly and
+cannot invert a slope.
+
+**Why discrimination and calibration move in opposite directions is NOT established.** AUC is
+computed loan-level on the test window, which for the trailing build ends at the cutoff; the
+forecast is about the following year. Ranking loans well within 2018-2020 need not carry into
+2021 levels. That is a hypothesis, not a finding.
+
+**Fourth Platt calibration — never mix.** Trailing zbc 2020: a=12.9671, b=-13.0827. The four
+now in existence are OAS loan-level (0.4934 / -4.840), cohort-CPR forecast (0.4559 / -3.1376),
+corrected-label zbc 2020 (2.4245 / -2.4348), and this one. Prior-shift logit offsets are a separate
+mechanism again.
+
+**Consequence for the 33/48/60 window comparison.** That comparison varies window LENGTH, not
+ANCHOR. This result suggests anchor is the larger lever, and that it does not move calibration in
+the helpful direction on its own. Whether length interacts with anchor is untested.
+
+Artifacts: `scripts/prepare_sequences_trailing_zbc.py`, `scripts/diag_trailing_window.py`,
+`slurm/{prep_trail_2020.sbatch, diag_trailing_window.slurm, rolling_train_2020_trail.slurm,
+rolling_forecast_2020_trail.slurm}`. Jobs 16697085, 16697151, 16719369, 16733177.
+Outputs under `data/sequences_rolling/cutoff_2020_zbc_trail/` and
+`outputs/rolling/cutoff_2020_zbc_trail/`.
