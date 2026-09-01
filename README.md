@@ -2407,3 +2407,62 @@ Blocked: `loan_age_months` must be fed as a window-relative value continuing fro
 observed timestep, not as calendar age, and the cutoff_2022 forecast rerun both ways. The
 33/48/60 window comparison stays blocked behind that, since all three windows would inherit
 the same defect.
+
+## Sequence window anchoring (Aug 31, 2026) — supersedes the `loan_age_months` invariant in the section above, and the message of commit 5629725
+
+**What was wrong.** The section above states that `loan_age_months` in the training
+sequences is "window-relative, not calendar age" — a window position bounded by the cap.
+That is backwards. The feature IS calendar age: `prepare_sequences_rolling_zbc.py` lines
+300-306 derive it as months from `origination_date`, minus a measured one-month offset,
+clipped at 0. There is no second convention.
+
+**Why the ages nonetheless look low.** `build_sequences` takes the first `MAX_SEQ_LEN`
+reporting rows present for each loan — line 343 ("Takes the FIRST MAX_SEQ_LEN months per
+loan chronologically") enforced by `cumcount` at line 353. Windows are anchored at the
+start of the loan's data, not at the cutoff. Ages appear bounded only because the window
+is. Verified: random 20,000 of the 374,182 cutoff_2020 test sequences show first-timestep
+age at ~0 for 99.8% of loans and `corr(last-first, L-1) = 0.9994`.
+
+**Evidence that settles it.** `logs/diag_origdate_16679693.out` lists loans with sequence
+age 32-33 whose origination dates are Nov 2012 - Mar 2013 and whose true calendar age at
+the Dec 2022 cutoff is 116-120 months. Both numbers are correct and describe different
+moments: the window covers roughly 2013-2015, the forecast month is Dec 2023. A loan's
+window can end years before the cutoff.
+
+**The 82-month tail is not a gap artifact.** Age advances by exactly 1 per timestep:
+0.0% of 50,000 sampled training rows contain any step greater than 1. The highest-age loan
+sampled runs 22, 23, ..., 54 contiguously — it starts at 22 because its rows in the vintage
+file start 22 months after origination, not because months are missing. So the window is
+the first `MAX_SEQ_LEN` rows PRESENT for that loan, wherever its data begins. Why some
+loans' data starts late is NOT established. (The 82 figure comes from
+`diag_feature_ranges_16676478.out`; the sample here maxes at 54.)
+
+**The prescribed fix does not work.** The Status paragraph above says `loan_age_months`
+must be fed "as a window-relative value continuing from the last observed timestep." Since
+the last observed value already IS calendar age, continuing it forward reproduces the same
+128-142 months that caused the collapse. Clipping to the training range instead would feed
+a fabricated age alongside real forecast-date rates, producing a plausible number with no
+support. Neither is a fix.
+
+**What this actually is.** Not a coding defect. It is the 33-month window question, open
+since June, appearing at inference: a loan seasoned past the window has no in-range age at
+any forecast date, so the model has never seen a seasoned loan at a seasoned age with
+contemporaneous rates. There is no local patch in `infer_test_set_time_varying`. Note the
+consequence for the 33/48/60 comparison: a 2013 loan at a 2022 cutoff is ~120 months old,
+so widening to 60 does not reach it either. Whether widening improves forecast-date
+calibration is NOT tested; the comparison should be judged on calibration at the forecast
+date rather than on training-window event coverage alone.
+
+**Commit message 5629725 is wrong** and cannot be edited without a history rewrite. It
+asserts the window-relative invariant and names it as the root cause. Trust this section
+over that message.
+
+**What survives from the section above, unchanged.** All of it except the invariant and the
+Status prescription. The cutoff_2020 results (pooled 0.8631 -> 0.7691, per-coupon moves,
+dispersion tightening), the cutoff_2022 collapse (frozen 1.198 vs time-varying 0.156,
+coupons 2.0-4.0 at 0.41-0.56% against realized 5.45-6.60%), the `[-4,-2)` bucket check
+(3.1168% per person-month, n=6,892,113, implying ~7.65% annual CPR) showing the floor is
+real, the implementation description, and both refuted hypotheses all stand. The loan-id
+reuse refutation holds, but its stated reasoning changes: the age gap is explained by the
+window sitting years before the forecast month, not by a window-relative vs calendar
+mismatch.
