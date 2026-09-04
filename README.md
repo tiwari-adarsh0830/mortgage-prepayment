@@ -2547,3 +2547,76 @@ Artifacts: `scripts/prepare_sequences_trailing_zbc.py`, `scripts/diag_trailing_w
 rolling_forecast_2020_trail.slurm}`. Jobs 16697085, 16697151, 16719369, 16733177.
 Outputs under `data/sequences_rolling/cutoff_2020_zbc_trail/` and
 `outputs/rolling/cutoff_2020_zbc_trail/`.
+
+## Multi-observation sampling (Sep 3, 2026)
+
+**Why this was built.** The advisor's Sep 2 note raised burnout/survivor selection as a gap in
+every builder so far: each of them emits exactly ONE observation per loan (its final age at the
+cutoff), so the data can never separate "high refi incentive, about to prepay" from "high
+incentive and has already declined it repeatedly" — those two loan-months are indistinguishable
+when a loan is only ever observed once. `prepare_sequences_multiobs_zbc.py` is a copy of the
+trailing builder that instead samples each loan at several `(loan_id, ref_month)` ages, so the
+same loan can appear both before and after burnout sets in. It does not re-merge the trailing
+builder's `build_sequences()` — the windowing semantics differ and must not be collapsed together.
+
+**Eligibility rule — `t < term_t` is load-bearing.** For within-loan row index `t`, the window is
+eligible only if `t >= min_hist - 1`, `t <= L - 1 - H`, and `t < term_t` (the index of the loan's
+first `zbc==01` row for prepaid loans, else `L-1` for censored ones). The third condition is not
+a refinement, it is required: without it, a reference month can land ON the payoff row itself,
+which becomes the last timestep of the feature window while the forward label reads 0 because
+there is nothing left to look ahead to — the event enters `X` and vanishes from `y` at the same
+draw. This was found and fixed via synthetic testing, not by inspection; the synthetic suite
+(`scripts/diag/test_multiobs_sampler.py`, 39 checks) includes `last_row_event`, a loan whose
+event is the final row, specifically to keep this defect from recurring.
+
+**Mandatory draw at `term_t - H` — this is our interpretation, not the advisor's literal words.**
+The Sep 2 note asked for multiple observations per loan to expose burnout; it did not specify a
+sampling scheme. The design implemented here fixes `k` draws per loan (default 5, length-bias
+fix: a 120-month loan and an 8-month loan contribute the same observation count, not a rate), with
+one MANDATORY draw at `t = term_t - H` (the last eligible pre-event month, never at `term_t`
+itself — that is the degenerate/leaking case above) and the remaining `k-1` slots filled by
+deterministic blake2b-hash selection (not `rng.choice`, for reproducibility across processes and
+monotone growth in `k`). Uniform and incentive-stratified draw schemes are both implemented. This
+particular scheme — one guaranteed terminal draw plus hash-sampled fill — is a design choice made
+to satisfy the burnout goal, not something dictated by the email; flag it for review rather than
+treating it as pre-approved.
+
+**Known limitation — calendar-gap filtering.** `row_idx` is a POSITION, not a calendar index:
+upstream `dropna(subset=FEATURE_COLS)` can remove an interior row, after which row_idx `i` and
+`i+1` for that loan are no longer 1 calendar month apart even though they are still adjacent
+positions. `select_observations` drops two kinds of candidates for this reason and prints both
+counts per call: (1) feature window spans a calendar gap — the drawn `(s, t]` window would
+silently splice two non-adjacent calendar months together; (2) label-window row/calendar distance
+mismatch — for a real prepay, the calendar distance from `ref_month` to the event month must equal
+`term_t - row_idx`, or `H` means a different number of calendar months for this loan than for
+every other one. Reference point (2015Q1, cutoff_year=2020, k=5, H=1, uniform), from the
+single-vintage diagnostic (job 16903515): out of 2,166,647 candidate observations from 435,443
+loans, 18 (10 loans) hit the window-gap filter and 4 (of 435,443 terminal draws) hit the
+label-mismatch filter — both rare but real; do not remove either filter assuming the gap can't
+occur.
+
+**cutoff_2020 build result (job 16906766, 1h28m, reused split/scaler from `cutoff_2020_zbc_trail`).**
+Train: 6,861,377 observations, 8.15 GB, 1,460,803 unique loans (97.60% of the 1,496,727-loan
+reused train split — the rest yielded zero eligible observations). Test: 1,715,642 observations,
+2.04 GB, 365,146 unique loans (97.59% of 374,182). Sampled label rate 8.33% on both splits.
+Reconciled exactly against the loan-level population: restricting the trailing builder's
+per-loan ever-prepay ground truth to just the loans that survived into this build gives a 39.13%
+ever-prepay rate (higher than the full split's 38.19%, since dropped loans skew censored), and the
+mean realized draws per loan is 4.697, not 5 (short/pool-limited loans get fewer than `k` slots).
+39.13% / 4.697 = 8.330%, matching the observed rate to three decimals on both splits. Every
+positive observation is a terminal draw and every loan has at most one positive observation —
+checked directly, not assumed — so the 8.33%-vs-naive-7.64% (38.19%/5) gap is fully explained by
+population and filtering effects, not a sampling defect.
+
+**Open item — trainer incompatibility, no model trained.** `train_hazard_rolling.py`'s
+`HazardSampler` (lines 78-95) is incompatible with this output: its random per-epoch truncation
+and 50/50 oversampling both assume the trailing builder's one-observation-per-loan shape and are
+the wrong operations on multi-observation data. It needs its own trainer, not a flag on the
+existing one. That trainer has not been built. **No model has been trained on this data** — this
+section covers data preparation and validation only.
+
+Artifacts: `scripts/prepare_sequences_multiobs_zbc.py`, `scripts/diag/test_multiobs_sampler.py`,
+`scripts/diag/diag_multiobs_onevintage.py`, `scripts/run_diag_multiobs_onevintage.sbatch`,
+`scripts/slurm/run_multiobs_2020.sbatch`. Jobs 16903515 (one-vintage diagnostic), 16906766
+(full cutoff_2020 build). Output under
+`data/sequences_rolling/cutoff_2020_zbc_multiobs_k5_h1/`.
