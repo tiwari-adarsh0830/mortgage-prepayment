@@ -2620,3 +2620,71 @@ Artifacts: `scripts/prepare_sequences_multiobs_zbc.py`, `scripts/diag/test_multi
 `scripts/slurm/run_multiobs_2020.sbatch`. Jobs 16903515 (one-vintage diagnostic), 16906766
 (full cutoff_2020 build). Output under
 `data/sequences_rolling/cutoff_2020_zbc_multiobs_k5_h1/`.
+
+## Multi-observation trainer, first training run, and age-stratified diagnostics (Sep 4-5, 2026)
+
+**Why this was built.** The section above left the multiobs sequences from Sep 3 with no
+compatible trainer: `train_hazard_rolling.py`'s `HazardSampler` assumes the trailing builder's
+one-observation-per-loan, open-ended-sequence shape (random per-epoch truncation, 50/50
+prepaid/non-prepaid oversampling), both wrong for fixed windows that already have one resolved
+label each. `train_hazard_multiobs.py` is a new trainer, not a copy-edit of the rolling one —
+its scoring logic is deliberately different, documented loudly in its own header so it doesn't get
+merged back in by mistake. It uses the masked-mean-pool + classifier forward pass
+(`model(seq, mask)`, no `return_per_timestep`) and scores with `sigmoid(logit)` directly — no
+survival-CDF aggregation, since each observation is a single fixed window with one forward label
+already resolved by the builder, not an open-ended sequence. `ObservationSampler` replaces
+`HazardSampler`: `--pos_ratio` (default `None`, uniform draw at the natural ~8.33% rate) and
+`--use_ipw` (default off, would weight the loss by the builder's emitted `incl_prob`) are both
+explicit CLI flags, neither applied silently. `train_prepay_timestep`/`test_prepay_timestep` are
+never loaded, matching the builder's own docstring that calls them meaningless for this output.
+
+**Validated before the real run.** A synthetic smoke test
+(`scripts/diag/test_train_hazard_multiobs_smoke.py`, no cluster data) exercises four configs —
+default, `pos_ratio=0.5`, `use_ipw`, and both combined — confirming the loop runs end to end, loss
+decreases, and AUC is always finite and in `[0, 1]` before spending GPU time on the real data.
+
+**Real run (job 16964657, natural sampling, no `--pos_ratio`/`--use_ipw`).** 50 epochs, ~2h wall
+clock, best AUC 0.7847 at epoch 50 (`outputs/rolling/cutoff_2020_multiobs_k5_h1/`). Flagged before
+trusting it: epoch 1 already reached 0.7790 — nearly all of the final discrimination was present
+immediately, which is consistent with a model that mostly learned something coarse and easy (e.g.
+age or terminal-draw structure) rather than a genuinely incentive-conditional hazard. This was
+treated as a red flag to check, not dismissed.
+
+**Age-stratified AUC diagnostic (job 17005892, `scripts/diag/diag_age_stratified_auc.py`)
+rules out the coarse explanation.** Test observations were split into 5 `age_at_ref` quintiles and
+AUC was recomputed within each bin separately, holding age (and therefore most of the
+terminal/censored-draw structure) fixed:
+
+| bin | age range | n | n_pos | pos rate | AUC |
+|---|---|---|---|---|---|
+| 0 | [0, 3] | 411,707 | 3,616 | 0.88% | 0.7129 |
+| 1 | [4, 8] | 304,422 | 15,289 | 5.02% | 0.7009 |
+| 2 | [9, 18] | 337,457 | 30,995 | 9.18% | 0.6840 |
+| 3 | [19, 36] | 333,100 | 43,155 | 12.96% | 0.6798 |
+| 4 | [37, 109] | 328,956 | 49,834 | 15.15% | 0.7318 |
+
+Within-bin AUC ranges 0.6798–0.7318 (mean 0.7019), every bin well above chance. Age alone does not
+manufacture the overall 0.7847 — real discrimination survives once age is held roughly fixed,
+which weighs against the epoch-1 red flag being pure age/terminal-detection.
+
+**A burnout-shaped signature, found in the oldest bin, not proven.** Within bin 4 (age 37–109),
+`spearman(score, incentive_at_ref)` over all observations is -0.0730, but restricted to label=1
+(terminal draws) it is +0.5022 — opposite signs in the same bin. A follow-up split (job 17006097,
+`scripts/diag/diag_bin4_incentive_split.py`) isolated label=0 (still-alive) loans: among survivors,
+`spearman(score, incentive)` = -0.1738 (p≈0, n=279,122) — higher-incentive survivors score LOWER.
+Splitting further, label=0 loans with `incentive_at_ref` above the bin median ("should have
+refinanced but didn't", 49.40% of label=0 in this bin) have mean score 0.1373 versus 0.1485 for the
+rest of label=0 — lower score despite higher incentive, same direction, modest magnitude. This is
+consistent with the model distinguishing burnout survivors (high incentive, already passed on it
+repeatedly) from fresh high-incentive loans, which is exactly what the multiobs sampling design was
+built to make learnable. It is flagged as **consistent-with, not proven** — not checked against
+vintage or credit-score confounds that could produce the same correlation pattern for an unrelated
+reason.
+
+Artifacts: `scripts/train_hazard_multiobs.py`, `scripts/diag/test_train_hazard_multiobs_smoke.py`,
+`scripts/slurm/run_train_multiobs_2020.sbatch`, `scripts/diag/diag_age_stratified_auc.py`,
+`scripts/diag/diag_bin4_incentive_split.py`, `scripts/slurm/run_diag_age_stratified_auc.sbatch`,
+`scripts/slurm/run_diag_bin4_incentive_split.sbatch`. Jobs 16964657 (training), 17005892
+(age-stratified AUC), 17006097 (bin4 incentive split). Output under
+`outputs/rolling/cutoff_2020_multiobs_k5_h1/`.
+
