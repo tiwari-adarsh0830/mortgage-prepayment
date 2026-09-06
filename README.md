@@ -2688,3 +2688,79 @@ Artifacts: `scripts/train_hazard_multiobs.py`, `scripts/diag/test_train_hazard_m
 (age-stratified AUC), 17006097 (bin4 incentive split). Output under
 `outputs/rolling/cutoff_2020_multiobs_k5_h1/`.
 
+## Coupon-level CPR calibration: multiobs vs. origination vs. trailing, matched population (Sep 5, 2026)
+
+**Why this was run.** With a trained multiobs model (0.7847 AUC) in hand, the natural next question
+was how its coupon-level CPR forecast compares to the already-documented origination (pooled ratio
+0.8631) and trailing (1.1273) runs from the Aug 30 / Sep 1 sections above.
+
+**Scoring the multiobs model required the TRAILING test set, not its own.** `aggregate()`
+(`forecast_rolling_cpr.py`, imported unchanged) needs exactly one forward-looking window per loan
+ending at the Dec 2020 cutoff; the multiobs test set has multiple sampled `ref_month`s per loan by
+design and is not usable here. `scripts/forecast_matched_population_cpr.py` instead scores the
+multiobs-trained model against `data/sequences_rolling/cutoff_2020_zbc_trail/`'s test sequences,
+calling `model(seq, mask)` with **no** `return_per_timestep` — mirroring `train_hazard_multiobs.py`'s
+own `evaluate()`, since that checkpoint's classifier was never trained on a per-timestep token and
+`forecast_rolling_cpr.py`'s `infer_test_set()` (`return_per_timestep=True`, last-real-timestep
+gather) would silently score it with numbers it was never trained to produce.
+
+**Population mismatch found and matched by intersection.** Multiobs's own test set (365,146 loans)
+is a strict 9,036-loan (2.4%) subset of origination/trailing's shared 374,182-loan test set — all
+three share one `--reuse_from` split, but `select_observations()` can legitimately emit zero
+sampled rows for a split-assigned loan with too little post-dropna history, dropping it from the
+multiobs test set while origination/trailing (which need no such eligibility) keep it. All three
+pooled/dispersion numbers below are recomputed on the 365,146-loan intersection so the comparison
+isolates model differences, not population differences; origination/trailing's own pooled ratios
+shift slightly on this matched population (0.8631→0.8735, 1.1273→1.1409) versus their full-population
+values.
+
+**`pooled_comparison()` — first committed, reusable version of math that only existed ad hoc
+before.** `dispersion` = max(ratio)..min(ratio) across coupons 2.0–5.0 with n≥5,000, where
+`ratio = forecast_cpr / realized_cpr`; `pooled_ratio` = n_loans-weighted `pooled_forecast /
+pooled_realized` (re-pooling the underlying loan population, NOT a mean of the per-coupon ratios —
+verified these give different numbers). Self-checked against the known origination (0.8631) and
+trailing (1.1273) values before trusting it on the new multiobs output; both reproduced exactly.
+
+**Base-rate correction gap — found, not resolved.** Origination and trailing both apply
+`prior_shift_offset()`, a logit shift undoing `HazardSampler`'s known 50/50 prepaid/non-prepaid
+draw. Multiobs has no analogous correction (this checkpoint trained with `--use_ipw=False`), and a
+flat scalar shift is not theoretically justified for its sampling design: the mandatory/terminal
+draw is always included when eligible (`incl_prob=1.0` by construction, not sampled at any rate),
+while the remaining pool draws' `incl_prob` varies per observation by loan length/stratum size — a
+single King-Zeng-style intercept cannot represent a per-observation inclusion probability. A
+justified fix would need either an `--use_ipw` retrain or per-observation `incl_prob` reweighting at
+inference; neither has been built. Multiobs's pooled ratio (2.2250) is reported but marked
+explicitly NOT comparable to origination/trailing's.
+
+**Mean monthly h_t (pre-annualization), matched population, per coupon:**
+
+| coupon | realized | orig h_t | orig CPR | trail h_t | trail CPR | multi h_t | multi CPR |
+|---|---|---|---|---|---|---|---|
+| 2.0 | 12.20 | 0.0298 | 25.82 | 0.2249 | 44.25 | 0.3327 | 84.03 |
+| 2.5 | 15.81 | 0.0283 | 25.22 | 0.1874 | 43.47 | 0.2744 | 79.66 |
+| 3.0 | 26.36 | 0.0210 | 20.37 | 0.1016 | 31.62 | 0.1701 | 60.70 |
+| 3.5 | 33.88 | 0.0211 | 21.15 | 0.0364 | 21.11 | 0.1145 | 49.69 |
+| 4.0 | 35.17 | 0.0258 | 25.52 | 0.0261 | 19.68 | 0.0794 | 44.11 |
+| 4.5 | 35.36 | 0.0336 | 32.77 | 0.0438 | 34.24 | 0.0983 | 54.81 |
+| 5.0 | 36.02 | 0.0363 | 35.44 | 0.0551 | 44.83 | 0.0951 | 59.26 |
+
+Origination's monthly hazard stays in the near-linear regime (0.021–0.036) across the whole range.
+Trailing saturates hard at coupons 2.0–3.0 (0.10–0.22) but is near-linear from 3.5 up. Multiobs is
+at or above 0.079 at **every** coupon in range and above 0.10 at four of the seven — essentially the
+whole reported range sits inside or at the edge of `1-(1-h)^12`'s saturating region, worse than
+either of the other two models at every coupon.
+
+**Conclusion — directional finding stands, magnitude does not.** The inversion (forecast CPR
+falling as coupon rises 2.0→4.0 while realized CPR rises 12.2%→35.2%) is present in multiobs's raw
+monthly hazard, not only the annualized number — a defensible qualitative finding that multiobs
+reproduces the same burnout-shaped miscalibration direction already documented for the trailing
+model. The magnitude (dispersion 6.885..1.254, pooled ratio 2.2250) is NOT reported as a
+calibration result: it is generated inside a coupon range where the uncorrected base rate is
+already deep in the annualization's saturating region, so it cannot be separated from a genuine
+burnout signal without the correction described above.
+
+Artifacts: `scripts/forecast_matched_population_cpr.py`,
+`scripts/slurm/run_forecast_matched_population_cpr.sbatch`. Jobs 17009376 (matched-population
+run), 17010241 (rerun adding the monthly h_t table). Output:
+`outputs/rolling/cutoff_2020_{zbc,zbc_trail,multiobs_k5_h1}/rolling_cpr_forecast_matched.csv`
+(new files; the existing unrestricted CSVs are untouched).
