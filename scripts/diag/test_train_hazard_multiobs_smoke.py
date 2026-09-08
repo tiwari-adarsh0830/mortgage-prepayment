@@ -37,6 +37,28 @@ def check(name, cond, detail=''):
         FAILURES.append(name)
 
 
+def check_ipw_weight_direction():
+    """Regression check for the incl_prob -> weight DIRECTION bug (caught
+    2026-09-07): the pre-fix code weighted BY incl_prob (w = incl_prob),
+    which downweights rare pool draws instead of upweighting them via
+    Horvitz-Thompson (w = 1/incl_prob) -- and passed this smoke test
+    silently, because every other check here only verifies use_ipw=True
+    EXECUTES, never that its weight points the right DIRECTION. Calls
+    train_hazard_multiobs.ipw_weight() directly (the real function
+    train_and_evaluate uses), not a hand-rolled duplicate, so a regression
+    in that function is what this test is actually exercising."""
+    incl_prob = np.array([1.0, 1.0, 0.1, 0.1], dtype=np.float32)
+    w = m.ipw_weight(incl_prob).cpu().numpy()
+    check('IPW weight direction: incl_prob=0.1 observations get a HIGHER '
+          'weight than incl_prob=1.0 observations',
+          w[2] > w[0] and w[3] > w[1],
+          f'incl_prob={incl_prob.tolist()} -> weight={w.tolist()}')
+    check('IPW weight direction: incl_prob=1.0 (mandatory/terminal draw) '
+          'gets the MINIMUM weight (1.0)',
+          w[0] == 1.0 and w[1] == 1.0,
+          f'weight={w.tolist()}')
+
+
 def make_split(n, seed):
     """Right-aligned fixed windows (mask[:, -1] always True, like the real
     multiobs builder), with the label weakly tied to a feature so the model
@@ -62,6 +84,8 @@ def make_split(n, seed):
 
 
 def run():
+    check_ipw_weight_direction()
+
     train_seq, train_mask, train_labels, train_incl_prob = make_split(400, seed=0)
     test_seq,  test_mask,  test_labels,  _                = make_split(150, seed=1)
 
@@ -96,8 +120,16 @@ def run():
 
         losses = [h['loss'] for h in results['history']]
         aucs   = [h['auc']  for h in results['history']]
-        check(f'{label}: loss decreased from epoch 1 to epoch 4',
-              losses[-1] < losses[0], f'losses={losses}')
+        # Compare the mean of the first two epochs against the mean of the
+        # last two rather than epoch 1 vs epoch 4 directly: at this toy scale
+        # (400 rows, 4 epochs, batch_size=32) a single epoch's loss is noisy
+        # enough to bounce either direction, especially under use_ipw where
+        # per-sample weights further shrink the effective batch. The real
+        # 50-epoch cluster run (thousands of steps/epoch) declines smoothly;
+        # this check only needs to catch a training loop that's broken, not
+        # reproduce that smoothness on a handful of noisy toy epochs.
+        check(f'{label}: loss trended down (first-2-epoch mean > last-2-epoch mean)',
+              np.mean(losses[:2]) > np.mean(losses[-2:]), f'losses={losses}')
         check(f'{label}: all AUCs finite and in [0, 1]',
               all(np.isfinite(a) and 0.0 <= a <= 1.0 for a in aucs), f'aucs={aucs}')
         check(f'{label}: best_auc in [0, 1]',

@@ -39,7 +39,9 @@ Usage:
     python train_hazard_multiobs.py --cutoff_year 2020 --pos_ratio 0.5 --use_ipw
 
 Outputs (to outputs/rolling/cutoff_{YEAR}_multiobs_k{K}_h{H}/):
-    hazard_best.pt    — best model checkpoint
+    hazard_best.pt    — best model checkpoint (by test AUC)
+    hazard_final.pt   — model checkpoint at the last training epoch, saved
+                         unconditionally regardless of whether it beat best_auc
     results.json      — best AUC, Platt params (a, b), pos_ratio/use_ipw used, history
 """
 
@@ -197,6 +199,23 @@ def platt_calibrate(raw_scores: np.ndarray, labels: np.ndarray):
     return float(res.x[0]), float(res.x[1])
 
 
+# ── IPW weight (factored out so the smoke test can assert its DIRECTION,
+# not just that the training loop executes) ────────────────────────────────
+
+def ipw_weight(incl_prob: np.ndarray) -> torch.Tensor:
+    """Horvitz-Thompson weight: 1/incl_prob, NOT incl_prob itself. Rare pool
+    draws (small incl_prob) stand in for more of their stratum's unsampled
+    population and must be UPweighted; the mandatory/terminal draw
+    (incl_prob=1.0, and by this builder's H=1 window logic the ONLY draw
+    that can carry label=1) is already fully sampled and correctly gets the
+    minimum weight (1.0). Weighting BY incl_prob directly (the pre-fix bug,
+    caught 2026-09-07) inverts this -- it downweights the rare negatives
+    that IPW exists to upweight, pushing training even further toward the
+    already-oversampled positives than the uncorrected run.
+    """
+    return 1.0 / torch.tensor(incl_prob, device=DEVICE)
+
+
 # ── Training loop (factored out so a synthetic smoke test can drive it) ───────
 
 def train_and_evaluate(
@@ -213,6 +232,18 @@ def train_and_evaluate(
 
     sampler   = ObservationSampler(train_seq, train_mask, train_labels, train_incl_prob,
                                     pos_ratio=pos_ratio)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # manual_seed alone leaves cuDNN algorithm selection and CUDA attention/
+    # reduction kernels (flash/mem-efficient SDPA backward, cuDNN autotuned
+    # convs) free to pick nondeterministic implementations -- confirmed
+    # empirically 2026-09-07: two same-seed runs still differed by up to
+    # 0.21 per parameter with only manual_seed set. warn_only=True so any op
+    # genuinely lacking a deterministic kernel degrades to a warning instead
+    # of a hard crash, rather than failing training outright.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True, warn_only=True)
     model     = PrepaymentTransformer(max_seq=max_seq).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -237,7 +268,7 @@ def train_and_evaluate(
             logits = model(x, mask=m)
 
             if use_ipw:
-                w = torch.tensor(bweight, device=DEVICE)
+                w = ipw_weight(bweight)
                 per_sample = criterion(logits, y)
                 loss = (per_sample * w).sum() / w.sum().clamp(min=1e-12)
             else:
@@ -272,6 +303,17 @@ def train_and_evaluate(
                 }, os.path.join(out_dir, 'hazard_best.pt'))
             print(f'  → Best AUC: {best_auc:.4f}' + (' — saved.' if out_dir else ''), flush=True)
 
+    if out_dir is not None:
+        torch.save({
+            'model_state': model.state_dict(),
+            'config': {'input_dim': N_FEATURES, 'n_heads': 4, 'n_layers': 2,
+                       'd_model': 64, 'dim_ff': 256, 'dropout': 0.1,
+                       'max_seq': max_seq},
+            'epoch': epoch,
+            'auc':   float(auc),
+        }, os.path.join(out_dir, 'hazard_final.pt'))
+        print(f'  → Final epoch ({epoch}) AUC: {auc:.4f} — saved.', flush=True)
+
     print('\nFitting Platt calibration on test set...', flush=True)
     a, b = platt_calibrate(best_scores, test_labels)
     print(f'  Platt: a={a:.4f}, b={b:.4f}', flush=True)
@@ -299,14 +341,26 @@ def main():
     parser.add_argument('--use_ipw',       action='store_true', default=False,
                          help='Weight the loss per-sample by train_incl_prob '
                               '(weighted mean instead of plain mean). Default: off.')
+    parser.add_argument('--run_tag',       type=str, default='',
+                         help='Appended to OUT_DIR (e.g. "_seedcheck_a"). Default: empty, '
+                              'no-op for every existing invocation. Lets two same-seed runs '
+                              'write to distinct directories for a reproducibility check '
+                              'instead of one overwriting the other.')
     args = parser.parse_args()
 
     SEQ_DIR = os.path.join(
         BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}_zbc_multiobs'
               f'_k{args.k_draws}_h{args.label_horizon}')
+    # _ipw suffix only when --use_ipw is set, so this is a no-op for every
+    # existing/default invocation (job 16964657's directory naming is
+    # unchanged) -- added because OUT_DIR was otherwise identical for a
+    # --use_ipw run at the same cutoff/k_draws/label_horizon, which would
+    # silently overwrite that run's hazard_best.pt.
     OUT_DIR = os.path.join(
         BASE, f'outputs/rolling/cutoff_{args.cutoff_year}_multiobs'
-              f'_k{args.k_draws}_h{args.label_horizon}')
+              f'_k{args.k_draws}_h{args.label_horizon}'
+              f'{"_ipw" if args.use_ipw else ""}'
+              f'{args.run_tag}')
     os.makedirs(OUT_DIR, exist_ok=True)
 
     print(f'Device: {DEVICE}  |  cutoff: {args.cutoff_year}  |  '

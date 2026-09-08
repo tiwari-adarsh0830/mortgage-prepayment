@@ -2764,3 +2764,150 @@ Artifacts: `scripts/forecast_matched_population_cpr.py`,
 run), 17010241 (rerun adding the monthly h_t table). Output:
 `outputs/rolling/cutoff_2020_{zbc,zbc_trail,multiobs_k5_h1}/rolling_cpr_forecast_matched.csv`
 (new files; the existing unrestricted CSVs are untouched).
+
+## IPW correction and reproducibility (Sep 6-7, 2026)
+
+**Inference-time IPW pooling was abandoned as the wrong estimand, not shelved as untested.**
+The first attempt combined a loan's several multiobs-sampled `ref_month` observations into one
+per-loan hazard via Horvitz-Thompson pooling, `h_loan = sum_i(score_i/incl_prob_i) /
+sum_i(1/incl_prob_i)`. By the multiobs builder's own design, a loan's sampled reference months
+deliberately span different ages/incentive regimes — that separation of incentive from burnout is
+the entire point of multiobs sampling — so pooling them into one number estimates a
+**lifetime-average** hazard over the sampled window, not the **cutoff-conditional** hazard
+(`aggregate()`'s and origination/trailing's h_t both already are) that a CPR forecast needs.
+Feeding a lifetime-average h_loan into `aggregate()` under the same column name would compare a
+different estimand, not correct multiobs's calibration against a like-for-like target. The
+formula's *direction* was still verified correct on a synthetic 3-observation case before the
+estimand problem killed it (`scripts/diag/diag_multiobs_ipw_weight_direction.py`) — kept as a
+record that the pooling math itself was sound, only wrongly applied — and the real fix was pushed
+upstream: retrain with `--use_ipw` so the *loss* is IPW-corrected during training, and the trained
+model's score needs no further per-loan reweighting at inference.
+
+**The inverted-weight bug.** `train_hazard_multiobs.py`'s `--use_ipw` loss used
+`w = torch.tensor(bweight, device=DEVICE)` — the batch's `incl_prob` values **directly** as the
+per-sample weight — where Horvitz-Thompson weighting requires `w = 1/incl_prob`. This is backwards:
+a rare pool draw (small `incl_prob`) stands in for more of its stratum's unsampled population and
+must be *up*weighted, not down-weighted. Fixed by factoring the weight into its own function,
+`ipw_weight(incl_prob) = 1.0 / torch.tensor(incl_prob)`, called at the loss site instead of the raw
+tensor.
+
+Batch evidence (`ObservationSampler.sample_batch`, seed=42, batch_size=2048, real
+`cutoff_2020_zbc_multiobs_k5_h1` training data — reproduced from
+`scripts/diag/diag_ipw_batch_weight_check.py`): the sampled batch had 163 label=1 and 1,885
+label=0 observations. Label=1 observations got mean weight **1.0000** either way (their
+`incl_prob` is always exactly 1.0 — see the premise check below). Label=0 observations got mean
+weight **0.3806** under the buggy direct-`incl_prob` code — *lower* than the positives — and would
+get mean weight **7.3614** under the correct `1/incl_prob` inversion, i.e. more than 19x higher
+than what the buggy code actually used and, correctly, higher than the positives' weight rather
+than lower.
+
+The premise this diagnosis rests on was verified against the full training set rather than
+assumed: **571,553 / 571,553** label=1 observations have `incl_prob == 1.0` exactly (the
+mandatory/terminal draw is the only draw that can carry a positive label under this builder's H=1
+window, and it is always included when eligible). The 6,289,824 label=0 observations have
+`incl_prob` mean 0.3783, min 0.04255, max 1.0, with 21.04% sitting exactly at 1.0 (their own
+mandatory-terminal draws that happened to still be censored). Index alignment (`batch_weight`
+indexed by the same `idx` as `labels`/`seq`) and loss normalization were checked separately and
+were both clean — neither was a contributing cause.
+
+**The smoke test passed the inverted formula silently** because
+`scripts/diag/test_train_hazard_multiobs_smoke.py` only asserted that the `--use_ipw` code path
+*executed* (finite loss, decreasing over epochs) — never that the weight it computed pointed the
+correct direction. A `check_ipw_weight_direction()` case was added, calling
+`train_hazard_multiobs.ipw_weight()` directly (the real function `train_and_evaluate` uses, not a
+hand-rolled duplicate), asserting that a smaller `incl_prob` produces a strictly larger weight and
+that `incl_prob == 1.0` observations get the minimum weight of 1.0.
+
+**Buggy run's numbers vs. the corrected run's, read from each run's own artifacts.** The buggy
+run (`outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw_buggy/`, preserved rather than overwritten)
+peaked at epoch 8, `best_auc = 0.7740`, Platt `a=3.3898, b=-3.8723`. Its matched-population
+(365,146-loan) coupon-level forecast is saturated at nearly every coupon — `forecast_cpr` of
+90.3–99.3% across coupons 2.0–5.0 against realized 12.2–36.0% — giving dispersion **7.853..2.615**
+and pooled ratio **3.4089**: calibration got strictly worse than the uncorrected (`--use_ipw=False`)
+run, not better, which is what first flagged the direction bug rather than a training issue. The
+corrected, seed-controlled run's best checkpoint (below) instead gives dispersion **1.139..0.717**
+and pooled ratio **0.9091** — inside a plausible range rather than saturated.
+
+**The seeding gap.** `train_hazard_multiobs.py` seeded only the batch sampler
+(`np.random.default_rng`); model weight initialization and dropout were never seeded at all. Two
+same-seed, post-bugfix `--use_ipw` reruns
+(`outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw/hazard_best.pt` vs.
+`..._ipw_epoch1_20260907/hazard_best.pt`, both epoch-1 best checkpoints) differed by up to **0.7919**
+in a single parameter tensor (`transformer.layers.1.norm2.weight`), confirmed by direct tensor
+comparison (`logs/forecast_ipw_epoch_cmp_17127037.out`) — despite near-equal AUCs (0.7124 vs.
+0.7127) that would have looked like reproducibility if only the metric, not the weights, had been
+compared. Adding `torch.manual_seed(42)` + `torch.cuda.manual_seed_all(42)` alone reduced the max
+per-parameter diff to **0.21** (documented in a `train_hazard_multiobs.py` code comment) — better,
+but not bit-identical, because cuDNN algorithm selection and CUDA attention/reduction kernels
+(flash/mem-efficient SDPA backward, autotuned convolutions) remain free to pick nondeterministic
+implementations even with the RNG seeded. Bit-identical reproduction (0 of 31 parameter tensors
+differing, confirmed by `scripts/diag/compare_seedcheck_checkpoints.py` on jobs 17140541/17140542,
+run tags `_seedcheck_a`/`_seedcheck_b`) required all of: `torch.backends.cudnn.deterministic =
+True`, `torch.backends.cudnn.benchmark = False`, `torch.use_deterministic_algorithms(True,
+warn_only=True)`, and `CUBLAS_WORKSPACE_CONFIG=:4096:8` exported in the sbatch environment before
+the job starts.
+
+**Epoch-4 vs. epoch-50, on the now-reproducible run.** With run-to-run variance eliminated as a
+confound, `_seedcheck_a`'s `hazard_best.pt` (epoch 4, AUC 0.7181) and `hazard_final.pt` (epoch 50,
+AUC 0.7090) were scored identically (trailing test sequences, same 365,146-loan matched population,
+`logit_offset=0.0` for both — job 17149933):
+
+| coupon | n_loans | realized | h_t (best) | CPR (best) | ratio (best) | h_t (final) | CPR (final) | ratio (final) |
+|---|---|---|---|---|---|---|---|---|
+| 2.0 | 19,255 | 12.205 | 0.0125 | 13.899 | 1.1388 | 0.0190 | 20.279 | 1.6616 |
+| 2.5 | 34,755 | 15.808 | 0.0153 | 16.656 | 1.0537 | 0.0212 | 22.268 | 1.4087 |
+| 3.0 | 69,663 | 26.361 | 0.0233 | 23.500 | 0.8914 | 0.0272 | 26.790 | 1.0163 |
+| 3.5 | 38,981 | 33.876 | 0.0317 | 30.398 | 0.8973 | 0.0349 | 32.782 | 0.9677 |
+| 4.0 | 41,460 | 35.174 | 0.0331 | 31.903 | 0.9070 | 0.0347 | 33.121 | 0.9417 |
+| 4.5 | 10,615 | 35.356 | 0.0278 | 27.960 | 0.7908 | 0.0274 | 27.701 | 0.7835 |
+| 5.0 | 5,453 | 36.017 | 0.0250 | 25.812 | 0.7167 | 0.0237 | 24.639 | 0.6841 |
+
+Dispersion widens from **1.139..0.717** (best) to **1.662..0.684** (final), concentrated almost
+entirely in coupons 2.0 and 2.5 — ratio 1.14→1.66 and 1.05→1.41 respectively — while coupons
+3.0–5.0 hold roughly stable across the same 46 additional epochs of training. Pooled ratio moves
+**0.9091 → 1.0233**, nominally closer to 1.0, but per this repo's own f35b0bc caveat that is **not**
+evidence of better calibration when dispersion is simultaneously widening: a pooled ratio can
+improve purely because low-coupon overshoot and high-coupon undershoot are canceling in the
+n-weighted average, which is exactly the pattern here. Neither checkpoint saturates (h_t range
+0.0125–0.0331 best, 0.0190–0.0349 final; 0 of 7 coupons above the 0.10 threshold in both cases), so
+this is not a saturating-region story — additional training specifically distorts the low-coupon
+end of the curve.
+
+**Proposed mechanism — untested.** One candidate explanation: IPW's upweighted rare pool draws
+(small `incl_prob`, weight up to ~7-24x per the distribution characterized in
+`diag_multiobs_ipw_weight_direction.py`) are disproportionately long-lived, low-coupon loans that
+survived many eligible reference months without prepaying, and additional training epochs let the
+model increasingly fit those upweighted observations' burnout signature at the expense of
+cutoff-conditional accuracy at low coupons specifically. This is a hypothesis only — not checked
+against the actual coupon/incl_prob joint distribution, not checked against vintage or credit-score
+confounds, and not the only mechanism consistent with the observed pattern.
+
+**Two new Platt calibrations — never mix with any of the other four.** Read directly from each
+run's `results.json`: the buggy run is `a=3.3897956287900497, b=-3.8722876743517958`; the
+corrected, seed-controlled run (`_seedcheck_a`, identical to `_seedcheck_b`) is
+`a=29.600035577849884, b=-2.90084783552794`. Together with the four already on record — OAS
+loan-level (0.4934/-4.840), cohort-CPR forecast (0.4559/-3.1376), corrected-label zbc 2020
+(2.4245/-2.4348), and trailing zbc 2020 (12.9671/-13.0827) — **six distinct Platt calibrations now
+exist**. The two non-seed-controlled corrected reruns along the way (`_ipw`: a=25.3948, b=-2.8621;
+`_ipw_epoch1_20260907`: a=25.5254, b=-2.8500) are not added to this list as permanent entries — they
+are exactly the pre-determinism-fix nondeterminism this section exists to document, superseded by
+the seed-controlled canonical calibration above.
+
+**Residual top-end under-forecast.** Even on the best (epoch-4) checkpoint — the more calibrated of
+the two — coupons 4.5 and 5.0 are under-forecast by 21% and 28% respectively (ratio 0.7908 and
+0.7167), which is now the **largest** error in the table: bigger than coupon 2.0's 14% over-forecast
+(ratio 1.1388), the next-largest deviation from 1.0. Not addressed by this session's work; flagged
+as the next open question rather than treated as resolved by the IPW fix.
+
+Artifacts: `scripts/train_hazard_multiobs.py` (`ipw_weight()`, seeding, `hazard_final.pt`,
+`--run_tag`), `scripts/diag/test_train_hazard_multiobs_smoke.py`
+(`check_ipw_weight_direction()`), `scripts/diag/diag_multiobs_ipw_weight_direction.py`,
+`scripts/diag/diag_ipw_batch_weight_check.py`, `scripts/diag/compare_seedcheck_checkpoints.py`,
+`scripts/forecast_multiobs_ipw_cpr.py`, `scripts/forecast_multiobs_ipw_epoch_compare.py`,
+`scripts/forecast_multiobs_ipw_seedcheck_epoch_compare.py`. Jobs: buggy training 17068340,
+corrected-but-non-seeded training reruns 17092647 (`_ipw_epoch1_20260907`) and 17118450 (`_ipw`,
+adds `hazard_final.pt`), their checkpoint-identity/epoch comparison 17127037 (found the 0.7919 max
+param diff), seedcheck round 1 (`manual_seed` only, not bit-identical) 17128745/17128746, seedcheck
+round 2 (full determinism, bit-identical) training 17140541/17140542, seedcheck epoch-compare
+17149933. Outputs under
+`outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw{,_buggy,_epoch1_20260907,_seedcheck_a,_seedcheck_b}/`.
