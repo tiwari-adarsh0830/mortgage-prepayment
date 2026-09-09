@@ -2911,3 +2911,91 @@ param diff), seedcheck round 1 (`manual_seed` only, not bit-identical) 17128745/
 round 2 (full determinism, bit-identical) training 17140541/17140542, seedcheck epoch-compare
 17149933. Outputs under
 `outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw{,_buggy,_epoch1_20260907,_seedcheck_a,_seedcheck_b}/`.
+
+### Advisor follow-up: realized-rate weighting, non-prepay censoring, un-annualized calibration, and ESS (Sep 8, 2026)
+
+**`realized_cpr` carries no training-time weight.** Traced end to end in
+`forecast_rolling_cpr.py`: `read_coupon_and_realized()` builds `prepaid_set` from raw
+`zero_balance_code_actual == 1.0` membership only, and `aggregate()` computes
+`df['realized'] = df['loan_id'].isin(prepaid_set).astype(int)` then
+`realized_cpr = round(g['realized'].mean() * 100, 4)` (lines 492/509) — a plain unweighted
+mean of a 0/1 indicator per coupon. `incl_prob`/`ipw_weight()` exist only inside
+`train_hazard_multiobs.py`'s loss and never appear in this file. The realized side of every
+forecast/realized comparison in this README is therefore unweighted by construction, independent
+of whatever IPW correction (or bug) is live on the forecast side.
+
+**Non-prepay terminations are coded as censored survivors, not a distinct outcome — a
+simplification, not yet validated as harmless.** In `prepare_sequences_multiobs_zbc.py`'s
+`_prepare_panel()` (lines 466–470), `zbc_idx` is built by filtering to
+`zero_balance_code_actual == 1.0` before the groupby, so `is_prepaid` is `True` only for that
+code; every other terminal code falls through the `.fillna(df['L'] - 1)` branch and is treated
+identically to an ordinary loan still performing at the cutoff. Counted directly on the
+365,146-loan matched population (fresh raw pass, job 17230371): 142,889 loans terminate zbc==1
+(prepaid), 221,644 have no terminal code (still current), and **613 loans (0.17%) terminate via
+zbc 2/3/6/9/15/16** (third-party sale 64, short sale 27, repurchase 349, REO 132, note sale 5,
+reperforming-loan sale 36) — all 613 silently coded as right-censored survivors up to their last
+row. This is a modeling simplification stated plainly as such: it has not been checked for whether
+these loans share a distress signature with true prepayments that would bias the hazard if
+mislabeled as censored, only confirmed that the code treats them as censored and that the affected
+population is small in this cutoff/vintage window.
+
+**Un-annualized comparison: the 4.5/5.0 under-forecast is not a `1-(1-h)^12` artifact.**
+Scored the epoch-4 `_seedcheck_a` checkpoint (`hazard_best.pt`) against realized prepayment in
+January 2021 specifically — the single calendar month the H=1, Dec-2020-cutoff-anchored model
+actually predicts — instead of the annualized 12-month realized_cpr (job 17230237):
+
+| coupon | n_loans | mean h_t (monthly) | realized, Jan 2021 | ratio |
+|---|---|---|---|---|
+| 2.0 | 19,255 | 0.01250 | 0.00784 | 1.594 |
+| 2.5 | 34,755 | 0.01530 | 0.01240 | 1.233 |
+| 3.0 | 69,663 | 0.02328 | 0.02773 | 0.839 |
+| 3.5 | 38,981 | 0.03169 | 0.03650 | 0.868 |
+| 4.0 | 41,460 | 0.03312 | 0.03582 | 0.925 |
+| 4.5 | 10,615 | 0.02777 | 0.03457 | 0.803 |
+| 5.0 | 5,453 | 0.02505 | 0.03356 | 0.746 |
+
+The under-forecast at 4.5/5.0 (ratio 0.803, 0.746) is present at the single-month level, before any
+annualization — this rules out `1-(1-h)^12` saturation as the explanation. **Caveat:** January is a
+seasonal prepayment trough, so this comparison also implicitly nets out whatever seasonal
+adjustment the annual realized_cpr embeds; it isolates the annualization-vs-genuine-miscalibration
+question but does not by itself validate the full-year forecast.
+
+**ESS/n (relative weight concentration) tracks which coupons drifted between epoch 4 and 50; raw
+ESS and mean weight do not.** Weight = `1/incl_prob` on the full training set (6,861,377
+observations, 1,460,803 unique loans), coupon recovered from `incentive_at_ref + PMMS(ref_month)`
+(validated: only 4 of 1.4M loans show a cross-observation spread above 0.01, the rest is float32
+noise):
+
+| coupon | n | raw ESS | ESS/n | drifted (epoch 4→50)? |
+|---|---|---|---|---|
+| 2.0 | 210,278 | 72,758 | 34.6% | yes |
+| 2.5 | 857,682 | 338,509 | 39.5% | yes |
+| 3.0 | 1,585,475 | 804,664 | 50.8% | no |
+| 3.5 | 1,866,555 | 1,104,091 | 59.2% | no |
+| 4.0 | 1,493,411 | 898,297 | 60.2% | no |
+| 4.5 | 653,920 | 369,728 | 56.5% | no |
+| 5.0 | 150,526 | 91,169 | 60.6% | no |
+
+The two drifted coupons are exactly the two lowest ESS/n in this range, with an ~11-point gap down
+to the stable 3.0–5.0 band (50.8–60.6%) — consistent with the drift being driven by relative weight
+concentration at low coupons. This does **not** hold for raw (absolute) ESS: 2.5 has more effective
+observations (338,509) than 5.0 (91,169), yet 2.5 drifted and 5.0 held steady — if scarcity of
+absolute effective samples were the mechanism, 5.0 should be at least as vulnerable, and it isn't.
+Mean weight is similarly uninformative (2.0 mean 5.46 vs. 5.0 mean 5.06 — nearly identical despite
+opposite drift outcomes). The scoped conclusion is specifically about concentration, not scarcity:
+a smaller fraction of the nominal sample at 2.0/2.5 is carried by disproportionately high-weight
+rows relative to that coupon's own sample size, not that those coupons have too little data in
+absolute terms.
+
+**Points toward, but does not yet implement, the advisor's fixed-fraction resampling proposal.**
+If relative weight concentration (not raw scarcity) is driving the epoch-4→50 drift at 2.0/2.5,
+capping or resampling to a fixed fraction of eligible pool draws per loan (flattening the ESS/n
+profile across coupons) is the targeted next build — this has not been built or tested; it is
+recorded here as the next open question pending the advisor's input, not as a completed fix.
+
+Artifacts: `scripts/diag/diag_advisor_unannualized_epoch4.py` (job 17230237),
+`scripts/diag/diag_advisor_zbc_terminal_counts.py` (job 17230371),
+`scripts/slurm/run_diag_advisor_unannualized_epoch4.sbatch`,
+`scripts/slurm/run_diag_advisor_zbc_counts.sbatch`. Outputs:
+`outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw_seedcheck_a/unannualized_comparison_epoch4_202101.csv`,
+`outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw_seedcheck_a/terminal_zbc_matched_population.csv`.
