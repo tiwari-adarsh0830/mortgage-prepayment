@@ -2999,3 +2999,129 @@ Artifacts: `scripts/diag/diag_advisor_unannualized_epoch4.py` (job 17230237),
 `scripts/slurm/run_diag_advisor_zbc_counts.sbatch`. Outputs:
 `outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw_seedcheck_a/unannualized_comparison_epoch4_202101.csv`,
 `outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw_seedcheck_a/terminal_zbc_matched_population.csv`.
+
+## Fixed-fraction resampling: coupon-level preview and mechanism verification (Sep 9-10, 2026)
+
+Implements the fixed-fraction resampling proposal recorded as the open next step at the end of
+the Sep 8 advisor follow-up above: resample to a fixed fraction of each loan's eligible pool,
+instead of `fixed_k`'s k_draws-per-loan (which scales `incl_prob` directly with pool size and
+drives the length bias documented in `census_panel_baseline.py`'s coupon-level `n_eligible`
+spread).
+
+**Formula** (`select_observations()`, `sampling_mode='fixed_fraction'`,
+`prepare_sequences_multiobs_zbc.py:653-670`):
+```
+budget    = ceil(frac_draws * n_pool)          # non-mandatory slots
+incl_prob (non-terminal) = min(budget, n_pool) / n_pool
+mandatory/terminal draw: incl_prob = 1.0 always, independent of frac_draws or n_pool
+```
+No explicit `max(1, budget)` floor is needed — `ceil(frac_draws * n_pool)` is already >= 1 for
+any `n_pool >= 1` and `frac_draws > 0`, since `frac_draws * n_pool > 0` and `ceil()` of a positive
+number is always >= 1 (now stated explicitly in the docstring).
+
+**Coupon-level preview** (`fixed_fraction_coupon_preview.py`, `frac_draws=0.2`, cutoff_2020, full
+population, job 17295020):
+
+| coupon | n_eligible_median (census) | incl_prob_mean | sampled/eligible ratio |
+|---|---|---|---|
+| 2.0 | 3 | 0.2550 | 0.2635 |
+| 2.5 | 5 | 0.2381 | 0.2544 |
+| 3.0 | 30 | 0.2156 | 0.2342 |
+| 3.5 | 35 | 0.2126 | 0.2327 |
+| 4.0 | 32 | 0.2126 | 0.2331 |
+| 4.5 | 24 | 0.2161 | 0.2411 |
+| 5.0 | 23 | 0.2192 | 0.2484 |
+| 5.5 | 21 | 0.2245 | 0.2607 |
+| 6.0 | 22 | 0.2250 | 0.2620 |
+| 6.5 | 20 | 0.2342 | 0.2757 |
+
+(coupons 1.0/1.5 excluded from this table for readability only — `n_eligible_median=1`,
+tiny/degenerate pools; the full 12-bucket table including them is in
+`outputs/fixed_fraction_coupon_preview_cutoff_2020_f0.2.csv`.)
+
+**Mechanism confirmed exactly, population-wide — not inferred from the shape of this table.**
+Two follow-up checks: job 17299525 (per-loan spot check, vintage 2013Q1) and job 17300560 (full
+41-vintage population check, `fixed_fraction_population_check.py`):
+
+- *Per-loan*: 10/10 sampled loans (coupons 2.0 and 3.5, vintage 2013Q1) matched
+  `budget = ceil(0.2*n_pool)` exactly.
+- *Population, by n_pool*: grouping every non-terminal draw across all 41 vintages by `n_pool`
+  (94 distinct values) and comparing observed `incl_prob` to `ceil(0.2*n_pool)/n_pool`, max
+  deviation across every group's min/max is **0.0**; max deviation of the group mean from the
+  formula is **5.55e-17** (float64 machine epsilon).
+  `outputs/fixed_fraction_population_check_by_npool_f0.2.csv`.
+- *Population, by coupon*: each coupon's `incl_prob_mean` matches exactly what its own `n_pool`
+  distribution predicts via the formula (max deviation 5.55e-17).
+  `outputs/fixed_fraction_population_check_by_coupon_f0.2.csv`.
+
+This rules out the originally hypothesized mechanism: `incl_prob_mean` in the preview table is
+computed on `obs[~obs['is_terminal']]` only, so the mandatory/terminal draw's `incl_prob=1.0`
+never enters it — it cannot be "the terminal draw dominating and diluting out." The actual, fully
+confirmed driver is `ceil()` rounding up the non-mandatory budget itself:
+`incl_prob = ceil(0.2*n_pool)/n_pool >= 0.2` always, with the excess shrinking as `n_pool` grows
+and vanishing exactly at multiples of 5.
+
+**The range itself, no derived multiplier.** Deliberately not framed as a single "X-fold collapses
+to Y-fold" number: `n_pool` can legitimately be summarized per coupon at least three different
+ways, and they disagree with each other by roughly 3.2x to 11.7x depending on which is used,
+because each weights loans differently — Step 1's census-derived per-loan median `n_eligible`
+(coupon 2.0 -> 6.5 range 3 -> 35, an 11.7x spread), this check's own saved row-weighted mean
+`n_pool` (range 19.0 -> 61.06, a 3.2x spread), and a loan-weighted median `n_pool` recovered from
+this check's per-vintage checkpoints (range 4 -> 34, an 8.5x spread). Picking one of these to
+headline would assert a precision the underlying comparison doesn't have. What's directly comparable and
+exact is `incl_prob_mean` itself, read straight from `outputs/fixed_fraction_population_check_by_coupon_f0.2.csv`:
+it spans **0.2126 (coupon 4.0) to 0.2550 (coupon 2.0), a ~1.20x range**, against `fixed_k`'s
+`incl_prob = k_draws/n_pool`, which scales directly and unboundedly with pool size (a loan with
+10x the pool gets 1/10th the inclusion probability, with no ceiling-driven compression at all).
+
+**Monotonicity — not strictly monotonic under the check's own row-weighted statistic; a
+follow-up loan-weighting test explains most, not all, of the break.** Ranking coupons by this
+check's own saved `mean_n_pool` (`outputs/fixed_fraction_population_check_by_coupon_f0.2.csv`,
+row/observation-weighted — each loan's `n_pool` is weighted by how many sampled rows it
+contributed, i.e. by roughly its own `n_pool`), `incl_prob_mean` does **not** monotonically
+decrease: coupons **2.0, 2.5, and 3.5** all show an increase where the "larger pool -> lower
+incl_prob" pattern predicts a decrease. Recomputing the same statistic **loan-weighted** instead
+(each loan's `n_pool` weighted once, by loan count, recovered exactly as
+`n_loans = n_rows / ceil(0.2*n_pool)` per `(coupon, n_pool)` cell — verified exact,
+`max|n_rows - n_loans*budget| = 0.0`) restores strict monotonic decrease across 2.0 -> 2.5 -> 3.0
+-> 4.0:
+
+| coupon | row-weighted mean n_pool | loan-weighted mean n_pool | incl_prob_mean |
+|---|---|---|---|
+| 2.0 | 61.06 | 22.06 | 0.25502 |
+| 2.5 | 56.76 | 23.67 | 0.23808 |
+| 3.0 | 57.88 | 34.81 | 0.21560 |
+| 4.0 | 48.75 | 35.38 | 0.21257 |
+| 3.5 | 50.45 | 35.63 | 0.21261 |
+
+This **confirms the row-weighting-artifact explanation for coupons 2.0 and 2.5**: the
+row-weighted mean over-weights each loan by roughly its own `n_pool`, which is why coupon 2.0
+appears to have a *larger* "mean" pool (61.06) than coupon 3.0 (57.88) despite having far fewer
+large-pool loans in absolute terms — switching to loan-weighting corrects this and both coupons
+fall into their expected rank. It does **not** explain coupon 3.5: even loan-weighted, 3.5
+(35.63) still sits fractionally above 4.0 (35.38) in pool size while also sitting fractionally
+above it in `incl_prob_mean` (0.21261 vs 0.21257, a 0.000046 / ~0.02% difference) — a real,
+non-floating-point difference under the `diff > 1e-9` tolerance used to flag it, but small enough
+that it may simply reflect the two coupons' pool-size distributions being nearly identical rather
+than a distinct driving factor. This residual is not yet explained and is left as such, not
+attributed to weighting or anything else.
+
+The two smallest-sample coupons, 1.0 and 1.5 (430 and 18,298 loans respectively, median `n_pool`
+1-2), sit far outside this range (`incl_prob_mean` 0.71-0.76, since `n_pool=1` forces
+`incl_prob=1.0`) and are reported separately rather than folded into the headline range.
+
+### SLURM operational notes
+Job 17299525 (single-vintage per-loan inspection, 2013Q1 alone, ~50M rows) OOM'd at 48G; needed
+96G to complete. A single large vintage's raw CSV load can exceed a "just inspect a few loans"
+job's naive memory footprint — size diag jobs touching a full vintage at the same 96G/8-cpu
+envelope as the full 41-vintage runs, not down.
+
+Artifacts: `scripts/diag/fixed_fraction_coupon_preview.py` (job 17295020),
+`scripts/diag/inspect_fixed_fraction_examples.py` (job 17299525, resubmitted at 96G after an
+OOM at 48G), `scripts/diag/fixed_fraction_population_check.py` (job 17300560),
+`scripts/slurm/run_fixed_fraction_coupon_preview_2020.sbatch`,
+`scripts/slurm/run_inspect_fixed_fraction_examples.sbatch`,
+`scripts/slurm/run_fixed_fraction_population_check.sbatch`. Outputs:
+`outputs/fixed_fraction_coupon_preview_cutoff_2020_f0.2.csv`,
+`outputs/fixed_fraction_population_check_by_npool_f0.2.csv`,
+`outputs/fixed_fraction_population_check_by_coupon_f0.2.csv`.
