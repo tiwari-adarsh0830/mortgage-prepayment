@@ -232,6 +232,7 @@ def train_and_evaluate(
 
     sampler   = ObservationSampler(train_seq, train_mask, train_labels, train_incl_prob,
                                     pos_ratio=pos_ratio)
+    print(f'CUBLAS_WORKSPACE_CONFIG={os.environ.get("CUBLAS_WORKSPACE_CONFIG", "NOT SET")}', flush=True)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     # manual_seed alone leaves cuDNN algorithm selection and CUDA attention/
@@ -333,6 +334,18 @@ def main():
     parser.add_argument('--cutoff_year',   type=int, default=2020)
     parser.add_argument('--k_draws',       type=int, default=5)
     parser.add_argument('--label_horizon', type=int, default=1)
+    parser.add_argument('--max_seq_len',   type=int, default=33,
+                         help='Must match the --max_seq_len used by the prep script to build '
+                              'this data (default=33). Determines the _L{n} suffix on the '
+                              'sequence dir this looks for; the model position-embedding table '
+                              'size is derived from the loaded data itself, not hardcoded.')
+    parser.add_argument('--sampling_mode', choices=['fixed_k', 'fixed_fraction'], default='fixed_k',
+                         help='Must match the --sampling_mode used by the prep script to build '
+                              'this data. Determines the k{K}/f{frac} budget tag on the '
+                              'sequence dir this looks for.')
+    parser.add_argument('--frac_draws',    type=float, default=None,
+                         help='Required when --sampling_mode=fixed_fraction; must match the '
+                              'prep script\'s --frac_draws used to build this data.')
     parser.add_argument('--n_epochs',      type=int, default=N_EPOCHS)
     parser.add_argument('--pos_ratio',     type=float, default=None,
                          help='Fraction of each batch drawn from label==1 observations. '
@@ -348,9 +361,25 @@ def main():
                               'instead of one overwriting the other.')
     args = parser.parse_args()
 
+    if args.sampling_mode == 'fixed_fraction':
+        if args.frac_draws is None:
+            parser.error('--sampling_mode=fixed_fraction requires --frac_draws')
+    elif args.frac_draws is not None:
+        parser.error('--frac_draws is only used with --sampling_mode=fixed_fraction '
+                      '(sampling_mode is fixed_k, --k_draws applies instead)')
+
+    # Must mirror prepare_sequences_multiobs_zbc.py's SAVE_DIR formula exactly
+    # (_DEFAULT_SEQ_LEN=33, _budget_tag=k{k}/f{frac}) -- do not reimplement this
+    # independently a second time, or the two scripts' naming conventions can
+    # drift apart silently.
+    _cap        = '' if args.max_seq_len == 33 else f'_L{args.max_seq_len}'
+    _budget_tag = f'k{args.k_draws}' if args.sampling_mode == 'fixed_k' else f'f{args.frac_draws}'
     SEQ_DIR = os.path.join(
         BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}_zbc_multiobs'
-              f'_k{args.k_draws}_h{args.label_horizon}')
+              f'_{_budget_tag}_h{args.label_horizon}{_cap}')
+    assert os.path.isdir(SEQ_DIR), (
+        f'Expected sequence dir not found: {SEQ_DIR} -- check --max_seq_len/'
+        f'--sampling_mode/--frac_draws match what prepare_sequences_multiobs_zbc.py built.')
     # _ipw suffix only when --use_ipw is set, so this is a no-op for every
     # existing/default invocation (job 16964657's directory naming is
     # unchanged) -- added because OUT_DIR was otherwise identical for a
@@ -391,11 +420,16 @@ def main():
 
     print(f'train: {train_seq.shape} | test: {test_seq.shape}', flush=True)
 
+    max_seq = train_seq.shape[1]
+    assert max_seq == args.max_seq_len, (
+        f'Loaded data has sequence length {max_seq} but --max_seq_len={args.max_seq_len} '
+        f'-- SEQ_DIR naming resolved to the wrong directory: {SEQ_DIR}')
+
     results = train_and_evaluate(
         train_seq, train_mask, train_labels, train_incl_prob,
         test_seq, test_mask, test_labels,
         n_epochs=args.n_epochs, pos_ratio=args.pos_ratio, use_ipw=args.use_ipw,
-        out_dir=OUT_DIR,
+        out_dir=OUT_DIR, max_seq=max_seq,
     )
 
     results.update({

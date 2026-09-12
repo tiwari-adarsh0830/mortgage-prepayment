@@ -230,6 +230,7 @@ ssh at7095@login.torch.hpc.nyu.edu
 | Calibrate/forecast on login node | Login node kills heavy CPU jobs; use SLURM run_calibrate.sbatch or nohup |
 | FM sample restriction leak (stage3_der_factor_shocks.py) | fama_macbeth() received full returns panel instead of factor-coverage months; silently inflated n back to full-sample count in both full-sample (77->72) and rolling (77->48) runs |
 | Rolling calibration fallback (stage2_forecast_cpr_rolling.py) | cutoff_2020/2021 had no own Platt file, silently fell back to OAS Platt (b=-4.840) instead of cohort-CPR Platt; forced cohort-CPR onto all four cutoffs |
+| GPU training silently non-deterministic despite seeded RNG | `torch.manual_seed`/`cudnn.deterministic`/`use_deterministic_algorithms` alone are not sufficient — must also `export CUBLAS_WORKSPACE_CONFIG=:4096:8` in the sbatch environment before the job starts, or cuBLAS algorithm selection stays nondeterministic; seedcheck round 1 without it (jobs 17128745/17128746) differed, round 2 with it (jobs 17140541/17140542) was bit-identical |
 
 ---
 
@@ -3125,3 +3126,49 @@ OOM at 48G), `scripts/diag/fixed_fraction_population_check.py` (job 17300560),
 `outputs/fixed_fraction_coupon_preview_cutoff_2020_f0.2.csv`,
 `outputs/fixed_fraction_population_check_by_npool_f0.2.csv`,
 `outputs/fixed_fraction_population_check_by_coupon_f0.2.csv`.
+
+## Window-length comparison: training results and a reproducibility gap (Sep 10-11, 2026)
+
+**Census validation of the training population (Step 3, closes the advisor's standing "always
+validate against the census panel" instruction).** `check_sampler_vs_census.py` (job 17308661,
+cutoff Dec 2020, `frac_draws=0.2`) confirmed the IPW-weighted `fixed_fraction` sampler reproduces
+the census panel's totals overall and per coupon — pooled eligible-loan-months, prepay-event
+counts, and the weight-direction check all passed within the 1% tolerance. A follow-up script,
+`check_sampler_vs_census_by_vintage.py`, re-ran the same comparison broken out **per vintage
+instead of pooled**, to rule out offsetting errors hiding inside the pooled pass: **41/41
+vintages pass both checks, `rel_dev` exactly 0.0 at every single vintage** — a bit-for-bit exact
+match, not an approximate one. Output: `outputs/check_sampler_vs_census_by_vintage_f0.2.csv`.
+
+**Three full training runs at L=33/48/60, same population.** All three use `fixed_fraction`
+sampling (`f=0.2`), the same cutoff_2020 population, and the same train/test split — confirmed by
+comparing `train_loan_ids_split.npy`/`test_loan_ids_split.npy`/`scaler.pkl` across the three
+sequence directories, which are byte-identical. Each ran 50 epochs with `--use_ipw`:
+
+| window (L) | job | best_auc |
+|---|---|---|
+| 33 | 17355084 | 0.7164 |
+| 48 | 17355085 | 0.7170 |
+| 60 | 17355086 | 0.7160 |
+
+**The spread cannot be distinguished from single-seed noise.** The L33-L60 best_auc spread is
+~0.001 (0.7170 - 0.7160). Over the last 15-20 epochs of each run, near convergence, epoch-to-epoch
+AUC already varies by 0.0015-0.0020 within a *single* run — larger than the spread between the
+three window lengths. On this evidence, L=33/48/60 cannot be ranked; the apparent best (L=48)
+could just as easily be noise. **The window-length question is left open, pending a second-seed
+comparison, per the email sent to the advisor.**
+
+**The CUBLAS_WORKSPACE_CONFIG gap.** Full determinism for these runs requires
+`CUBLAS_WORKSPACE_CONFIG` to be set in the sbatch job's environment, on top of the code-level
+`torch.manual_seed` / `cudnn.deterministic` calls already in `train_hazard_multiobs.py` — the
+env var alone is necessary but not present by default. It was missing from all three of today's
+job scripts (`run_train_multiobs_2020_f0.2_L33/L48/L60.sbatch`). A repeat of the L33 run with
+`CUBLAS_WORKSPACE_CONFIG=:4096:8` set (job 17378466, `run_train_multiobs_2020_f0.2_L33_repeat.sbatch`)
+reproduced a `results.json` byte-for-byte identical to the original L33 run (best_auc
+0.7163846603462104 both times, 0.0 delta). That confirms the repeat run itself was deterministic —
+it does **not** retroactively establish whether the original three runs were deterministic, since
+the env var was absent when they ran. That determinism status is recorded plainly as unknown, not
+asserted either way.
+
+**Fix.** `train_hazard_multiobs.py` now prints the resolved `CUBLAS_WORKSPACE_CONFIG` value at the
+start of every training run, so a missing env var shows up in the job log instead of silently
+producing an unverifiable-determinism gap again.
