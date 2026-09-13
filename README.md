@@ -3172,3 +3172,94 @@ asserted either way.
 **Fix.** `train_hazard_multiobs.py` now prints the resolved `CUBLAS_WORKSPACE_CONFIG` value at the
 start of every training run, so a missing env var shows up in the job log instead of silently
 producing an unverifiable-determinism gap again.
+
+## No-history control (max_seq_len=1): slicing approach, result, and the same noise-floor caveat (Sep 12, 2026)
+
+**Setup.** Built the `max_seq_len=1` "no-history" control by slicing the last timestep off the
+already-built L33 multiobs data (`scripts/diag/slice_l33_to_l1.py`), instead of running a fresh
+`prepare_sequences_multiobs_zbc.py --max_seq_len 1` prep job. Source:
+`data/sequences_rolling/cutoff_2020_zbc_multiobs_f0.2_h1` (L33); dest: the same directory name
+with an `_L1` suffix.
+
+**Why slicing is valid, not an approximation.** `build_sequences_multiobs` is right-aligned:
+index `MAX_SEQ_LEN-1` is always `ref_month` itself, for every observation — confirmed empirically
+(L33's `test_mask` last column is 100% `True` across all 2,808,691 rows). Eligibility, selection,
+labels, and `incl_prob` have zero dependence on `MAX_SEQ_LEN` (the window-gap filter is the only
+`MAX_SEQ_LEN`-dependent term, and it is vacuously `False` at L=1 anyway). So `train_seq[:, -1:, :]`
+**is** the `--max_seq_len 1` build for every observation the L33 run already has, with
+labels/`incl_prob` carried over unchanged — not a stand-in for it.
+
+**Training run.** Same `fixed_fraction` sampling (`f=0.2`), same cutoff_2020 population and
+train/test split as the window-length runs above, 50 epochs, `--use_ipw`
+(`run_train_multiobs_2020_f0.2_L1.sbatch`, job 17520583):
+
+| window (L) | job | best_auc |
+|---|---|---|
+| 1 | 17520583 | 0.7145 |
+| 33 | 17355084 | 0.7164 |
+
+**The spread cannot be distinguished from single-seed noise, by the same standard already applied
+to the window-length comparison.** Same statistic as the L33/L48/L60 noise floor above — AUC range
+(max − min) over the last 15/20 epochs, not epoch-to-epoch deltas: the L=1 run's range is **0.0018**
+(identical for both windows, since the min (epoch 39) and max (epoch 43) both fall inside the last
+15 epochs), in the same 0.0015–0.0019 band as L33 (0.0015), L48 (0.0016–0.0019), and L60 (0.0019).
+The L33-vs-L1 best_auc spread (0.7164 − 0.7145 = 0.0019) sits inside that band. **This result does
+not confirm a history effect, and it does not rule one out either** — on this evidence alone,
+no-history (L=1) cannot be distinguished from "a different draw of the same noisy training
+process." Both the window-length question and this history question are left open, pending a
+proper multi-seed comparison — not another email to the advisor asking
+him to decide with an open question again.
+
+## Seed-replication comparison resolves the L33-vs-L1 question; the noise-floor proxy above was too conservative (Sep 13, 2026)
+
+**Setup.** Reran both L33 and L1 (same `fixed_fraction f=0.2`, same cutoff_2020 population/split,
+50 epochs, `--use_ipw`) at two additional seeds (7, 123), giving n=3 per condition alongside the
+existing seed=42 baselines (jobs 17355084/17520583). New jobs: 17594751 (L33 seed7), 17594752
+(L33 seed123), 17594753 (L1 seed7), 17594754 (L1 seed123) — all COMPLETED (0:0), seeds confirmed
+against each run's `results.json` `seed` field and against the (unseeded) `--seed` flag in each
+run's own sbatch script.
+
+| condition | seed=42 | seed=7 | seed=123 | mean | sd (n−1) | range |
+|---|---|---|---|---|---|---|
+| L33 best_auc | 0.716385 | 0.716581 | 0.716961 | 0.716642 | 0.000293 | 0.000576 |
+| L1 best_auc | 0.714495 | 0.714702 | 0.714942 | 0.714713 | 0.000224 | 0.000447 |
+| L33 mean_auc_last10 | 0.716000* | 0.715865 | 0.716511 | 0.716125 | 0.000341 | 0.000646 |
+| L1 mean_auc_last10 | 0.713960* | 0.713915 | 0.714643 | 0.714173 | 0.000408 | 0.000728 |
+
+*seed=42's `results.json` predates the `mean_auc_last10` field; computed manually from its stored
+`history` (mean of epochs 41–50), same definition the current script writes.
+
+**The gap is real, not noise.** Gap (L33 − L1 mean) = 0.001929 on best_auc, 0.001953 on
+mean_auc_last10. Expressed against each condition's own seed-to-seed spread (8 ratios: 2 metrics
+× {L33, L1} × {sd, range}), the gap is consistently larger than the within-group noise, ranging
+from **2.68× to 8.62×** — precisely (not "3-9x" or any rounder figure): best_auc gap/L33 sd
+6.58×, gap/L1 sd 8.62×, gap/L33 range 3.35×, gap/L1 range 4.32×; mean_auc_last10 gap/L33 sd 5.73×,
+gap/L1 sd 4.79×, gap/L33 range 3.02×, gap/L1 range 2.68×. This supersedes the "cannot be
+distinguished from noise" conclusion two sections above for L33-vs-L1 specifically: with real
+n=3 seed replication instead of the single-run epoch-swing proxy, history vs. no-history is a
+distinguishable effect, not indistinguishable-from-noise.
+
+**The epoch-swing proxy used above overestimated true seed-to-seed noise by 2.6×–4.0×.** The
+proxy quoted for L33/L1 above (AUC range over the last 15/20 epochs of a *single* run) was 0.0015
+(L33) and 0.0018 (L1) — reproduced here from the same seed=42 histories to confirm apples-to-apples.
+The real, measured seed-to-seed range from n=3 is 0.000576 (L33) and 0.000447 (L1) — smaller by
+2.6× (0.0015/0.000576) and 4.0× (0.0018/0.000447) respectively. The proxy was a conservative
+overestimate, not an underestimate. Consequence: the L33/L48/L60 window-length comparison above
+(spread ≈0.001, judged "cannot be ranked" against a 0.0015–0.0019 proxy band) used a noise floor
+that this replication shows was too large — a spread of ≈0.001 against a real per-seed range
+closer to ~0.0005 is roughly 2× the real noise, not safely inside it. That comparison is not
+retroactively resolved (L48/L60 were never rerun at other seeds) but its "indistinguishable from
+noise" verdict should be treated as unconfirmed pending their own seed replication, not settled.
+
+**Population identity confirmed, not assumed.** `train_hazard_multiobs.py`'s `--seed` reaches
+`torch.manual_seed`/`cuda.manual_seed_all` (model init) and a `np.random.default_rng(seed)` used
+only inside `ObservationSampler.sample_batch` for `rng.integers(0, self.n, size=batch_size)` —
+uniform-with-replacement minibatch draws over the already-fixed `self.n` rows. It never reaches
+`prepare_sequences_multiobs_zbc.py`, which has no `--seed` argument at all; its observation
+selection is a deterministic `hashlib.blake2b` hash of `loan_id` (`_loan_base_hash`,
+`_mix_hash`), independent of any seed. All four seed-replication runs' logs point at the exact
+same `Sequences:` directories as their seed=42 baselines (`cutoff_2020_zbc_multiobs_f0.2_h1` for
+L33, `..._h1_L1` for L1) — no prep job reran. The Step 3 census-panel validation
+(`scripts/diag/check_sampler_vs_census.py`, which reruns `select_observations()` directly against
+`census_panel_baseline_cutoff_2020.json`, entirely upstream of the training script) therefore
+already covers all four seed-replication runs without needing to be rerun per seed.
