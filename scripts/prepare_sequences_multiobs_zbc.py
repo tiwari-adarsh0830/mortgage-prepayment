@@ -107,12 +107,15 @@ from sklearn.preprocessing import StandardScaler
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE      = '/scratch/at7095/mortgage_prepayment'
-DATA_DIR  = os.path.join(BASE, 'data/raw')
+DATA_DIR  = os.path.join(BASE, 'data/raw')            # 2013Q1-2023Q1 (modern era)
+PRE2013_DATA_DIR = os.path.join(BASE, 'data_pre2013_raw')   # 2000Q1-2012Q4 (historical era)
+PRE2013_CELL_SAMPLE_PATH = os.path.join(BASE, 'outputs', 'pre2013_cell_sample_loans.csv')
 PMMS_PATH = os.path.join(BASE, 'data/pmms_monthly.csv')
 ZHVI_PATH = os.path.join(BASE, 'data/zhvi_zip3.csv')
 
-# All potentially available vintages — loader skips missing files silently.
-ALL_VINTAGES = [
+# All potentially available MODERN-era vintages — loader skips missing files
+# silently. Unchanged from before the historical-era extension.
+_MODERN_VINTAGES = [
     '2013Q1', '2013Q2', '2013Q3', '2013Q4',
     '2014Q1', '2014Q2', '2014Q3', '2014Q4',
     '2015Q1', '2015Q2', '2015Q3', '2015Q4',
@@ -125,6 +128,28 @@ ALL_VINTAGES = [
     '2022Q1', '2022Q2', '2022Q3', '2022Q4',
     '2023Q1',
 ]
+
+# HISTORICAL-era acquisition-quarter files actually on disk under
+# data_pre2013_raw/ (2000Q1.csv .. 2012Q4.csv, 52 files -- confirmed against
+# `ls data_pre2013_raw/*.csv`). NOTE: this is NOT the same axis as the
+# cell-grid sample's `vintage_quarter` label, which is origination-date-
+# derived and runs back to 1999Q1 -- those 1999-origination loans have no
+# file of their own, they ride inside the 2000Q1.csv+ ACQUISITION files
+# (see count_prepay_events_pre2013.py's docstring) and are picked up
+# automatically once that file is opened and cell-grid-gated below.
+PRE2013_VINTAGES = [f'{y}Q{q}' for y in range(2000, 2013) for q in range(1, 5)]
+_PRE2013_VINTAGE_SET = frozenset(PRE2013_VINTAGES)
+
+# Module-level default: modern-only. Anything that reads ALL_VINTAGES without
+# going through main() (census_panel_baseline.py, fixed_fraction_coupon_
+# preview.py, etc.) is therefore completely unaffected by the historical-era
+# extension. main() rebinds this global to PRE2013_VINTAGES + _MODERN_VINTAGES
+# ONLY when --include_pre2013 is passed (same rebind technique as MAX_SEQ_LEN
+# below) -- every existing invocation without that flag sees the identical
+# list it always did, so e.g. a cutoff_2020 build's train/test split (which
+# depends on the FULL discovered loan_id population, not per-vintage logic)
+# is untouched.
+ALL_VINTAGES = _MODERN_VINTAGES
 
 MAX_SEQ_LEN  = 33   # default; override per-run with --max_seq_len
 _DEFAULT_SEQ_LEN = 33   # frozen reference — MAX_SEQ_LEN is rebound at runtime
@@ -238,6 +263,23 @@ def dec_yyyymm(year: int) -> int:
     return year * 100 + 12
 
 
+def _vintage_quarter_start_yyyymm(vintage: str) -> int:
+    """Nominal acquisition-quarter start month as YYYYMM, e.g. '2002Q3' -> 200207.
+    A vintage FILE cannot contain any row with monthly_reporting_period before
+    this month -- loans begin reporting at acquisition, never earlier -- so
+    RELEVANT_VINTAGES in main() uses this to skip opening files that provably
+    hold nothing at or before a given cutoff.
+
+    Margin verified empirically, not assumed (awk single-pass min-scan over
+    raw files, 2026-09-19): actual min(monthly_reporting_period) equals this
+    exact nominal value (delta 0) for every boundary file checked --
+    2000Q1, 2002Q3, 2002Q4, 2003Q1, 2003Q2, 2011Q2, 2011Q3, 2012Q4 (pre-2013
+    era), 2013Q1 (pre/post-2013 boundary), 2019Q4, 2020Q1 (modern era). No
+    safety margin needed on top of the nominal quarter start."""
+    yyyy, q = int(vintage[:4]), int(vintage[5])
+    return yyyy * 100 + (q - 1) * 3 + 1
+
+
 # ── Data loaders ──────────────────────────────────────────────────────────────
 
 def load_pmms() -> dict:
@@ -251,6 +293,70 @@ def load_zhvi() -> pd.DataFrame:
     zhvi['zip3']             = zhvi['zip3'].astype(int)
     zhvi['reporting_period'] = zhvi['reporting_period'].astype(int)
     return zhvi
+
+
+def _data_dir_for_vintage(vintage: str) -> str:
+    """data_pre2013_raw/ for a PRE2013_VINTAGES acquisition-quarter file,
+    else data/raw/ (modern era) -- so callers no longer hardcode DATA_DIR."""
+    return PRE2013_DATA_DIR if vintage in _PRE2013_VINTAGE_SET else DATA_DIR
+
+
+_pre2013_cell_sample_ids_cache: frozenset | None = None
+
+
+def _load_pre2013_cell_sample_ids() -> frozenset:
+    """loan_ids selected by the cell-grid sampler
+    (scripts/build_cell_grid_sample_pre2013.py): 1,677,060 of the 29.1M raw
+    pre-2013 loans, drawn to target ~5,000 zero_balance_code==01 events per
+    (vintage_quarter, coupon) cell. Cached module-wide after the first call
+    -- this is a ~1.7M-row CSV and load_vintage_filtered calls this once per
+    PRE2013_VINTAGES file (52x for a full historical build)."""
+    global _pre2013_cell_sample_ids_cache
+    if _pre2013_cell_sample_ids_cache is None:
+        ids = pd.read_csv(PRE2013_CELL_SAMPLE_PATH, usecols=['loan_id'])['loan_id']
+        _pre2013_cell_sample_ids_cache = frozenset(ids.tolist())
+        print(f'  Loaded pre-2013 cell-grid sample: '
+              f'{len(_pre2013_cell_sample_ids_cache):,} loan_ids', flush=True)
+    return _pre2013_cell_sample_ids_cache
+
+
+def _encode_categorical(series: pd.Series, mapping: dict, label: str) -> pd.Series:
+    """Map a raw code column through `mapping`. property_type=='CP' (Co-op)
+    and loan_purpose=='U' (Unknown) are both real, documented Fannie Mae
+    codes present in BOTH eras, more densely in the earliest pre-2013
+    vintages, which is what originally motivated adding them to the maps
+    below (property_type CP=4, loan_purpose U=3) instead of falling back to
+    0. Both are CONFIRMED in the modern era, not assumed, from two
+    independent pieces of evidence:
+      (1) job 17974041 (2026-09-18, cutoff_2020 rebuild, ran BEFORE this
+          mapping fix existed -- CP/U still fell back to 0 that run, and the
+          then-new unmapped-code warning caught it): raw loan-month ROWS with
+          an unmapped code, one warning line per vintage per code. CP fired
+          in EVERY one of the 32 modern (2013Q1-2020Q4) vintages, from 5,300
+          rows (2020Q4) up to 318,574 rows (2013Q2). U fired in three of
+          them: 96 rows (2013Q1), 82 rows (2014Q1), 24 rows (2014Q4) -- sparse
+          and not present in every vintage, but real.
+      (2) job 18022825 (2026-09-19, cutoff_2020 regression check, ran AFTER
+          this fix): of the SAMPLED training population (fixed_fraction
+          multiobs observations, a small draw off the full panel above), CP
+          shows up as 55,028 train + 14,652 test observations (0.49-0.52%).
+          U shows up as zero sampled observations in that same population --
+          consistent with (1)'s much sparser raw U count getting missed by
+          the sampler's draw, not with U being absent from the modern era.
+    Anything STILL absent from `mapping`
+    (missing values, or a genuinely new/unexpected code) still falls back to
+    0, UNCHANGED encoding for known codes -- but is now visible: unmapped
+    codes are counted and their actual values printed instead of silently
+    landing on 0 indistinguishably from a genuine Purchase/Single-family
+    row."""
+    encoded = series.map(mapping)
+    unknown = encoded.isna()
+    n_unknown = int(unknown.sum())
+    if n_unknown:
+        seen = series[unknown].value_counts(dropna=False).to_dict()
+        print(f'  WARNING: {label} - {n_unknown:,} unmapped code(s) (mapping={mapping}), '
+              f'values seen: {seen}', flush=True)
+    return encoded.fillna(0).astype(float)
 
 
 def load_vintage_filtered(
@@ -268,9 +374,18 @@ def load_vintage_filtered(
         survives the cutoff filter. A loan that prepays AFTER the cutoff is
         labeled prepaid=0 in the training data — no lookahead leakage.
     """
-    path = os.path.join(DATA_DIR, f'{vintage}.csv')
+    path = os.path.join(_data_dir_for_vintage(vintage), f'{vintage}.csv')
     if not os.path.exists(path):
         return None
+
+    # HISTORICAL-ERA GATE: restrict loan selection to the cell-grid sample
+    # (1,677,060 of 29.1M loans) instead of processing the full pre-2013
+    # corpus. Only ever fires for PRE2013_VINTAGES -- modern-era `keep_ids`
+    # (None in Pass 1/3's initial load, or the train/test id_set passed
+    # elsewhere) passes through completely untouched.
+    if vintage in _PRE2013_VINTAGE_SET:
+        cell_ids = _load_pre2013_cell_sample_ids()
+        keep_ids = cell_ids if keep_ids is None else (set(keep_ids) & cell_ids)
 
     print(f'  Loading {vintage}...', flush=True)
 
@@ -375,15 +490,19 @@ def load_vintage_filtered(
     # ── FIXED categorical encodings ───────────────────────────────────────────
     # Production pipeline used wrong maps (N/Y and P/R/C → all zeros).
     # Correct Fannie Mae codes:
-    #   loan_purpose:  R=Purchase, C=Refinance, P=Cash-out Refinance
-    #   property_type: SF=Single-family, PU=Planned unit dev, CO=Condo, MH=Manufactured
-    df['loan_purpose_enc'] = df['loan_purpose'].map(
-        {'R': 0, 'C': 1, 'P': 2}
-    ).fillna(0).astype(float)
-
-    df['property_type_enc'] = df['property_type'].map(
-        {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3}
-    ).fillna(0).astype(float)
+    #   loan_purpose:  R=Purchase, C=Refinance, P=Cash-out Refinance, U=Unknown
+    #   property_type: SF=Single-family, PU=Planned unit dev, CO=Condo,
+    #                  MH=Manufactured, CP=Co-op
+    # U and CP are legitimate documented codes present in BOTH eras (denser
+    # pre-2013, e.g. 2000Q1 has 357 distinct CP loans, 0.8% of that vintage's
+    # loans -- but also confirmed in every modern-era vintage, see
+    # _encode_categorical's docstring for the two independent checks) --
+    # previously both silently fell back to 0 (indistinguishable from a
+    # genuine Purchase/Single-family row), now each gets its own code.
+    df['loan_purpose_enc'] = _encode_categorical(
+        df['loan_purpose'], {'R': 0, 'C': 1, 'P': 2, 'U': 3}, 'loan_purpose')
+    df['property_type_enc'] = _encode_categorical(
+        df['property_type'], {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3, 'CP': 4}, 'property_type')
 
     # ── Prepay label — CRITICAL: only from rows within cutoff window ──────────
     # Any row with zbc==1 at monthly_reporting_period <= cutoff is a prepay event.
@@ -391,8 +510,12 @@ def load_vintage_filtered(
     prepaid_set   = set(df.loc[df['zero_balance_code_actual'] == 1.0, 'loan_id'].unique())
     df['prepaid'] = df['loan_id'].isin(prepaid_set).astype(int)
 
+    # original_interest_rate rides along unused by build_sequences_multiobs
+    # (which selects columns from FEATURE_COLS by name) -- kept so
+    # census_panel_baseline.py can coupon-bucket the panel without a second
+    # raw-file pass.
     keep = ['loan_id', 'yyyymm', 'monthly_reporting_period', 'prepaid',
-            'zero_balance_code_actual'] + FEATURE_COLS
+            'zero_balance_code_actual', 'original_interest_rate'] + FEATURE_COLS
     df = df[keep].dropna(subset=FEATURE_COLS)
 
     n_loans   = df['loan_id'].nunique()
@@ -478,15 +601,19 @@ def _prepare_panel(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Per-loan fixed-k sampling of (loan_id, ref_month) observations ────────────
 
-def select_observations(
-    df: pd.DataFrame, k_draws: int, H: int, min_hist: int,
-    draw_scheme: str = 'uniform', incentive_edges: list[float] | None = None,
-) -> pd.DataFrame:
-    """Select up to k_draws (loan_id, ref_month) observations per loan.
+def _eligible_candidates(df: pd.DataFrame, H: int, min_hist: int) -> pd.DataFrame:
+    """Panel prep + eligibility mask + both calendar filters -- the FULL
+    (loan_id, ref_month) candidate population, before any sampling is
+    applied. Factored out of select_observations() (which samples from this
+    set) so scripts/diag/census_panel_baseline.py can enumerate the SAME set
+    with no sampling at all, as the reference any sampler must reproduce
+    under IPW. Do not reimplement this filtering a second time elsewhere.
 
-    df needs loan_id, yyyymm, zero_balance_code_actual, and (for the
-    incentive scheme / verification output) refi_incentive, loan_age_months
-    — all UNSCALED. Returns one row per selected observation; see _OBS_COLS.
+    Returns the filtered candidate frame, carrying every _prepare_panel /
+    df column (row_idx, L, term_t, is_prepaid, monthidx, cumgap, and all
+    original df columns) -- one row per eligible (loan_id, ref_month).
+    Empty frame (not None) if nothing survives; callers decide what an
+    empty result means for them.
     """
     panel = _prepare_panel(df)
 
@@ -497,7 +624,7 @@ def select_observations(
     )
     elig = panel[eligible].copy()
     if elig.empty:
-        return _empty_obs_frame()
+        return elig
 
     # ── CALENDAR filters (row_idx is a post-dropna POSITION, not a calendar
     # index -- see _prepare_panel). Both are applied to `elig` BEFORE the
@@ -540,6 +667,87 @@ def select_observations(
           f'out of {len(elig):,} otherwise-eligible candidates', flush=True)
 
     elig = elig[~(drop_window_gap | drop_label_mismatch)].drop(columns=['_win_start'])
+    return elig
+
+
+def select_observations(
+    df: pd.DataFrame, k_draws: int, H: int, min_hist: int,
+    draw_scheme: str = 'uniform', incentive_edges: list[float] | None = None,
+    sampling_mode: str = 'fixed_k', frac_draws: float | None = None,
+) -> pd.DataFrame:
+    """Select (loan_id, ref_month) observations per loan under one of two
+    sampling_mode's:
+
+    fixed_k (default, UNCHANGED from the original design): up to k_draws
+        observations per loan -- k_draws-1 non-mandatory slots when a
+        mandatory/terminal draw exists, else k_draws. incl_prob for a
+        non-mandatory draw is budget/n_pool, PROPORTIONAL TO LOAN LENGTH
+        (a longer loan's pool is larger, so each of its non-mandatory
+        candidates is individually less likely to be drawn) -- this is the
+        length bias fixed-fraction mode exists to remove.
+
+    fixed_fraction: every loan's non-mandatory budget is
+        ceil(frac_draws * n_pool) instead of k_draws-derived, where n_pool
+        is the SAME quantity this function already emits as the per-
+        observation `n_eligible` field (the non-mandatory pool size --
+        see _OBS_COLS/out['n_eligible'] below; NOT the mandatory+pool total
+        census_panel_baseline.py reports under the same name for a DIFFERENT
+        loan-level statistic -- the two must not be confused). Because
+        n_pool cancels in budget/n_pool = ceil(f*n_pool)/n_pool, the
+        non-mandatory incl_prob is CONSTANT ≈ frac_draws regardless of loan
+        length, unlike fixed_k. Two honest caveats, not swept under the rug:
+          (a) ceil() rounds up, so incl_prob is always >= frac_draws, most
+              visibly for small pools -- a pool of size 1 gets incl_prob
+              exactly 1.0 for ANY frac_draws in (0, 1], since you cannot
+              draw a fractional observation. The emitted incl_prob is
+              always the REALIZED per-loan probability (never the nominal
+              frac_draws), so IPW stays valid even where it deviates from
+              frac_draws -- but "constant f" is an asymptotic property here,
+              not exact for short-history loans.
+          (b) The MANDATORY/TERMINAL draw's incl_prob is untouched by
+              sampling_mode -- see below.
+
+    TERMINAL-DRAW CONVENTION (a real design decision, not incidental):
+        the mandatory draw at row_idx = term_t - H keeps incl_prob = 1.0
+        (deterministic inclusion) under BOTH sampling_mode's, exactly as
+        in the original fixed_k design. Under fixed_fraction this means the
+        terminal observation's weight (1/incl_prob = 1) is NOT 1/frac_draws
+        like every other (non-terminal) observation's weight -- it is a
+        distinct stratum, oversampled by construction, same as it always
+        was under fixed_k. This function does not attempt to correct that
+        via incl_prob/weight; per the module docstring, "IPW and the
+        King-Zeng intercept correction for terminal-month oversampling are
+        TRAINING-time decisions" -- unchanged by this feature.
+        Two alternatives considered and NOT implemented:
+          - Assign the terminal draw incl_prob = frac_draws too (uniform
+            weight 1/frac_draws everywhere). REJECTED: it is not actually
+            included with probability frac_draws, it is included with
+            probability 1 by construction -- assigning frac_draws would
+            make the emitted incl_prob simply wrong for that row, breaking
+            Horvitz-Thompson correctness for every prepaid loan's one
+            guaranteed observation.
+          - Drop the mandatory-draw guarantee entirely and let the terminal
+            candidate compete for inclusion at probability frac_draws like
+            any other pool row (a fully homogeneous incl_prob=frac_draws
+            design, no special-casing). REJECTED for this step: it would
+            let frac_draws-many prepaid loans (especially short-history
+            ones) end up with ZERO sampled observations at all, starving
+            training exposure to the event -- a materially different
+            design than "currently included with probability 1", which the
+            task specification treats as a given, not something to change.
+
+    df needs loan_id, yyyymm, zero_balance_code_actual, and (for the
+    incentive scheme / verification output) refi_incentive, loan_age_months
+    — all UNSCALED. Returns one row per selected observation; see _OBS_COLS.
+    """
+    if sampling_mode == 'fixed_fraction':
+        if frac_draws is None or not (0.0 < frac_draws <= 1.0):
+            raise ValueError(f'sampling_mode=fixed_fraction requires frac_draws in (0, 1], '
+                              f'got {frac_draws!r}')
+    elif sampling_mode != 'fixed_k':
+        raise ValueError(f'unknown sampling_mode {sampling_mode!r}')
+
+    elig = _eligible_candidates(df, H, min_hist)
     if elig.empty:
         return _empty_obs_frame()
 
@@ -560,7 +768,13 @@ def select_observations(
 
     has_mandatory = elig.groupby('loan_id')['is_mandatory'].any()
     n_pool        = pool.groupby('loan_id').size()
-    budget        = (k_draws - has_mandatory.astype(int))  # non-mandatory slots per loan
+
+    if sampling_mode == 'fixed_k':
+        budget = (k_draws - has_mandatory.astype(int))  # non-mandatory slots per loan
+    else:  # fixed_fraction -- budget is a fraction of the POOL (n_pool), not
+           # of n_pool+has_mandatory; see docstring for why. Ceil'd per loan,
+           # so it's always an integer count downstream code already expects.
+        budget = np.ceil(frac_draws * n_pool).astype(int)
 
     if pool.empty:
         selected_pool = pool.assign(incl_prob=pd.Series(dtype=float))
@@ -653,6 +867,7 @@ def _select_incentive_stratified(
 def build_sequences_multiobs(
     df: pd.DataFrame, scaler: StandardScaler, k_draws: int, H: int, min_hist: int,
     draw_scheme: str = 'uniform', incentive_edges: list[float] | None = None,
+    sampling_mode: str = 'fixed_k', frac_draws: float | None = None,
 ):
     """Build RIGHT-aligned (N, MAX_SEQ_LEN, N_FEATURES) arrays: one row per
     SELECTED (loan_id, ref_month) observation, not one row per loan.
@@ -664,7 +879,8 @@ def build_sequences_multiobs(
     = now" must hold for every row for the positional embedding to mean
     anything consistent.
     """
-    obs = select_observations(df, k_draws, H, min_hist, draw_scheme, incentive_edges)
+    obs = select_observations(df, k_draws, H, min_hist, draw_scheme, incentive_edges,
+                               sampling_mode, frac_draws)
     extras_dtype = {
         'incl_prob': np.float32, 'is_terminal': bool, 'n_eligible': np.int32,
         'k_actual': np.int32, 'ref_month': np.int64,
@@ -736,7 +952,18 @@ def main():
                              'Non-default values append _L{n} to the output dir.')
     parser.add_argument('--k_draws', type=int, default=5,
                         help='Fixed number of (loan_id, ref_month) observations '
-                             'drawn per loan (default=5).')
+                             'drawn per loan (default=5). Used only when '
+                             '--sampling_mode=fixed_k; ignored under fixed_fraction.')
+    parser.add_argument('--sampling_mode', choices=['fixed_k', 'fixed_fraction'], default='fixed_k',
+                        help='fixed_k (default, unchanged): k_draws observations per loan. '
+                             'fixed_fraction: ceil(frac_draws * n_pool) non-mandatory '
+                             'observations per loan, giving every non-terminal eligible '
+                             'month the SAME inclusion probability regardless of loan '
+                             'length -- see select_observations() docstring.')
+    parser.add_argument('--frac_draws', type=float, default=None,
+                        help='Fraction in (0, 1] of each loan\'s non-mandatory eligible '
+                             'pool to draw. Required when --sampling_mode=fixed_fraction; '
+                             'must not be set otherwise.')
     parser.add_argument('--label_horizon', type=int, default=1,
                         help='H: label window is (ref_month, ref_month+H] months (default=1).')
     parser.add_argument('--min_hist', type=int, default=1,
@@ -751,23 +978,60 @@ def main():
                         help='Dir to copy train/test loan-id splits and scaler.pkl from, '
                              'so this build is directly comparable to that one. Copied '
                              'BEFORE the resume guards run; errors hard if anything is missing.')
+    parser.add_argument('--include_pre2013', action='store_true',
+                        help='Include the historical era (2000Q1-2012Q4 acquisition '
+                             'files, PRE2013_VINTAGES), gated to the cell-grid sample '
+                             '(outputs/pre2013_cell_sample_loans.csv, 1,677,060 loans) '
+                             'instead of the full 29.1M-loan pre-2013 corpus. Default '
+                             'off -- every modern-era (2013+) invocation is byte-for-byte '
+                             'unaffected: ALL_VINTAGES only gains the historical files '
+                             'when this flag is passed.')
     args = parser.parse_args()
 
-    global MAX_SEQ_LEN
+    if args.sampling_mode == 'fixed_fraction':
+        if args.frac_draws is None or not (0.0 < args.frac_draws <= 1.0):
+            parser.error('--sampling_mode=fixed_fraction requires --frac_draws in (0, 1]')
+    elif args.frac_draws is not None:
+        parser.error('--frac_draws is only used with --sampling_mode=fixed_fraction '
+                      '(sampling_mode is fixed_k, --k_draws applies instead)')
+
+    global MAX_SEQ_LEN, ALL_VINTAGES
     MAX_SEQ_LEN = args.max_seq_len
+    # Rebind ALL_VINTAGES here (same technique as MAX_SEQ_LEN above) so every
+    # loop that reads the global -- Pass 1/2/3 directly in main(), and Pass
+    # 4's _concat_split closure -- sees the same list. Without --include_pre2013
+    # this is a no-op: ALL_VINTAGES stays exactly _MODERN_VINTAGES, the same
+    # object every prior invocation of this script saw.
+    ALL_VINTAGES = (PRE2013_VINTAGES + _MODERN_VINTAGES) if args.include_pre2013 else _MODERN_VINTAGES
     incentive_edges = [float(x) for x in args.incentive_edges.split(',')] if args.incentive_edges else []
 
     cutoff_ym = dec_yyyymm(args.cutoff_year)     # e.g. 201812
+
+    # RELEVANT_VINTAGES: files whose acquisition quarter starts after the
+    # cutoff can contain no row with monthly_reporting_period <= cutoff_ym
+    # (see _vintage_quarter_start_yyyymm's docstring for the empirical check
+    # this relies on -- no safety margin needed). Computed once here and used
+    # at all four ALL_VINTAGES loop sites (Pass 1/2/3 below, and Pass 4's
+    # _concat_split closure) so e.g. a cutoff_2002 build with --include_pre2013
+    # never opens the 2013Q1-2023Q1 files it used to read and immediately
+    # discard as empty.
+    RELEVANT_VINTAGES = [v for v in ALL_VINTAGES
+                         if _vintage_quarter_start_yyyymm(v) <= cutoff_ym]
+    print(f'Relevant vintages: {len(RELEVANT_VINTAGES)}/{len(ALL_VINTAGES)} '
+          f'(cutoff_ym={cutoff_ym}, files after cutoff skipped entirely)', flush=True)
+
     _scheme_suffix = '' if args.draw_scheme == 'uniform' else f'_{args.draw_scheme}'
     _cap = '' if args.max_seq_len == _DEFAULT_SEQ_LEN else f'_L{args.max_seq_len}'
+    _budget_tag = f'k{args.k_draws}' if args.sampling_mode == 'fixed_k' else f'f{args.frac_draws}'
+    _hist_suffix = '_hist' if args.include_pre2013 else ''
     SAVE_DIR = os.path.join(
         BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}_zbc_multiobs'
-              f'_k{args.k_draws}_h{args.label_horizon}{_scheme_suffix}{_cap}')
+              f'_{_budget_tag}_h{args.label_horizon}{_scheme_suffix}{_cap}{_hist_suffix}')
     os.makedirs(SAVE_DIR, exist_ok=True)
 
     print(f'Multiobs builder | cutoff = Dec {args.cutoff_year} (YYYYMM={cutoff_ym}) | '
-          f'k={args.k_draws} H={args.label_horizon} min_hist={args.min_hist} '
-          f'scheme={args.draw_scheme}', flush=True)
+          f'sampling_mode={args.sampling_mode} {_budget_tag} H={args.label_horizon} '
+          f'min_hist={args.min_hist} scheme={args.draw_scheme}', flush=True)
     print(f'Output dir: {SAVE_DIR}', flush=True)
 
     # --reuse_from MUST run before the resume guards below, so the copied
@@ -804,14 +1068,30 @@ def main():
               f'(train={len(train_ids):,}, test={len(test_ids):,})', flush=True)
     else:
         print('\nPass 1: loan ID discovery...', flush=True)
-        info_chunks = []
-        for v in ALL_VINTAGES:
+        # PER-VINTAGE CHECKPOINTING: pickle (next_idx, info_chunks) after each
+        # vintage and resume from it if present, same discipline as
+        # count_prepay_events_pre2013.py/build_cell_grid_sample_pre2013.py --
+        # a long Pass 1 scan lost to a SLURM timeout previously had to restart
+        # from vintage 0.
+        pass1_ckpt_path = os.path.join(SAVE_DIR, 'pass1_ckpt.pkl')
+        if os.path.exists(pass1_ckpt_path):
+            with open(pass1_ckpt_path, 'rb') as f:
+                _start_idx, info_chunks = pickle.load(f)
+            print(f'  RESUME Pass 1 from vintage {_start_idx}/{len(RELEVANT_VINTAGES)}',
+                  flush=True)
+        else:
+            _start_idx = 0
+            info_chunks = []
+
+        for vi in range(_start_idx, len(RELEVANT_VINTAGES)):
+            v = RELEVANT_VINTAGES[vi]
             df = load_vintage_filtered(v, pmms_rates, zhvi_df, cutoff_ym,
                                        keep_ids=None, sample_frac=args.sample_frac)
-            if df is None or df.empty:
-                continue
-            info_chunks.append(df.groupby('loan_id')['prepaid'].first().reset_index())
-            del df; gc.collect()
+            if df is not None and not df.empty:
+                info_chunks.append(df.groupby('loan_id')['prepaid'].first().reset_index())
+                del df; gc.collect()
+            with open(pass1_ckpt_path, 'wb') as f:
+                pickle.dump((vi + 1, info_chunks), f)
 
         if not info_chunks:
             raise RuntimeError('No data loaded — verify vintage paths and cutoff_year.')
@@ -853,70 +1133,97 @@ def main():
         print('\nPass 2: SKIPPED — loaded existing scaler.pkl', flush=True)
     else:
         print('\nPass 2: fitting scaler (sampled, fast)...', flush=True)
-        scaler = StandardScaler()
-        n_scaler_rows = 0
-        for v in ALL_VINTAGES:
-            path = os.path.join(DATA_DIR, f'{v}.csv')
-            if not os.path.exists(path):
-                continue
-            rows = []
-            for chunk in pd.read_csv(
-                path, sep='|', header=None,
-                usecols=_USECOLS, low_memory=False, chunksize=500_000,
-            ):
-                chunk.columns = _COLNAMES
-                chunk = chunk[chunk['loan_id'].isin(train_id_set)]
-                if chunk.empty:
+        # PER-VINTAGE CHECKPOINTING: pickle (next_idx, scaler, n_scaler_rows)
+        # after each vintage and resume from it if present -- same discipline
+        # as Pass 1 above and count_prepay_events_pre2013.py/
+        # build_cell_grid_sample_pre2013.py.
+        pass2_ckpt_path = os.path.join(SAVE_DIR, 'pass2_ckpt.pkl')
+        if os.path.exists(pass2_ckpt_path):
+            with open(pass2_ckpt_path, 'rb') as f:
+                _start_idx, scaler, n_scaler_rows = pickle.load(f)
+            print(f'  RESUME Pass 2 from vintage {_start_idx}/{len(RELEVANT_VINTAGES)}',
+                  flush=True)
+        else:
+            _start_idx = 0
+            scaler = StandardScaler()
+            n_scaler_rows = 0
+
+        for vi in range(_start_idx, len(RELEVANT_VINTAGES)):
+            v = RELEVANT_VINTAGES[vi]
+            try:
+                path = os.path.join(_data_dir_for_vintage(v), f'{v}.csv')
+                if not os.path.exists(path):
                     continue
-                rows.append(chunk)
-                if sum(len(r) for r in rows) >= SCALER_ROWS_PER_VINTAGE:
-                    break
-            if not rows:
-                continue
-            sample = pd.concat(rows, ignore_index=True).head(SCALER_ROWS_PER_VINTAGE)
-            del rows; gc.collect()
+                # No separate cell-grid filter needed here: this loop only keeps
+                # rows with loan_id in train_id_set (below), and for pre-2013
+                # vintages train_id_set is ALREADY cell-grid-gated -- it was
+                # built from Pass 1's discovered loan population, which goes
+                # through load_vintage_filtered's gate. Duplicating the filter
+                # here would be redundant, not more correct.
+                rows = []
+                for chunk in pd.read_csv(
+                    path, sep='|', header=None,
+                    usecols=_USECOLS, low_memory=False, chunksize=500_000,
+                ):
+                    chunk.columns = _COLNAMES
+                    chunk = chunk[chunk['loan_id'].isin(train_id_set)]
+                    if chunk.empty:
+                        continue
+                    rows.append(chunk)
+                    if sum(len(r) for r in rows) >= SCALER_ROWS_PER_VINTAGE:
+                        break
+                if not rows:
+                    continue
+                sample = pd.concat(rows, ignore_index=True).head(SCALER_ROWS_PER_VINTAGE)
+                del rows; gc.collect()
 
-            # Minimal feature engineering for scaler fit
-            sample['monthly_reporting_period'] = pd.to_numeric(
-                sample['monthly_reporting_period'], errors='coerce')
-            sample = sample[sample['monthly_reporting_period'].notna()].copy()
-            sample['yyyymm'] = sample['monthly_reporting_period'].astype(int).apply(
-                mmyyyy_to_yyyymm)
-            sample = sample[sample['yyyymm'] <= cutoff_ym]
-            if sample.empty:
-                continue
+                # Minimal feature engineering for scaler fit
+                sample['monthly_reporting_period'] = pd.to_numeric(
+                    sample['monthly_reporting_period'], errors='coerce')
+                sample = sample[sample['monthly_reporting_period'].notna()].copy()
+                sample['yyyymm'] = sample['monthly_reporting_period'].astype(int).apply(
+                    mmyyyy_to_yyyymm)
+                sample = sample[sample['yyyymm'] <= cutoff_ym]
+                if sample.empty:
+                    continue
 
-            sample['market_rate']    = sample['monthly_reporting_period'].map(pmms_rates)
-            sample['refi_incentive'] = sample['original_interest_rate'] - sample['market_rate']
-            sample['zip3']           = pd.to_numeric(sample['zip3'], errors='coerce')
-            sample['origination_date'] = pd.to_numeric(sample['origination_date'], errors='coerce')
+                sample['market_rate']    = sample['monthly_reporting_period'].map(pmms_rates)
+                sample['refi_incentive'] = sample['original_interest_rate'] - sample['market_rate']
+                sample['zip3']           = pd.to_numeric(sample['zip3'], errors='coerce')
+                sample['origination_date'] = pd.to_numeric(sample['origination_date'], errors='coerce')
 
-            sample = sample.merge(
-                zhvi_df.rename(columns={'reporting_period': 'origination_date', 'zhvi': 'zhvi_orig'}),
-                on=['zip3', 'origination_date'], how='left')
-            sample = sample.merge(
-                zhvi_df.rename(columns={'reporting_period': 'monthly_reporting_period', 'zhvi': 'zhvi_now'}),
-                on=['zip3', 'monthly_reporting_period'], how='left')
-            sample['original_home_value'] = sample['original_upb'] / (
-                (sample['original_ltv'] / 100).replace(0, np.nan))
-            sample['price_appreciation'] = sample['zhvi_now'] / sample['zhvi_orig'].replace(0, np.nan)
-            sample['current_ltv'] = (
-                sample['original_upb'] /
-                (sample['original_home_value'] * sample['price_appreciation']).replace(0, np.nan)
-            ) * 100
-            sample['loan_age_months'] = sample['loan_age'].astype(float)
-            sample['dti']             = pd.to_numeric(sample['dti'], errors='coerce')
-            sample['loan_purpose_enc']  = sample['loan_purpose'].map(
-                {'R': 0, 'C': 1, 'P': 2}).fillna(0).astype(float)
-            sample['property_type_enc'] = sample['property_type'].map(
-                {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3}).fillna(0).astype(float)
+                sample = sample.merge(
+                    zhvi_df.rename(columns={'reporting_period': 'origination_date', 'zhvi': 'zhvi_orig'}),
+                    on=['zip3', 'origination_date'], how='left')
+                sample = sample.merge(
+                    zhvi_df.rename(columns={'reporting_period': 'monthly_reporting_period', 'zhvi': 'zhvi_now'}),
+                    on=['zip3', 'monthly_reporting_period'], how='left')
+                sample['original_home_value'] = sample['original_upb'] / (
+                    (sample['original_ltv'] / 100).replace(0, np.nan))
+                sample['price_appreciation'] = sample['zhvi_now'] / sample['zhvi_orig'].replace(0, np.nan)
+                sample['current_ltv'] = (
+                    sample['original_upb'] /
+                    (sample['original_home_value'] * sample['price_appreciation']).replace(0, np.nan)
+                ) * 100
+                sample['loan_age_months'] = sample['loan_age'].astype(float)
+                sample['dti']             = pd.to_numeric(sample['dti'], errors='coerce')
+                sample['loan_purpose_enc']  = _encode_categorical(
+                    sample['loan_purpose'], {'R': 0, 'C': 1, 'P': 2, 'U': 3}, 'loan_purpose')
+                sample['property_type_enc'] = _encode_categorical(
+                    sample['property_type'], {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3, 'CP': 4}, 'property_type')
 
-            valid = sample[FEATURE_COLS].dropna()
-            if len(valid) > 0:
-                scaler.partial_fit(valid)
-                n_scaler_rows += len(valid)
-                print(f'  {v}: +{len(valid):,} rows  (total={n_scaler_rows:,})', flush=True)
-            del sample, valid; gc.collect()
+                valid = sample[FEATURE_COLS].dropna()
+                if len(valid) > 0:
+                    scaler.partial_fit(valid)
+                    n_scaler_rows += len(valid)
+                    print(f'  {v}: +{len(valid):,} rows  (total={n_scaler_rows:,})', flush=True)
+                del sample, valid; gc.collect()
+            finally:
+                # Checkpoint fires on every path through the loop body above
+                # (continue included), so resume always advances past a
+                # vintage that was fully handled, not just ones that fit data.
+                with open(pass2_ckpt_path, 'wb') as f:
+                    pickle.dump((vi + 1, scaler, n_scaler_rows), f)
 
         with open(scaler_path, 'wb') as f:
             pickle.dump(scaler, f)
@@ -947,7 +1254,7 @@ def main():
         return os.path.exists(os.path.join(shard_dir, f'{v}_train_seq.npy')) or \
                os.path.exists(os.path.join(shard_dir, f'{v}_empty.flag'))
 
-    for v in ALL_VINTAGES:
+    for v in RELEVANT_VINTAGES:
         if _shard_done(v):
             print(f'  {v}: shard exists — skip', flush=True)
             continue
@@ -964,7 +1271,8 @@ def main():
                 continue
             seq, mask, lbl, pt, lids, extra = build_sequences_multiobs(
                 sub, scaler, args.k_draws, args.label_horizon, args.min_hist,
-                args.draw_scheme, incentive_edges)
+                args.draw_scheme, incentive_edges,
+                args.sampling_mode, args.frac_draws)
             sp = os.path.join(shard_dir, f'{v}_{split_name}')
             np.save(f'{sp}_seq.npy',  seq)
             np.save(f'{sp}_mask.npy', mask)
@@ -997,7 +1305,7 @@ def main():
 
     def _concat_split(split_name):
         shard_paths = [os.path.join(shard_dir, f'{v}_{split_name}')
-                       for v in ALL_VINTAGES
+                       for v in RELEVANT_VINTAGES
                        if os.path.exists(os.path.join(shard_dir, f'{v}_{split_name}_seq.npy'))]
         if not shard_paths:
             raise RuntimeError(f'No shards found for {split_name}')
