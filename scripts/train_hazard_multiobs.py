@@ -42,6 +42,13 @@ Outputs (to outputs/rolling/cutoff_{YEAR}_multiobs_k{K}_h{H}/):
     hazard_best.pt    — best model checkpoint (by test AUC)
     hazard_final.pt   — model checkpoint at the last training epoch, saved
                          unconditionally regardless of whether it beat best_auc
+    train_ckpt.pt     — resume checkpoint (model/optimizer/scheduler + both RNG
+                         states), written every --ckpt_every epochs and on the
+                         final epoch. If present when the script starts, training
+                         resumes from it automatically. Deleted automatically on
+                         clean completion, so a finished out_dir always re-runs
+                         fresh rather than silently replaying its old state —
+                         only present while a run is mid-flight or was killed.
     results.json      — best AUC, Platt params (a, b), pos_ratio/use_ipw used, history
 """
 
@@ -227,6 +234,7 @@ def train_and_evaluate(
     batch_size: int = BATCH_SIZE,
     max_seq: int = MAX_SEQ,
     seed: int = 42,
+    ckpt_every: int = 10,
 ):
     print(f'Active options: pos_ratio={pos_ratio!r}  use_ipw={use_ipw}', flush=True)
 
@@ -256,7 +264,63 @@ def train_and_evaluate(
     best_auc, best_scores = 0.0, None
     history = []
 
-    for epoch in range(1, n_epochs + 1):
+    # Epoch-level resume: a SLURM time-limit kill mid-run previously lost the
+    # whole job (only hazard_best.pt/hazard_final.pt existed, written once at
+    # the end). train_ckpt.pt captures full state -- model/optimizer/scheduler
+    # plus both RNGs (torch and the sampler's numpy Generator) -- so a resumed
+    # run continues the same batch-draw/dropout sequence instead of restarting
+    # it, matching this project's existing resume-guard discipline elsewhere
+    # (prepare_sequences_multiobs_zbc.py's per-vintage/per-pass checkpoints).
+    ckpt_path = os.path.join(out_dir, 'train_ckpt.pt') if out_dir is not None else None
+    start_epoch = 1
+    if ckpt_path is not None and os.path.exists(ckpt_path):
+        # weights_only=False: this checkpoint (unlike hazard_best.pt/hazard_final.pt,
+        # which hold only tensors/primitives) also carries numpy arrays (best_scores,
+        # numpy_rng_state) that PyTorch>=2.6's default weights_only=True rejects.
+        # Always our own file in out_dir, never an untrusted source.
+        ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
+        model.load_state_dict(ckpt['model_state'])
+        optimizer.load_state_dict(ckpt['optimizer_state'])
+        scheduler.load_state_dict(ckpt['scheduler_state'])
+        torch.set_rng_state(ckpt['torch_rng_state'])
+        if torch.cuda.is_available() and ckpt['cuda_rng_state_all'] is not None:
+            torch.cuda.set_rng_state_all(ckpt['cuda_rng_state_all'])
+        rng.bit_generator.state = ckpt['numpy_rng_state']
+        best_auc    = ckpt['best_auc']
+        best_scores = ckpt['best_scores']
+        history     = ckpt['history']
+        start_epoch = ckpt['epoch'] + 1
+        print(f'RESUME from epoch {start_epoch}/{n_epochs} (checkpoint: {ckpt_path})',
+              flush=True)
+    epoch = start_epoch - 1  # holds if the loop below never executes (already-done resume)
+    auc   = history[-1]['auc'] if history else 0.0  # same: last epoch's auc, for final-save below
+
+    def _save_ckpt():
+        # Write-then-rename: a direct write here (same pattern as the builder's
+        # pickle.dump checkpoints) left an unreadable 0-byte file when a kill
+        # landed between the truncating open() and the write completing --
+        # observed directly during this project's own checkpoint/resume testing.
+        # That was on small pickle files; this checkpoint carries a full model +
+        # optimizer state and is written every few epochs for the entire run, so
+        # the same race is more exposed here. os.replace is atomic on the same
+        # filesystem, so a kill mid-write leaves the OLD checkpoint intact
+        # instead of a truncated new one.
+        tmp_path = ckpt_path + '.tmp'
+        torch.save({
+            'epoch':              epoch,
+            'model_state':        model.state_dict(),
+            'optimizer_state':    optimizer.state_dict(),
+            'scheduler_state':    scheduler.state_dict(),
+            'torch_rng_state':    torch.get_rng_state(),
+            'cuda_rng_state_all': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            'numpy_rng_state':    rng.bit_generator.state,
+            'best_auc':           best_auc,
+            'best_scores':        best_scores,
+            'history':            history,
+        }, tmp_path)
+        os.replace(tmp_path, ckpt_path)
+
+    for epoch in range(start_epoch, n_epochs + 1):
         model.train()
         epoch_loss = 0.0
         t0 = time.time()
@@ -304,6 +368,10 @@ def train_and_evaluate(
                 }, os.path.join(out_dir, 'hazard_best.pt'))
             print(f'  → Best AUC: {best_auc:.4f}' + (' — saved.' if out_dir else ''), flush=True)
 
+        if ckpt_path is not None and (epoch % ckpt_every == 0 or epoch == n_epochs):
+            _save_ckpt()
+            print(f'  → Checkpoint saved (epoch {epoch}): {ckpt_path}', flush=True)
+
     if out_dir is not None:
         torch.save({
             'model_state': model.state_dict(),
@@ -315,15 +383,29 @@ def train_and_evaluate(
         }, os.path.join(out_dir, 'hazard_final.pt'))
         print(f'  → Final epoch ({epoch}) AUC: {auc:.4f} — saved.', flush=True)
 
+    # Clean completion: remove the resume checkpoint. Otherwise a later re-run
+    # pointed at the same out_dir (e.g. same cutoff/k/h/ipw/run_tag re-submitted
+    # by mistake, or a future --run_tag omission) would find train_ckpt.pt at
+    # epoch==n_epochs, resume into an empty range(n_epochs+1, n_epochs+1), and
+    # silently skip straight to Platt/results.json on the OLD state instead of
+    # training at all -- a completed dir must re-run fresh, not replay itself.
+    if ckpt_path is not None and os.path.exists(ckpt_path):
+        os.remove(ckpt_path)
+
     print('\nFitting Platt calibration on test set...', flush=True)
     a, b = platt_calibrate(best_scores, test_labels)
     print(f'  Platt: a={a:.4f}, b={b:.4f}', flush=True)
 
+    last10 = history[-10:]
+    mean_auc_last10 = float(sum(e['auc'] for e in last10) / len(last10))
+    print(f'  Mean AUC, last {len(last10)} epochs: {mean_auc_last10:.4f}', flush=True)
+
     return {
-        'best_auc': float(best_auc),
-        'platt_a':  a,
-        'platt_b':  b,
-        'history':  history,
+        'best_auc':        float(best_auc),
+        'mean_auc_last10': mean_auc_last10,
+        'platt_a':         a,
+        'platt_b':         b,
+        'history':         history,
     }
 
 
@@ -359,6 +441,25 @@ def main():
                               'no-op for every existing invocation. Lets two same-seed runs '
                               'write to distinct directories for a reproducibility check '
                               'instead of one overwriting the other.')
+    parser.add_argument('--seed',          type=int, default=42,
+                         help='Seed for torch.manual_seed/cuda.manual_seed_all (model init, '
+                              'dropout) and the ObservationSampler batch-draw RNG. Default: 42, '
+                              'matching every existing invocation\'s previously-hardcoded value '
+                              '-- unset is a no-op.')
+    parser.add_argument('--ckpt_every',    type=int, default=10,
+                         help='Save a full resume checkpoint (train_ckpt.pt) every N epochs, '
+                              'plus always on the final epoch. Default: 10, sized so a SLURM '
+                              'time-limit kill loses at most ~10 epochs of work (~25 min at the '
+                              '~155s/epoch L33/f0.2 rate measured on cutoff_2020), not the whole '
+                              'run. A prior run present in OUT_DIR resumes from it automatically.')
+    parser.add_argument('--include_pre2013', action='store_true', default=False,
+                         help='Must match the --include_pre2013 used by the prep script to build '
+                              'this data. Appends the _hist suffix to the sequence dir this looks '
+                              'for -- prepare_sequences_multiobs_zbc.py appends _hist to its '
+                              'SAVE_DIR when this is set, and this flag was missing from the '
+                              'mirrored SEQ_DIR formula below until the historical-era (cutoff_2002) '
+                              'rebuild needed it: default False was a silent no-op for every '
+                              'modern-era (cutoff>=2013) invocation to date.')
     args = parser.parse_args()
 
     if args.sampling_mode == 'fixed_fraction':
@@ -369,14 +470,17 @@ def main():
                       '(sampling_mode is fixed_k, --k_draws applies instead)')
 
     # Must mirror prepare_sequences_multiobs_zbc.py's SAVE_DIR formula exactly
-    # (_DEFAULT_SEQ_LEN=33, _budget_tag=k{k}/f{frac}) -- do not reimplement this
-    # independently a second time, or the two scripts' naming conventions can
-    # drift apart silently.
-    _cap        = '' if args.max_seq_len == 33 else f'_L{args.max_seq_len}'
-    _budget_tag = f'k{args.k_draws}' if args.sampling_mode == 'fixed_k' else f'f{args.frac_draws}'
+    # (_DEFAULT_SEQ_LEN=33, _budget_tag=k{k}/f{frac}, _hist_suffix) -- do not
+    # reimplement this independently a second time, or the two scripts' naming
+    # conventions can drift apart silently (as _hist_suffix itself already did
+    # once: added to the builder's SAVE_DIR when historical-era support landed,
+    # but missed here until the cutoff_2002 training run needed it).
+    _cap          = '' if args.max_seq_len == 33 else f'_L{args.max_seq_len}'
+    _budget_tag   = f'k{args.k_draws}' if args.sampling_mode == 'fixed_k' else f'f{args.frac_draws}'
+    _hist_suffix  = '_hist' if args.include_pre2013 else ''
     SEQ_DIR = os.path.join(
         BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}_zbc_multiobs'
-              f'_{_budget_tag}_h{args.label_horizon}{_cap}')
+              f'_{_budget_tag}_h{args.label_horizon}{_cap}{_hist_suffix}')
     assert os.path.isdir(SEQ_DIR), (
         f'Expected sequence dir not found: {SEQ_DIR} -- check --max_seq_len/'
         f'--sampling_mode/--frac_draws match what prepare_sequences_multiobs_zbc.py built.')
@@ -429,7 +533,7 @@ def main():
         train_seq, train_mask, train_labels, train_incl_prob,
         test_seq, test_mask, test_labels,
         n_epochs=args.n_epochs, pos_ratio=args.pos_ratio, use_ipw=args.use_ipw,
-        out_dir=OUT_DIR, max_seq=max_seq,
+        out_dir=OUT_DIR, max_seq=max_seq, seed=args.seed, ckpt_every=args.ckpt_every,
     )
 
     results.update({
@@ -440,6 +544,7 @@ def main():
         'n_test':         int(len(test_seq)),
         'pos_ratio':      args.pos_ratio,
         'use_ipw':        args.use_ipw,
+        'seed':           args.seed,
     })
     with open(os.path.join(OUT_DIR, 'results.json'), 'w') as f:
         json.dump(results, f, indent=2)
