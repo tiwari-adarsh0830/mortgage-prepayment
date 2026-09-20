@@ -760,6 +760,11 @@ explained. Sent results-only July 17.
 
 ## Pre-2013 historical data (verified 2026-07-19)
 
+**CORRECTION (Aug 29, 2026):** the field 107 = zero_balance_code identification
+below is wrong. Field position 44 (usecols 43), code 01 = Prepaid, is the
+correct column — confirmed by direct read across 2000Q1, 2012Q4, and 2018Q1.
+See "Label column defect (Aug 29, 2026)" below.
+
 `data_pre2013_raw/` — Fannie Mae Single-Family Loan Performance, 2000Q1-2012Q4,
 52 quarters, 29,130,527 unique loans. Same layout as the existing pipeline:
 113 pipe-delimited columns with a leading pipe (field N = awk $(N+1)), MMYYYY
