@@ -3268,3 +3268,214 @@ L33, `..._h1_L1` for L1) — no prep job reran. The Step 3 census-panel validati
 (`scripts/diag/check_sampler_vs_census.py`, which reruns `select_observations()` directly against
 `census_panel_baseline_cutoff_2020.json`, entirely upstream of the training script) therefore
 already covers all four seed-replication runs without needing to be rerun per seed.
+
+## Pre-2013 historical extension: data verification, cell-grid sampler, builder patches, and a CP/U miscoding finding (Sep 18-19, 2026)
+
+Per the advisor's Sep 16 reply ("stick with L=33, and go forward with the historical builout"),
+work began extending the multiobs pipeline back to 2000Q1. This section covers verification of
+the pre-2013 raw data, the cell-grid loan sampler built to make a 29.1M-loan historical corpus
+tractable, three patches to `prepare_sequences_multiobs_zbc.py` needed to consume it, a test build
+at `cutoff_2002`, and a categorical-encoding bug the extension surfaced that also affects
+previously-reported modern-era results.
+
+### Pre-2013 data verification
+
+Before drawing any historical sample, the prepay label itself was checked for maturity
+conflation — does `zero_balance_code==01` (the label) fire on loans simply reaching the end of
+their term, rather than genuine prepayment? `scripts/diag/term_maturity_scan_2002q3_2011q2.py`
+(job 17952495) checked two files spanning the historical range: of all `ZBC==01` terminations,
+loans ending within 2 months of their `original_loan_term` are **1.03%** (2002Q3, n=731,581) and
+**0.80%** (2011Q2, n=258,431) of the total. The label is not materially conflated with maturity.
+
+This builds on the pre-2013 column verification already recorded above ("Pre-2013 historical data
+(verified 2026-07-19)") and on `count_prepay_events_pre2013.py`'s existing column-choice fix
+(`zero_balance_code` at usecols 43, not `extra_13`, which is nearly empty pre-2013) — not
+re-verified here, only extended with the maturity check.
+
+### Cell-grid loan sampler
+
+The pre-2013 corpus is 29,130,522 loans across 52 acquisition-quarter files (2000Q1-2012Q4) —
+too large to process whole for every build. `scripts/build_cell_grid_sample_pre2013.py` selects a
+loan-level (not row-level) subsample, gated on the same (`vintage_quarter`, `coupon`) cell grid
+`count_prepay_events_pre2013.py` already measured: cells with ≤`TARGET_CAP` (5000) prepayment
+events keep every loan; cells above it keep a hash-ranked `ceil(5000/n_events * n_loans)`-loan
+subset, chosen by the same deterministic `blake2b`-based hash (`_loan_base_hash`) the modern-era
+pipeline already uses for its own sampling — so downsampling preserves each cell's observed event
+rate in expectation without a second RNG convention entering the repo. Checkpointed per input file
+(same discipline as `count_prepay_events_pre2013.py`, after a prior long scan there was lost to a
+SLURM timeout holding state in memory).
+
+**Validated on a 2-quarter subset before the full run.** `scripts/diag/test_cell_grid_sample_pre2013.py`
+(job 17959384, 2002Q3+2011Q2, 1,033,118 loans): cell assignment matches an independent replica of
+the counting logic exactly (same cells, same per-cell loan/event counts), and loan selection is
+deterministic — identical across two independent runs and after a fresh re-scan. All checks
+passed. `scripts/diag/check_cell_grid_downsample_deviation_pre2013.py` (job 17960864, same 2
+files) then checked how far the actual selected-loan event count lands from each downsampled
+cell's 5000-event target: of 17 cells that trigger downsampling in this 2-file population, **max
+deviation is 1.62%, mean 0.53%, zero cells exceed 10% or 15%** — the `ceil()`-based budget formula
+tracks its target closely in practice, not just in the algebra.
+
+**Full 52-quarter run** (job 17961041, 1h21m): **1,677,060 of 29,130,522 loans selected (5.8%)**,
+729 (vintage_quarter, coupon) cells touched, 257 downsampled.
+
+**Why 1.68M is reasonable against the spec's original "2-4M loans" ballpark.** That figure, in
+`count_prepay_events_pre2013.py`'s own docstring, was written *before* the actual event
+distribution had been measured — explicitly a pre-measurement guess ("the actual event
+distribution has to be measured first rather than the oversampling weights guessed"). The measured
+reality: most of the 729 cells don't reach the 5000-event cap at all (a large share sit below a
+~1000-event floor and are kept whole, contributing their full but individually small loan counts;
+`build_cell_grid_sample_pre2013.py`'s own docstring puts 400 of 729 cells below that floor holding
+only 15,583 loans combined), and only 257 cells need downsampling down toward the cap. A rough
+upper-bound guess made before measurement landing above the number the actual, measured
+distribution produces is the expected direction of error, not a discrepancy to explain away.
+
+### Builder extension: three patches to `prepare_sequences_multiobs_zbc.py`
+
+1. **Cutoff-based file filter.** `RELEVANT_VINTAGES` skips opening any vintage file whose
+   acquisition quarter provably starts after the build's cutoff (`_vintage_quarter_start_yyyymm`).
+   Margin verified empirically, not assumed: an independent awk single-pass min-scan of
+   `monthly_reporting_period` against 12 boundary files (2000Q1, 2002Q3/Q4, 2003Q1/Q2, 2011Q2/Q3,
+   2012Q4, 2013Q1, 2019Q4, 2020Q1/Q4) confirms **delta=0 at all 12** — no file holds a row before
+   its nominal acquisition-quarter start, so no safety margin is needed on top of it.
+2. **Per-vintage checkpointing.** Pass 1 (loan discovery) and Pass 2 (scaler fit) each checkpoint
+   after every vintage and resume from it on restart, same discipline as the cell-grid sampler
+   above. **Interrupt-tested, not just read**: a from-scratch Pass 1+2 build on 4 small pre-2013
+   vintages was killed mid-Pass-1 (resume printed `RESUME Pass 1 from vintage 2/4` and picked up
+   correctly) and mid-Pass-2 (resume printed `RESUME Pass 2 from vintage 1/4`). The resumed run's
+   final state — train/test loan-id split and fitted scaler — was compared against an uninterrupted
+   baseline over the same 4 vintages: **splits byte-identical, scaler `mean_`/`var_`/`scale_`/
+   `n_samples_seen_` all exactly equal.**
+3. **Categorical-encoding fix** — see the CP/U finding below; this is the more consequential of the
+   three.
+
+### `cutoff_2002` test build
+
+Job 17980942 (`--cutoff_year 2002 --include_pre2013`, 7h04m, unattended overnight): **304,447
+total loans** (Train 243,557 / Test 60,890), train shape `(906,877, 33, 9)` prepay=9.03%, test
+shape `(227,078, 33, 9)` prepay=9.02%. **Caveat, not swept under the rug:** this build ran with the
+CP/U category maps still unfixed (the fix landed afterward — see below), so its
+`property_type_enc`/`loan_purpose_enc` feature values carry the same miscoding described next. It
+is a valid test of the checkpointing/cutoff-filter machinery and of the sampler's loan selection,
+not yet a "clean" data artifact — rebuilding it after the fix is open follow-up work, not done
+here.
+
+### A categorical-encoding bug the extension surfaced, affecting previously-reported modern-era results
+
+Building the historical extension required, for the first time, counting *unmapped* categorical
+codes explicitly instead of letting them fall back to 0 silently. That check (added as part of the
+patches above) immediately found that `property_type=='CP'` (Co-op) and `loan_purpose=='U'`
+(Unknown) — both real, documented Fannie Mae codes — were falling back to code 0, landing
+indistinguishably in the same bucket as a genuine Single-Family/Purchase row, in **every
+modern-era (2013+) build this pipeline has ever produced.**
+
+Two independent measurements, kept on separate denominators rather than conflated: **(1)** job
+17974041 (a cutoff_2020 rebuild that ran with the new warning in place but before the fix), raw
+loan-month rows in the full panel — CP present in every one of the 32 modern (2013Q1-2020Q4)
+vintages, from 5,300 to 318,574 rows per vintage; U present sparsely in 3 of them (96/82/24 rows,
+2013Q1/2014Q1/2014Q4). **(2)** job 18022825 (a cutoff_2020 regression check run after the fix), the
+*sampled* `fixed_fraction` training population — CP is 0.49% of train / 0.52% of test observations
+(55,028 / 14,652); U drew zero sampled observations in that population, consistent with (1)'s much
+sparser raw count simply not being drawn by the sampler, not with U being absent from the modern
+era.
+
+**This is small enough to be very unlikely to have changed any prior conclusion, but it is real
+miscoding present in data behind results already reported** in this document — the window-length
+(L33 vs. L1) comparison, the no-history control, and the n=3 seed-replication run (Sep 10-13
+sections above) all trained on data with this miscoding present. Not retracted, since the scale
+argues against it mattering; flagged plainly rather than silently absorbed into the historical
+extension. Full incident detail, including the reused-scaler interaction this fix creates (the
+Sep 19 regression check's scaler was fit *before* the fix existed, so CP's new code-4 value is an
+extrapolation outside what that scaler was fit on — not wrong, but not natively calibrated either,
+and a candidate for a fresh scaler fit whenever the modern-era split/scaler is next rebuilt from
+scratch) is in `docs/mistakes_and_lessons.md`.
+
+## cutoff_2002: seed replication, a calibration-check methodology correction, and an S-curve check ruling out the Phase 15 failure mode (Sep 21, 2026)
+
+### Seed-7 replication
+
+`outputs/rolling/cutoff_2002_multiobs_k5_h1_ipw_f0.2_L33_hist_seed7/results.json` (completed
+2026-09-20 22:14 EDT): `best_auc=0.7745741145291616` (seed=7) against the seed=42 baseline's
+`0.7743897241456773` — spread **0.000184 (~0.0002)**. For comparison, the existing n=3
+seed-replication for cutoff_2020's L33 (`mistakes_and_lessons.md`, seeds 42/7/123: best_auc
+0.71638/0.71658/0.71696) has spread **0.000576** — cutoff_2002's spread is **~3.1x tighter** than
+that. Caveat, not smoothed over: this is n=2 (42, 7), not the n=3 that grounded the L33-vs-L1
+noise-floor correction — a weaker replication than that comparison, not an equivalent one, and not
+yet evidence about cross-seed *calibration* stability (Platt a/b were not compared across seeds).
+
+### Calibration-check methodology: which Platt does the reporting pipeline actually use
+
+A same-population-holdout calibration check was run against cutoff_2002's own internal Platt fit
+(`results.json`: `platt_a=21.7239, platt_b=-3.2331`, seed=42) — same style as the check that caught
+the `ipw_buggy` direction bug. Per-coupon, that Platt-calibrated forecast overshot an IPW-debiased
+realized rate (Horvitz-Thompson, `1/incl_prob` on the run's own stored `incl_prob`) by **3.0x-6.0x**
+depending on coupon, and the same check against cutoff_2020's main non-buggy `..._ipw_f0.2_L33`
+result showed the same pattern, **3.5x-5.6x**. Before reporting that as a finding, traced whether
+either Platt fit is actually what the CPR-forecast-reporting pipeline consumes:
+
+- **`train_hazard_multiobs.py`'s internal Platt** (`platt_calibrate(best_scores, test_labels)`,
+  line 396) fits log-loss with no `incl_prob` argument at all — directly against the **as-sampled**
+  test labels, which are inflated above the true population rate because the mandatory/terminal
+  draw is always included (`incl_prob=1.0`) regardless of the fixed-fraction downsampling applied
+  to the rest of the pool. By construction, mean(Platt score) ≈ mean(raw sampled label) — the 3-6x
+  gap above is a property of that internal fit, not evidence about the model itself.
+- **`forecast_matched_population_cpr.py`** (the script whose output this document actually reports,
+  e.g. the Sep 6-7 "dispersion 1.139..0.717" result) calls `aggregate(ids_multi, h_multi, ...,
+  logit_offset=off_multi)` with `h_multi` = the model's **raw** `sigmoid(logit)` from
+  `score_multiobs_model()` — no Platt applied anywhere on that path — and `off_multi=0.0` hardcoded,
+  per that module's own `MULTIOBS_CAVEAT`: no King-Zeng-style scalar shift is theoretically
+  justified for multiobs's per-observation `incl_prob` design, and none is applied. `aggregate()`
+  itself (`forecast_rolling_cpr.py:481`) has no Platt parameter at all, only the optional additive
+  `logit_offset`.
+- A second, unrelated Platt-shaped pair, **a=0.4559, b=-3.1376** ("cohort_CPR_calibration_for_forecast_leg"),
+  lives in `config/hazard_calibration_cpr_forecast.json` and in
+  `outputs/rolling/cutoff_{2020,2021,2022,2023}/hazard_calibration.json` — all five files are
+  **byte-identical** (`md5sum` confirmed) and written in the same second (2026-07-03 11:50:13), i.e.
+  one shared constant, not four independent per-model fits. Traced to
+  `scripts/diag/recalibrate_forecast_cpr.py`: fit by minimizing squared error between annualized
+  forecast CPR and `realized_cpr_by_coupon_v6.csv` over a 2022-06..2023-12 trough window, scoring
+  the separate **"production"** model (`outputs/hazard_best.pt`) on synthetic representative-loan
+  paths via `return_per_timestep=True` — a different model, different (synthetic) population, and a
+  different scoring convention than multiobs. `grep -rl "multiobs" scripts/stage2_*.py
+  scripts/model_hedge_krd.py` returns nothing: this pipeline never touches multiobs.
+
+**Neither Platt is what a multiobs CPR forecast actually reports.** Re-ran the check using the raw
+score (`forecast_raw_h1`, matching `aggregate()`'s real `logit_offset=0.0` path) against the same
+IPW-debiased realized rate — used here strictly as a diagnostic to identify the right calibration
+target, never written to any `results.json`/config/CSV as a reported value:
+
+| run | coupon range used | dispersion (raw/IPW-debiased) | pooled monthly ratio | pooled annualized ratio |
+|---|---|---|---|---|
+| cutoff_2002 (seed 42) | 5.5-9.5 (this cohort's own note-rate range — 2000-2002 originations, not 2.0-5.0) | 1.10x-1.37x | 1.23x | 1.19x |
+| cutoff_2020 (`..._ipw_f0.2_L33`) | 2.0-5.0 | 0.97x-1.20x | 1.16x | 1.14x |
+
+Both are reasonably calibrated by the metric that actually matches the reporting pipeline —
+nothing like the 3-6x gap the internal-Platt check produced. This is an **in-sample** check (the
+model's own held-out test observations, all within the calendar-truncated window); it is not, and
+should not be conflated with, the still-separate, still-undone "predict the 2003 wave"
+out-of-sample forward test described above (`n_test` clarification). Scripts:
+`scripts/diag/calibration_check_cutoff_2002.py`, `scripts/diag/calibration_check_cutoff_2020_ipw_L33.py`.
+
+### Incentive S-curve check: ruling out the Phase 15 failure mode
+
+Phase 15 (above) found that a model trained on a window with no in-window refi boom
+(2013-2019) learns a collapsed/inverted S-curve — hazard pinned near 0 exactly where prepayment
+should peak, because the training regime never showed the model a real incentive-driven response.
+Checked the same premise for cutoff_2002 directly on real data
+(`scripts/diag/incentive_scurve_check_cutoff_2002.py`, job 18225125) rather than assuming the
+expanding-window framing rules it out by construction:
+
+- **PMMS moved substantially inside the training window itself**: 8.515% (early 2000) down to
+  6.048% (Dec 2002), a **2.468pp** decline entirely within cutoff_2002's own calendar-truncated
+  window — the opposite condition from Phase 15's flat, boom-free 2013-2019 window.
+  77.34% of test observations are in-the-money (mean incentive +0.75pp, p95 +2.39pp).
+- **The model's raw hazard rises ~29x across the informative incentive range** on real test data:
+  0.00189 (incentive -2.0 to -1.0) up to a peak 0.05505 (incentive +2.0 to +3.0), tracking both the
+  raw-sampled and IPW-debiased realized rates rising in step over the same range — the opposite
+  shape from Phase 15's collapse-to-zero failure.
+- **One honest wrinkle, not smoothed over**: the top two incentive bins (+3.0 to +6.0, only 2,145 of
+  227,078 obs) show hazard falling rather than continuing to rise — non-monotone, but on thin tail
+  data and consistent with ordinary burnout (which multiobs's multi-age sampling design exists to
+  capture), not a re-occurrence of Phase 15's every-positive-incentive-bin collapse.
+
+This addresses curve *shape* only; it does not bear on the calibration *level* question above —
+those are separate axes and are not meant to offset one another.
