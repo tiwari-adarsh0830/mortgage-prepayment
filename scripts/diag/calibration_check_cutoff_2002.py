@@ -199,10 +199,23 @@ def main():
         # any) the reporting pipeline should be checked against -- see
         # docs/mistakes_and_lessons.md, Sep 21 2026 entry, for the full reasoning.
         ipw_debiased_rate = (g['label'] * g['ipw_weight']).sum() / g['ipw_weight'].sum()
-        forecast_platt = g['platt_score'].mean()
-        forecast_raw = g['raw_score'].mean()
+        sum_w = g['ipw_weight'].sum()
+        # forecast_raw/forecast_platt are IPW-weighted by the same w=1/incl_prob
+        # as ipw_debiased_rate above, NOT a plain .mean(). An earlier version of
+        # these two lines used g['platt_score'].mean() / g['raw_score'].mean()
+        # (unweighted) while comparing against the IPW-weighted ipw_debiased_rate
+        # -- an apples-to-oranges comparison, since the sampled test set
+        # over-represents incl_prob=1 mandatory/terminal rows relative to their
+        # true population share. That mismatch is what produced the reported
+        # 1.23x (cutoff_2002) / 1.16x (cutoff_2020) overshoot figures; weighting
+        # both sides the same way drops the pooled gap to ~1.07x/1.03x (see
+        # scripts/diag/ipw_consistent_gap.py). See README's "cutoff_2002: seed
+        # replication..." section (Sep 21-23, 2026).
+        forecast_platt = (g['platt_score'] * g['ipw_weight']).sum() / sum_w
+        forecast_raw = (g['raw_score'] * g['ipw_weight']).sum() / sum_w
         return pd.Series({
             'n_obs': n_obs, 'n_loans': n_loans,
+            'sum_w': sum_w,
             'raw_sampled_rate_h1': raw_sampled_rate,
             'ipw_debiased_rate_h1': ipw_debiased_rate,
             'forecast_platt_h1': forecast_platt,
@@ -234,9 +247,15 @@ def main():
               f'max={disp_raw.max():.4f} min={disp_raw.min():.4f}', flush=True)
 
         n_total = int(filt['n_obs'].sum())
-        pooled_platt = float((filt['forecast_platt_h1'] * filt['n_obs']).sum() / n_total)
-        pooled_ipw = float((filt['ipw_debiased_rate_h1'] * filt['n_obs']).sum() / n_total)
-        print(f'\nPooled (n_obs-weighted): forecast_platt_h1={pooled_platt:.5f}  '
+        total_w = float(filt['sum_w'].sum())
+        # Pooled by sum_w (total ipw_weight per coupon), not n_obs -- consistent
+        # with the per-coupon forecast_platt_h1/ipw_debiased_rate_h1 weighting
+        # above. n_obs-weighting here would silently reintroduce the same
+        # unweighted-vs-weighted mismatch one level up (across coupons instead
+        # of within one).
+        pooled_platt = float((filt['forecast_platt_h1'] * filt['sum_w']).sum() / total_w)
+        pooled_ipw = float((filt['ipw_debiased_rate_h1'] * filt['sum_w']).sum() / total_w)
+        print(f'\nPooled (ipw_weight-weighted): forecast_platt_h1={pooled_platt:.5f}  '
               f'ipw_debiased_h1={pooled_ipw:.5f}  ratio={pooled_platt / pooled_ipw:.4f}', flush=True)
 
         # Annualized view -- ONLY for the two legitimate population-level rates.

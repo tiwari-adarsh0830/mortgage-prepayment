@@ -123,10 +123,19 @@ def main():
     def per_bin(g):
         n_obs = len(g)
         raw_sampled_rate = g['label'].mean()
-        ipw_debiased_rate = (g['label'] * g['ipw_weight']).sum() / g['ipw_weight'].sum()
-        model_raw_h = g['raw_score'].mean()
+        sum_w = g['ipw_weight'].sum()
+        ipw_debiased_rate = (g['label'] * g['ipw_weight']).sum() / sum_w
+        # model_raw_h is IPW-weighted by the same w=1/incl_prob as
+        # ipw_debiased_rate above, NOT a plain .mean() -- same fix as
+        # calibration_check_cutoff_2002.py/calibration_check_cutoff_2020_ipw_L33.py
+        # (see scripts/diag/ipw_consistent_gap.py). An earlier unweighted
+        # version of this line is what produced the "~29x" figure reported in
+        # README's Sep 21 2026 S-curve section; rerun with this fix (job
+        # 18376180) gives about 27.3x; shape conclusion unchanged.
+        model_raw_h = (g['raw_score'] * g['ipw_weight']).sum() / sum_w
         return pd.Series({
             'n_obs': n_obs,
+            'sum_w': sum_w,
             'raw_sampled_rate_h1': raw_sampled_rate,
             'ipw_debiased_rate_h1': ipw_debiased_rate,
             'model_raw_h_t': model_raw_h,

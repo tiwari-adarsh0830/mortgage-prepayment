@@ -3391,6 +3391,28 @@ scratch) is in `docs/mistakes_and_lessons.md`.
 
 ## cutoff_2002: seed replication, a calibration-check methodology correction, and an S-curve check ruling out the Phase 15 failure mode (Sep 21, 2026)
 
+**CORRECTION (Sep 23, 2026):** the 1.16x/1.23x pooled-monthly dispersion figures in the table below
+are wrong. `forecast_raw_h1`/`forecast_platt_h1` were computed as a plain, unweighted `.mean()` over
+the sampled test rows, then compared against `ipw_debiased_rate_h1`, which is IPW-weighted
+(`sum(label/incl_prob)/sum(1/incl_prob)`) — one side reweighted, the other not. With BOTH sides
+IPW-weighted (`scripts/diag/ipw_consistent_gap.py`, jobs 18312946/18312947), the pooled gap drops to
+**1.0269x / logit +0.0269** (cutoff_2020) and **1.0696x / logit +0.0693** (cutoff_2002, seed 42). A
+seed-7 replication of cutoff_2002 gives **1.0212x / logit +0.0215** — noticeably smaller than the
+seed-42 figure, so this residual is not yet established as seed-stable. For cutoff_2020, the
+sample's own IPW-weighted realized rate (0.012051) matches the external census rate (0.012078); the
+model's IPW-weighted mean prediction is 0.012376, i.e. **1.0246x census**. Grouping by row
+characteristics rather than by outcome (months before cutoff, which is not one of the model's
+features, and loan_age, which is): rows 1 and 2-3 months before the cutoff are **not** over-predicted
+in either cutoff (if anything, slightly under-predicted) — so there is no sign of an effect
+concentrated at the cutoff edge. None of the model's 9 features encodes calendar time or distance to
+the cutoff, so this is weak evidence on its own; the stronger evidence is that IPW already assigns
+censored terminal rows their true inclusion probability and the model's weighted
+mean prediction is within about 2.5% of the census rate. The residual shows up on the training set
+almost as strongly as on test (cutoff_2020: train +0.0260 vs test +0.0269; cutoff_2002: train
++0.0604 vs test +0.0693, seed 42), i.e. it is not purely test-set sampling noise. Full numbers:
+`scripts/diag/ipw_consistent_gap.py` (jobs 18312946/18312947) and
+`scripts/diag/ipw_gap_feature_breakdown.py`.
+
 ### Seed-7 replication
 
 `outputs/rolling/cutoff_2002_multiobs_k5_h1_ipw_f0.2_L33_hist_seed7/results.json` (completed
@@ -3456,6 +3478,22 @@ out-of-sample forward test described above (`n_test` clarification). Scripts:
 `scripts/diag/calibration_check_cutoff_2002.py`, `scripts/diag/calibration_check_cutoff_2020_ipw_L33.py`.
 
 ### Incentive S-curve check: ruling out the Phase 15 failure mode
+
+**CORRECTION (Sep 23, 2026):** `model_raw_h_t` below (the "model's raw hazard" column) was
+originally computed as a plain, unweighted `.mean()` over sampled test rows, in the same per-bin
+table as the IPW-weighted `ipw_debiased_rate_h1` column — the same weighting mismatch as the
+calibration-check methodology correction above. Fixed and reran (job 18376180,
+`scripts/diag/incentive_scurve_check_cutoff_2002.py`): with `model_raw_h_t` IPW-weighted the same
+way, the "~29x" rise becomes **~27.3x** (0.001905 at incentive -2.0 to -1.0, up to 0.051952 at +2.0
+to +3.0; full range 0.00109-0.05195, vs the unweighted 0.00109-0.05505 below). The shape conclusion
+is unchanged: still 3 of 12 bin-to-bin steps are non-monotone (one is now the thin-tail (-4.0,-3.0]
+to (-3.0,-2.0] step instead of (-3.0,-2.0] to (-2.0,-1.0] — both n<100 — plus the same two
+top-incentive burnout bins in the wrinkle noted below), so this does not change the "not a
+reoccurrence of Phase 15's collapse" conclusion. Comparing the IPW-weighted model hazard to the
+IPW-weighted realized rate bin by bin, the model runs about 1.26x realized at incentive -2.0 to -1.0
+but about 1.04x at +2.0 to +3.0, and realized rises 33.1x across those bins (0.001514 to 0.050110)
+versus 27.3x for the model. In-sample and single seed, so not a finding, but it is the same direction
+as the flatness documented in Phase 23, only milder.
 
 Phase 15 (above) found that a model trained on a window with no in-window refi boom
 (2013-2019) learns a collapsed/inverted S-curve — hazard pinned near 0 exactly where prepayment
