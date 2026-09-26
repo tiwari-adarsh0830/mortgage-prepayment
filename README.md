@@ -2703,7 +2703,7 @@ corrected values (the left-aligned reproduction matched the original exactly): e
 1.0233 → 1.0794; Jan 2021 un-annualized at coupons 4.5 / 5.0: 0.803 / 0.746 → 1.027 / 0.982. The Sep
 5 non-IPW `k5_h1` numbers below are affected but were not rescored. The 1.79x/3.21x origination-model
 benchmark elsewhere in this README is unaffected (`infer_test_set` uses the last real timestep). See
-the "Fixed-fraction sample representativeness, a sequence-alignment bug, and the cutoff_2002 2003
+the "Fixed-fraction sampling rates (a_eff / b_eff), a sequence-alignment bug, and the cutoff_2002 2003
 forward test" section (Sep 24-25, 2026) near the end of this file for the full measurement.
 
 **Why this was run.** With a trained multiobs model (0.7847 AUC) in hand, the natural next question
@@ -2788,9 +2788,9 @@ checkpoints on the left-aligned `TRAIL_SEQ_DIR` test set. For `_seedcheck_a`, th
 corrected values (the left-aligned reproduction matched the original exactly): epoch 4 ratio range
 1.139..0.717 → 1.047..0.544, pooled 0.9091 → 0.9736; epoch 50 1.662..0.684 → 1.161..0.664, pooled
 1.0233 → 1.0794; Jan 2021 un-annualized at coupons 4.5 / 5.0: 0.803 / 0.746 → 1.027 / 0.982. The Sep
-5 non-IPW `k5_h1` numbers are affected but were not rescored. The 1.79x/3.21x origination-model
+5 non-IPW `k5_h1` numbers (earlier in this file) are affected but were not rescored. The 1.79x/3.21x origination-model
 benchmark elsewhere in this README is unaffected (`infer_test_set` uses the last real timestep). See
-the "Fixed-fraction sample representativeness, a sequence-alignment bug, and the cutoff_2002 2003
+the "Fixed-fraction sampling rates (a_eff / b_eff), a sequence-alignment bug, and the cutoff_2002 2003
 forward test" section (Sep 24-25, 2026) near the end of this file for the full measurement.
 
 **Inference-time IPW pooling was abandoned as the wrong estimand, not shelved as untested.**
@@ -2945,9 +2945,9 @@ checkpoints on the left-aligned `TRAIL_SEQ_DIR` test set. For `_seedcheck_a`, th
 corrected values (the left-aligned reproduction matched the original exactly): epoch 4 ratio range
 1.139..0.717 → 1.047..0.544, pooled 0.9091 → 0.9736; epoch 50 1.662..0.684 → 1.161..0.664, pooled
 1.0233 → 1.0794; Jan 2021 un-annualized at coupons 4.5 / 5.0: 0.803 / 0.746 → 1.027 / 0.982. The Sep
-5 non-IPW `k5_h1` numbers are affected but were not rescored. The 1.79x/3.21x origination-model
+5 non-IPW `k5_h1` numbers (earlier in this file) are affected but were not rescored. The 1.79x/3.21x origination-model
 benchmark elsewhere in this README is unaffected (`infer_test_set` uses the last real timestep). See
-the "Fixed-fraction sample representativeness, a sequence-alignment bug, and the cutoff_2002 2003
+the "Fixed-fraction sampling rates (a_eff / b_eff), a sequence-alignment bug, and the cutoff_2002 2003
 forward test" section (Sep 24-25, 2026) near the end of this file for the full measurement.
 
 **`realized_cpr` carries no training-time weight.** Traced end to end in
@@ -3562,15 +3562,16 @@ expanding-window framing rules it out by construction:
 This addresses curve *shape* only; it does not bear on the calibration *level* question above —
 those are separate axes and are not meant to offset one another.
 
-## Fixed-fraction sample representativeness, a sequence-alignment bug, and the cutoff_2002 2003 forward test (Sep 24-25, 2026)
+## Fixed-fraction sampling rates (a_eff / b_eff), a sequence-alignment bug, and the cutoff_2002 2003 forward test (Sep 24-25, 2026)
 
-### a_eff / b_eff: does the fixed-fraction 10% loan subsample preserve the census population's event/exposure ratios
+### a_eff / b_eff: the fixed-fraction 10% loan subsample's event and exposure sampling rates
 
 `cutoff_2020`'s multiobs training data is drawn from a uniform 10% loan subsample
 (`prepare_sequences_rolling_zbc.py`'s `--sample_frac`, applied at Pass-1 loan-ID discovery; the
-multiobs builder's own `reuse_from` inherits this population unchanged). Checked whether the sample
-preserves the census population's event rate and exposure (loan-month) rate, both scaled by the
-sampling ratio `r`.
+multiobs builder's own `reuse_from` inherits this population unchanged). After removing the uniform
+10% loan subsample (scaling by the sampling ratio `r`), events enter at a_eff = 0.9985 and non-events
+at b_eff = 0.2277, above the nominal 0.2 because censored loans' last months are drawn with
+probability 1, and per-row IPW accounts for this.
 
 - **Census population loans:** 18,709,686 — `outputs/census_panel_baseline_cutoff_2020.json` →
   `overall.n_loans`.
