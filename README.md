@@ -2696,6 +2696,16 @@ Artifacts: `scripts/train_hazard_multiobs.py`, `scripts/diag/test_train_hazard_m
 
 ## Coupon-level CPR calibration: multiobs vs. origination vs. trailing, matched population (Sep 5, 2026)
 
+**CORRECTION (Sep 25, 2026):** these forecast numbers came from scoring right-aligned multiobs
+checkpoints on the left-aligned `TRAIL_SEQ_DIR` test set. For `_seedcheck_a`, the like-for-like
+corrected values (the left-aligned reproduction matched the original exactly): epoch 4 ratio range
+1.139..0.717 → 1.047..0.544, pooled 0.9091 → 0.9736; epoch 50 1.662..0.684 → 1.161..0.664, pooled
+1.0233 → 1.0794; Jan 2021 un-annualized at coupons 4.5 / 5.0: 0.803 / 0.746 → 1.027 / 0.982. The Sep
+5 non-IPW `k5_h1` numbers below are affected but were not rescored. The 1.79x/3.21x origination-model
+benchmark elsewhere in this README is unaffected (`infer_test_set` uses the last real timestep). See
+the "Fixed-fraction sample representativeness, a sequence-alignment bug, and the cutoff_2002 2003
+forward test" section (Sep 24-25, 2026) near the end of this file for the full measurement.
+
 **Why this was run.** With a trained multiobs model (0.7847 AUC) in hand, the natural next question
 was how its coupon-level CPR forecast compares to the already-documented origination (pooled ratio
 0.8631) and trailing (1.1273) runs from the Aug 30 / Sep 1 sections above.
@@ -2772,6 +2782,16 @@ run), 17010241 (rerun adding the monthly h_t table). Output:
 (new files; the existing unrestricted CSVs are untouched).
 
 ## IPW correction and reproducibility (Sep 6-7, 2026)
+
+**CORRECTION (Sep 25, 2026):** these forecast numbers came from scoring right-aligned multiobs
+checkpoints on the left-aligned `TRAIL_SEQ_DIR` test set. For `_seedcheck_a`, the like-for-like
+corrected values (the left-aligned reproduction matched the original exactly): epoch 4 ratio range
+1.139..0.717 → 1.047..0.544, pooled 0.9091 → 0.9736; epoch 50 1.662..0.684 → 1.161..0.664, pooled
+1.0233 → 1.0794; Jan 2021 un-annualized at coupons 4.5 / 5.0: 0.803 / 0.746 → 1.027 / 0.982. The Sep
+5 non-IPW `k5_h1` numbers are affected but were not rescored. The 1.79x/3.21x origination-model
+benchmark elsewhere in this README is unaffected (`infer_test_set` uses the last real timestep). See
+the "Fixed-fraction sample representativeness, a sequence-alignment bug, and the cutoff_2002 2003
+forward test" section (Sep 24-25, 2026) near the end of this file for the full measurement.
 
 **Inference-time IPW pooling was abandoned as the wrong estimand, not shelved as untested.**
 The first attempt combined a loan's several multiobs-sampled `ref_month` observations into one
@@ -2919,6 +2939,16 @@ round 2 (full determinism, bit-identical) training 17140541/17140542, seedcheck 
 `outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw{,_buggy,_epoch1_20260907,_seedcheck_a,_seedcheck_b}/`.
 
 ### Advisor follow-up: realized-rate weighting, non-prepay censoring, un-annualized calibration, and ESS (Sep 8, 2026)
+
+**CORRECTION (Sep 25, 2026):** these forecast numbers came from scoring right-aligned multiobs
+checkpoints on the left-aligned `TRAIL_SEQ_DIR` test set. For `_seedcheck_a`, the like-for-like
+corrected values (the left-aligned reproduction matched the original exactly): epoch 4 ratio range
+1.139..0.717 → 1.047..0.544, pooled 0.9091 → 0.9736; epoch 50 1.662..0.684 → 1.161..0.664, pooled
+1.0233 → 1.0794; Jan 2021 un-annualized at coupons 4.5 / 5.0: 0.803 / 0.746 → 1.027 / 0.982. The Sep
+5 non-IPW `k5_h1` numbers are affected but were not rescored. The 1.79x/3.21x origination-model
+benchmark elsewhere in this README is unaffected (`infer_test_set` uses the last real timestep). See
+the "Fixed-fraction sample representativeness, a sequence-alignment bug, and the cutoff_2002 2003
+forward test" section (Sep 24-25, 2026) near the end of this file for the full measurement.
 
 **`realized_cpr` carries no training-time weight.** Traced end to end in
 `forecast_rolling_cpr.py`: `read_coupon_and_realized()` builds `prepaid_set` from raw
@@ -3359,6 +3389,20 @@ is a valid test of the checkpointing/cutoff-filter machinery and of the sampler'
 not yet a "clean" data artifact — rebuilding it after the fix is open follow-up work, not done
 here.
 
+**CORRECTION (2026-09-24): the caveat above is stale — the rebuild described as follow-up was
+done, and this section never got updated to say so.** Job 17980942's output directory was renamed
+to `cutoff_2002_zbc_multiobs_f0.2_h1_hist_PRECPUFIX_STALE` and was never trained on. `cutoff_2002`
+was rebuilt post-fix as job 18054077, landing at
+`data/sequences_rolling/cutoff_2002_zbc_multiobs_f0.2_h1_hist`. Verified directly:
+`scaler.pkl` in that directory has `property_type_enc` mean **0.275936** (post-fix), vs. **0.252335**
+in the `_PRECPUFIX_STALE` copy (pre-fix). Both `cutoff_2002` seed checkpoints — seed 42 (job
+18097822) and seed 7 (job 18138546) — trained on the post-fix rebuild:
+`train_hazard_multiobs.py`'s `SEQ_DIR` path resolution (cutoff_year=2002, `f0.2`, `h1`, no `_L`
+suffix since `max_seq_len`=33 is default, `_hist` since `--include_pre2013`) resolves to
+`cutoff_2002_zbc_multiobs_f0.2_h1_hist`, not the `_STALE` directory, for both training sbatch
+files. Anything scored against these checkpoints must apply the CP/U fix, using the same category
+maps as the rebuild.
+
 ### A categorical-encoding bug the extension surfaced, affecting previously-reported modern-era results
 
 Building the historical extension required, for the first time, counting *unmapped* categorical
@@ -3517,3 +3561,266 @@ expanding-window framing rules it out by construction:
 
 This addresses curve *shape* only; it does not bear on the calibration *level* question above —
 those are separate axes and are not meant to offset one another.
+
+## Fixed-fraction sample representativeness, a sequence-alignment bug, and the cutoff_2002 2003 forward test (Sep 24-25, 2026)
+
+### a_eff / b_eff: does the fixed-fraction 10% loan subsample preserve the census population's event/exposure ratios
+
+`cutoff_2020`'s multiobs training data is drawn from a uniform 10% loan subsample
+(`prepare_sequences_rolling_zbc.py`'s `--sample_frac`, applied at Pass-1 loan-ID discovery; the
+multiobs builder's own `reuse_from` inherits this population unchanged). Checked whether the sample
+preserves the census population's event rate and exposure (loan-month) rate, both scaled by the
+sampling ratio `r`.
+
+- **Census population loans:** 18,709,686 — `outputs/census_panel_baseline_cutoff_2020.json` →
+  `overall.n_loans`.
+- **Sample population loans:** 1,870,909 — `logs/prep_trail_2020_16697151.log:79`
+  (`Total loans: 1,870,909 | Prepay rate: 38.19%`, end of Pass 1); confirmed independently by
+  counting unique IDs in `data/sequences_rolling/cutoff_2020_zbc_trail/{train,test}_loan_ids.npy`
+  (1,496,727 + 374,182, zero overlap).
+- **r = 1,870,909 / 18,709,686 = 0.099997** — within 0.003% of the nominal `--sample_frac 0.1`.
+- **Census prepay events:** 7,155,149 — same JSON, `overall.n_prepay_events`.
+- **Census non-event loan-months:** 585,243,056 — `overall.n_eligible_loan_months` (592,398,205)
+  minus `overall.n_prepay_events` (7,155,149), same JSON.
+- **Sample events / non-events:** 714,442 / 13,324,780 — summed `train_labels.npy` +
+  `test_labels.npy` in `data/sequences_rolling/cutoff_2020_zbc_multiobs_f0.2_h1_GOLDEN_BACKUP/`
+  (`y.sum()` / `(y==0).sum()`).
+- **a_eff = (714,442 / 7,155,149) / r = 0.9985** — the sample's event rate scales with `r` almost
+  exactly as expected against the census population (0.15% off 1.0).
+- **b_eff = (13,324,780 / 585,243,056) / r = 0.2277** — the sample's non-event (exposure)
+  loan-month rate does **not** scale the same way; it is about 4.4x under what pure uniform
+  loan-sampling would predict. This is expected, not a defect: the multiobs builder does not draw
+  every eligible loan-month per sampled loan, only a fixed fraction of the pool plus the mandatory
+  terminal draw (`--sampling_mode fixed_fraction --frac_draws 0.2`, `run_multiobs_2020_f0.2_L33.sbatch`),
+  so exposure rows are deliberately thinned relative to a full loan-month census while events are not
+  (the terminal/mandatory draw is always included). `a_eff` and `b_eff` are answering different
+  questions — event-rate representativeness vs. row-count representativeness — and are not expected
+  to agree.
+- **log(a_eff / b_eff) = 1.478.**
+- **No constant offset exists in the fixed-fraction pipeline.** The correction for the fixed-fraction
+  design is the per-row IPW loss weight (`ipw_weight(incl_prob) = 1/incl_prob`, documented in the Sep
+  6-7 section above) applied during training, not any inference-time additive/multiplicative offset;
+  `forecast_matched_population_cpr.py`'s `aggregate()` call already runs with `off_multi=0.0`
+  hardcoded per its `MULTIOBS_CAVEAT` (documented in the Sep 21 section above). `--pos_ratio` is a
+  separate, unrelated batch-composition knob (`train_hazard_multiobs.py`, controls the
+  positive/negative draw mix within a training batch) and has no offset role either.
+
+### Sequence window alignment: right-aligned checkpoints scored on left-aligned windows
+
+`measure_alignment_effect.py` (job 18479425) scored the `cutoff_2020_multiobs_k5_h1_ipw_f0.2_L33`
+seed-42 checkpoint (`hazard_best.pt`, AUC 0.7163846603462104) two ways on the loan intersection of
+its LEFT-aligned test set (`TRAIL_SEQ_DIR`, the population every Sep 5 / Sep 6-7 / Sep 8 forecast
+above actually scored) and a freshly built RIGHT-aligned control (a single Dec-2020-anchored forward
+window, this checkpoint's own scaler and pre-fix CP/U maps): intersection 230,670 loans (left
+n=374,182, right n=230,670).
+
+- **Full history (all 33 months populated, no left-padding):** 100,127 loans. The two alignments
+  agree **within 1e-4 relative** on every one of them — expected, since a completely full trailing
+  window is identical under either anchoring convention. `mean_h_left=0.03574 mean_h_right=0.03574
+  mean_ratio=1.0000 median_ratio=1.0000`.
+- **Partial history (<33 months, left-padded under the left alignment):** 130,543 loans —
+  **56.59%** of the 230,670-loan intersection. The two alignments diverge materially here:
+  `mean_h_left=0.02707 mean_h_right=0.02386 mean_ratio=1.1765 median_ratio=0.8092`.
+- **`alignment_effect_vs_realized.py`** (reuses the cached combined pass; run fresh this session)
+  added realized CY2021 prepayment (count-weighted, same `active_set`/`prepaid_set` definition as
+  `forecast_rolling_cpr.read_coupon_and_realized`/`aggregate`) to the same split. Partial-history
+  per-coupon table:
+
+  | coupon | n_loans | cpr_left | cpr_right | realized_cpr | abs_err_left | abs_err_right | closer_to_realized |
+  |---|---|---|---|---|---|---|---|
+  | 1.0 | 21 | 26.4507 | 1.7587 | 9.5238 | 16.9269 | 7.7651 | right |
+  | 1.5 | 785 | 30.1716 | 1.9942 | 5.8599 | 24.3117 | 3.8657 | right |
+  | 2.0 | 19,425 | 32.0965 | 5.0421 | 9.6885 | 22.4080 | 4.6464 | right |
+  | 2.5 | 30,720 | 31.5192 | 10.9418 | 13.4603 | 18.0589 | 2.5185 | right |
+  | 3.0 | 38,420 | 25.1516 | 26.1685 | 25.4945 | 0.3429 | 0.6740 | left |
+  | 3.5 | 15,115 | 23.2310 | 36.7497 | 35.8187 | 12.5877 | 0.9310 | right |
+  | 4.0 | 14,539 | 24.7639 | 38.8819 | 39.1980 | 14.4341 | 0.3161 | right |
+  | 4.5 | 6,363 | 24.7070 | 37.1473 | 38.9125 | 14.2055 | 1.7652 | right |
+  | 5.0 | 4,333 | 24.5969 | 33.4256 | 36.9259 | 12.3290 | 3.5003 | right |
+  | 5.5 | 665 | 24.4028 | 29.9007 | 36.2406 | 11.8378 | 6.3399 | right |
+  | 6.0 | 157 | 25.2117 | 29.5026 | 36.3057 | 11.0940 | 6.8031 | right |
+
+  **Right-aligned is closer to realized at 10 of 11 partial-history coupons.** The single exception
+  is coupon 3.0, where left is closer by a narrow margin (0.3429 vs. 0.6740 absolute error) — not a
+  systematic counter-pattern, given every other coupon favors right by a wide margin.
+- **Practical implication:** every forecast reported in the Sep 5 / Sep 6-7 / Sep 8 sections above
+  scored a right-aligned (single Dec-cutoff-window-trained) multiobs checkpoint against the
+  left-aligned `TRAIL_SEQ_DIR` test set — the wrong alignment for the 56.59% of that population with
+  partial history. See the CORRECTION notes at the top of those three sections for the like-for-like
+  corrected numbers.
+
+Artifacts: `scripts/measure_alignment_effect.py` (job 18479425),
+`scripts/diag/alignment_effect_vs_realized.py`, `scripts/score_matched_population_right_aligned.py`
+(jobs 18486581/18486582, the seedcheck_a like-for-like correction cited in the three CORRECTION notes
+above). Outputs: `outputs/rolling/alignment_effect_cutoff_2020_seed42/alignment_effect_loans.csv`,
+`outputs/rolling/matched_population_right_aligned_seedcheck_a/left_vs_right_comparison.csv`.
+
+### The frozen Dec-window 2003 test, and why frozen scoring was the wrong design
+
+Before building the one-step-ahead pipeline below, the first `cutoff_2002` → 2003 forward test
+scored one frozen Dec-2002 window/checkpoint against every forecast month (Dec 2002 - Nov 2003)
+without updating each loan's contemporaneous incentive month to month. **PMMS moved from 6.0475%
+(Dec 2002) to 5.23% (Jun 2003)** —
+`outputs/rolling/dec_window_cutoff_2002_build/pmms_series_2002_2003.csv` — an 82bp decline over
+six months, entirely inside the window the frozen design holds fixed. A design that freezes the
+reference rate (and therefore each loan's `incentive_at_ref`) at the Dec-2002 cutoff cannot capture
+that shift, which is exactly the signal a rate-path forecast needs; the advisor's original Aug 30
+design specifies contemporaneous incentive each month for this reason (see the mistakes-log entry
+added this session). The one-step-ahead redesign below restores that: each of the 12 forecast
+months gets its own one-month-forward window and its own contemporaneous incentive.
+
+Headline seed-42 pooled-level results from the frozen design, for the record (source:
+`.claude_tmp/report_2003_and_control.txt`; not the corrected design — see one-step-ahead below):
+
+| cohort | count unweighted fcst | count unweighted realized | count cell-reweighted fcst | count cell-reweighted realized | UPB unweighted fcst | UPB unweighted realized | UPB cell-reweighted fcst | UPB cell-reweighted realized | UPB n_excluded |
+|---|---|---|---|---|---|---|---|---|---|
+| cutoff_2002 seed42 | 31.4832 | 43.1878 | 29.6619 | 45.7531 | 41.8719 | 53.0965 | 44.2222 | 58.6476 | 10,385 (25.85%) |
+| cutoff_2020 control seed42 | 27.6829 | 26.3528 | 27.6829 | 26.3528 | 30.4542 | 28.3103 | 30.4542 | 28.3103 | 2 (0.00%) |
+
+Dispersion (PRIMARY = max/min), count- and UPB-weighted, frozen design:
+
+| cohort | count fcst | count realized | count ratio | UPB fcst | UPB realized | UPB ratio |
+|---|---|---|---|---|---|---|
+| cutoff_2002 seed42 | 8.1118 | 2.6046 | 3.1144 | 5.5673 | 2.4091 | 2.3110 |
+| cutoff_2020 control seed42 | 5.4052 | 3.1799 | 1.6998 | 6.4347 | 3.5944 | 1.7902 |
+
+Incentive-bin slope, frozen design, seed42: `cutoff_2002` forecast_slope 10.1832 / realized_slope
+2.6281 / ratio 3.8748 (lowest_bin `(-1.0, -0.5]` n=3,373, highest_bin `(2.0, 3.0]` n=4,273);
+`cutoff_2020` control forecast_slope 5.5753 / realized_slope 3.3468 / ratio 1.6659 (lowest_bin
+`(-0.5, 0.0]` n=13,405, highest_bin `(3.0, 4.0]` n=1,403). Note the two cohorts' auto-selected
+endpoint bins are entirely different pairs — see the caveat at the end of this section.
+
+### One-step-ahead forecasts: cutoff_2002 → 2003 and the cutoff_2020 → 2021 control
+
+One window per loan per forecast month, contemporaneous incentive each month, replacing the frozen
+design above. `cutoff_2002`: Dec 2002 - Nov 2003, seeds 42/7. `cutoff_2020` control: Dec 2020 - Nov
+2021, seeds 42/7/123. All five runs' Dec-month consistency checks against the frozen `dec_window_scores`
+passed (max abs diff 3.7e-09 to 7.4e-09, all < 1e-6). Source: `.claude_tmp/report_rolling_2003_and_control.txt`.
+
+**Pooled predicted/realized, per seed:**
+
+| cohort | seed | count pred monthly | count real monthly | count pred ann | count real ann | UPB pred monthly | UPB real monthly | UPB pred ann | UPB real ann | UPB n_excluded |
+|---|---|---|---|---|---|---|---|---|---|---|
+| cutoff_2002 | 42 | 0.04230 | 0.04629 | 0.4047 | 0.4338 | 0.05269 | 0.05832 | 0.4777 | 0.5138 | 36,475 |
+| cutoff_2002 | 7 | 0.03896 | 0.04629 | 0.3793 | 0.4338 | 0.04874 | 0.05832 | 0.4510 | 0.5138 | 36,475 |
+| cutoff_2020 control | 42 | 0.02348 | 0.02536 | 0.2481 | 0.2652 | 0.02592 | 0.02761 | 0.2704 | 0.2854 | 5 |
+| cutoff_2020 control | 7 | 0.02299 | 0.02536 | 0.2435 | 0.2652 | 0.02606 | 0.02761 | 0.2716 | 0.2854 | 5 |
+| cutoff_2020 control | 123 | 0.01997 | 0.02536 | 0.2150 | 0.2652 | 0.02216 | 0.02761 | 0.2358 | 0.2854 | 5 |
+
+**Dispersion — PRIMARY (max/min of the per-group monthly rate, n_groups=10) and SECONDARY (bounds
+of the per-group predicted/realized ratio), count- and UPB-weighted:**
+
+| cohort | seed | weight | PRIMARY pred | PRIMARY real | PRIMARY ratio | SECONDARY max | SECONDARY min |
+|---|---|---|---|---|---|---|---|
+| cutoff_2002 | 42 | count | 10.6269 | 8.4863 | 1.2523 | 1.1255 | 0.5760 |
+| cutoff_2002 | 42 | UPB | 9.1159 | 6.4247 | 1.4189 | 1.1732 | 0.5612 |
+| cutoff_2002 | 7 | count | 11.1193 | 8.4863 | 1.3103 | 1.0025 | 0.4913 |
+| cutoff_2002 | 7 | UPB | 8.9388 | 6.4247 | 1.3913 | 1.0068 | 0.4916 |
+| cutoff_2020 control | 42 | count | 10.7397 | 7.3843 | 1.4544 | 0.9762 | 0.6416 |
+| cutoff_2020 control | 42 | UPB | 12.8834 | 8.4062 | 1.5326 | 0.9954 | 0.6234 |
+| cutoff_2020 control | 7 | count | 9.5308 | 7.3843 | 1.2907 | 0.9703 | 0.7013 |
+| cutoff_2020 control | 7 | UPB | 12.1029 | 8.4062 | 1.4397 | 1.0107 | 0.6586 |
+| cutoff_2020 control | 123 | count | 10.8737 | 7.3843 | 1.4726 | 0.8417 | 0.5599 |
+| cutoff_2020 control | 123 | UPB | 13.5819 | 8.4062 | 1.6157 | 0.8766 | 0.5242 |
+
+**Incentive-bin pattern (count-weighted, seed42 shown in full; the other seeds within each cohort
+show the same directional shape — predicted below realized at negative/low incentive, predicted
+near or above realized at high incentive):**
+
+`cutoff_2002` seed42 (monthly rates):
+
+| bin | n | predicted | realized |
+|---|---|---|---|
+| (-4.0, -3.0] | 3 | 0.001622 | 0.000000 |
+| (-3.0, -2.0] | 82 | 0.004004 | 0.000000 |
+| (-2.0, -1.0] | 2,180 | 0.006977 | 0.010092 |
+| (-1.0, -0.5] | 20,235 | 0.007702 | 0.010872 |
+| (-0.5, 0.0] | 39,382 | 0.013480 | 0.019527 |
+| (0.0, 0.5] | 56,818 | 0.026517 | 0.035746 |
+| (0.5, 1.0] | 64,884 | 0.044121 | 0.051554 |
+| (1.0, 1.5] | 58,596 | 0.059539 | 0.065039 |
+| (1.5, 2.0] | 58,918 | 0.059136 | 0.057860 |
+| (2.0, 3.0] | 57,271 | 0.054607 | 0.054006 |
+| (3.0, 4.0] | 14,832 | 0.042288 | 0.040520 |
+| (4.0, 6.0] | 1,643 | 0.034354 | 0.031041 |
+
+`cutoff_2020` control seed42 (monthly rates):
+
+| bin | n | predicted | realized |
+|---|---|---|---|
+| (-2.0, -1.0] | 2,082 | 0.003403 | 0.005764 |
+| (-1.0, -0.5] | 48,862 | 0.004673 | 0.007409 |
+| (-0.5, 0.0] | 348,329 | 0.008204 | 0.010777 |
+| (0.0, 0.5] | 551,904 | 0.014473 | 0.016921 |
+| (0.5, 1.0] | 588,640 | 0.027041 | 0.027699 |
+| (1.0, 1.5] | 444,957 | 0.034529 | 0.036044 |
+| (1.5, 2.0] | 273,254 | 0.034519 | 0.036329 |
+| (2.0, 3.0] | 132,457 | 0.032441 | 0.036374 |
+| (3.0, 4.0] | 6,786 | 0.028752 | 0.034335 |
+
+Incentive-bin slope (predicted vs. realized), all five runs — realized slope is identical within
+each cohort since the population and realized outcomes don't change across seeds, only the model:
+
+| cohort | seed | predicted slope | realized slope |
+|---|---|---|---|
+| cutoff_2002 | 42 | 4.9236 | 3.0759 |
+| cutoff_2002 | 7 | 3.4932 | 3.0759 |
+| cutoff_2020 control | 42 | 8.4497 | 5.9572 |
+| cutoff_2020 control | 7 | 7.6278 | 5.9572 |
+| cutoff_2020 control | 123 | 8.9122 | 5.9572 |
+
+**Month-by-month summary (seed42, representative — the population and consistency-check results
+are identical across seeds within each cohort):**
+
+`cutoff_2002` seed42 (12 months, Dec 2002 - Nov 2003):
+
+| ref_month | predicted_rate_annualized | realized_rate_annualized | non_prepay_term_count | n_excluded_by_forward_gap |
+|---|---|---|---|---|
+| 200212 | 0.357060 | 0.345414 | 19 | 1 |
+| 200301 | 0.369426 | 0.358316 | 13 | 0 |
+| 200302 | 0.386858 | 0.402753 | 21 | 1 |
+| 200303 | 0.409486 | 0.483833 | 20 | 0 |
+| 200304 | 0.417018 | 0.456452 | 19 | 0 |
+| 200305 | 0.452000 | 0.497271 | 19 | 1 |
+| 200306 | 0.494281 | 0.578572 | 26 | 0 |
+| 200307 | 0.475469 | 0.571210 | 17 | 0 |
+| 200308 | 0.408955 | 0.466582 | 16 | 0 |
+| 200309 | 0.366178 | 0.358846 | 14 | 0 |
+| 200310 | 0.348988 | 0.286545 | 16 | 0 |
+| 200311 | 0.347345 | 0.293667 | 25 | 0 |
+
+`cutoff_2020` control seed42 (12 months, Dec 2020 - Nov 2021):
+
+| ref_month | predicted_rate_annualized | realized_rate_annualized | non_prepay_term_count | n_excluded_by_forward_gap |
+|---|---|---|---|---|
+| 202012 | 0.297680 | 0.271484 | 9 | 0 |
+| 202101 | 0.306439 | 0.283647 | 10 | 0 |
+| 202102 | 0.294790 | 0.330907 | 6 | 0 |
+| 202103 | 0.273758 | 0.279517 | 14 | 0 |
+| 202104 | 0.248924 | 0.242081 | 9 | 0 |
+| 202105 | 0.240689 | 0.259656 | 20 | 0 |
+| 202106 | 0.226292 | 0.241051 | 8 | 0 |
+| 202107 | 0.223010 | 0.275945 | 21 | 0 |
+| 202108 | 0.224092 | 0.264435 | 7 | 0 |
+| 202109 | 0.208552 | 0.255417 | 19 | 0 |
+| 202110 | 0.195170 | 0.231105 | 10 | 0 |
+| 202111 | 0.184001 | 0.221493 | 23 | 0 |
+
+Artifacts: `scripts/score_rolling_one_step.py`, `scripts/report_multiobs_dec_window.py`,
+`scripts/score_multiobs_dec_window.py`; sbatch files `run_rolling_onestep_2002_seed{42,7}.sbatch`,
+`run_rolling_onestep_2020_control_seed{42,7,123}.sbatch`. Jobs 18493059/18493061 (`cutoff_2002`),
+18493064/18493067/18493069 (`cutoff_2020` control). Full printed output for all five runs:
+`.claude_tmp/report_rolling_2003_and_control.txt`.
+
+### Caveat: the top/bottom slope metric uses different endpoint bins across runs
+
+The incentive-bin slope reported throughout this section (and the frozen-design section above) is
+computed between whichever two bins happen to be the lowest/highest with enough observations in each
+run — not a fixed pair of bins. `cutoff_2002`'s frozen-design slope spans `(-1.0, -0.5]` to
+`(2.0, 3.0]`; `cutoff_2020` control's frozen-design slope spans `(-0.5, 0.0]` to `(3.0, 4.0]` — a
+different pair of bins entirely, because the two cohorts' coupon/incentive distributions differ. The
+one-step-ahead tables above show the same asymmetry (`cutoff_2002` has usable bins from `(-4.0,
+-3.0]` to `(4.0, 6.0]`; `cutoff_2020` control only from `(-2.0, -1.0]` to `(3.0, 4.0]`, since it has
+no observations in the negative tail beyond -2.0). A slope number is therefore not comparable
+across runs or cohorts by itself — compare the per-bin predicted/realized rates directly instead,
+using the full bin tables above.

@@ -209,6 +209,7 @@ _COL_MAP = dict(sorted({
     _ALL_COLS.index('borrower_credit_score') + 1:     'borrower_credit_score',
     _ALL_COLS.index('original_ltv') + 1:              'original_ltv',
     _ALL_COLS.index('original_upb') + 1:              'original_upb',
+    _ALL_COLS.index('current_actual_upb') + 1:        'current_actual_upb',
     _ALL_COLS.index('loan_age') + 1:                  'loan_age',
     _ALL_COLS.index('origination_date') + 1:          'origination_date',
     _ALL_COLS.index('zip') + 1:                       'zip3',
@@ -366,6 +367,9 @@ def load_vintage_filtered(
     cutoff_yyyymm: int,
     keep_ids=None,
     sample_frac: float = 1.0,
+    loan_purpose_map: dict | None = None,
+    property_type_map: dict | None = None,
+    extra_keep_cols: list[str] | None = None,
 ) -> pd.DataFrame | None:
     """Load one vintage file, apply calendar cutoff, compute all features.
 
@@ -373,6 +377,18 @@ def load_vintage_filtered(
         prepaid=1 only if zero_balance_code_actual==1 appears in a row that
         survives the cutoff filter. A loan that prepays AFTER the cutoff is
         labeled prepaid=0 in the training data — no lookahead leakage.
+
+    loan_purpose_map / property_type_map: override the category-code maps
+    passed to _encode_categorical(). Default (None) is the current fixed
+    maps (CP/U mapped, see _encode_categorical docstring) -- pass the
+    pre-fix maps ({'R':0,'C':1,'P':2} / {'SF':0,'PU':1,'CO':2,'MH':3}, no
+    CP/U key) to reproduce features for a checkpoint trained before the
+    CP/U fix landed (commit 2a5b283), so its scoring population matches
+    what it actually trained on.
+
+    extra_keep_cols: additional raw columns (already read via _USECOLS,
+    e.g. 'current_actual_upb') to retain in the returned frame alongside
+    the FEATURE_COLS-driven default. See `keep` below.
     """
     path = os.path.join(_data_dir_for_vintage(vintage), f'{vintage}.csv')
     if not os.path.exists(path):
@@ -434,6 +450,7 @@ def load_vintage_filtered(
     df['zip3']                     = pd.to_numeric(df['zip3'],                     errors='coerce')
     df['origination_date']         = pd.to_numeric(df['origination_date'],         errors='coerce')
     df['zero_balance_code_actual'] = pd.to_numeric(df['zero_balance_code_actual'], errors='coerce')
+    df['current_actual_upb']       = pd.to_numeric(df['current_actual_upb'],       errors='coerce')
 
     # ── PMMS refi incentive ───────────────────────────────────────────────────
     # market_rate uses the raw MMYYYY integer as dict key (same format as PMMS CSV)
@@ -499,10 +516,10 @@ def load_vintage_filtered(
     # _encode_categorical's docstring for the two independent checks) --
     # previously both silently fell back to 0 (indistinguishable from a
     # genuine Purchase/Single-family row), now each gets its own code.
-    df['loan_purpose_enc'] = _encode_categorical(
-        df['loan_purpose'], {'R': 0, 'C': 1, 'P': 2, 'U': 3}, 'loan_purpose')
-    df['property_type_enc'] = _encode_categorical(
-        df['property_type'], {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3, 'CP': 4}, 'property_type')
+    _lp_map = loan_purpose_map  if loan_purpose_map  is not None else {'R': 0, 'C': 1, 'P': 2, 'U': 3}
+    _pt_map = property_type_map if property_type_map is not None else {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3, 'CP': 4}
+    df['loan_purpose_enc'] = _encode_categorical(df['loan_purpose'], _lp_map, 'loan_purpose')
+    df['property_type_enc'] = _encode_categorical(df['property_type'], _pt_map, 'property_type')
 
     # ── Prepay label — CRITICAL: only from rows within cutoff window ──────────
     # Any row with zbc==1 at monthly_reporting_period <= cutoff is a prepay event.
@@ -513,9 +530,13 @@ def load_vintage_filtered(
     # original_interest_rate rides along unused by build_sequences_multiobs
     # (which selects columns from FEATURE_COLS by name) -- kept so
     # census_panel_baseline.py can coupon-bucket the panel without a second
-    # raw-file pass.
-    keep = ['loan_id', 'yyyymm', 'monthly_reporting_period', 'prepaid',
-            'zero_balance_code_actual', 'original_interest_rate'] + FEATURE_COLS
+    # raw-file pass. extra_keep_cols: same idea, for callers that need one
+    # more raw column (e.g. current_actual_upb for UPB-weighting) without a
+    # second pass over the same multi-GB file -- default None/[] is a no-op
+    # for every existing caller.
+    keep = (['loan_id', 'yyyymm', 'monthly_reporting_period', 'prepaid',
+             'zero_balance_code_actual', 'original_interest_rate'] + FEATURE_COLS
+            + list(extra_keep_cols or []))
     df = df[keep].dropna(subset=FEATURE_COLS)
 
     n_loans   = df['loan_id'].nunique()
@@ -868,6 +889,7 @@ def build_sequences_multiobs(
     df: pd.DataFrame, scaler: StandardScaler, k_draws: int, H: int, min_hist: int,
     draw_scheme: str = 'uniform', incentive_edges: list[float] | None = None,
     sampling_mode: str = 'fixed_k', frac_draws: float | None = None,
+    obs: pd.DataFrame | None = None,
 ):
     """Build RIGHT-aligned (N, MAX_SEQ_LEN, N_FEATURES) arrays: one row per
     SELECTED (loan_id, ref_month) observation, not one row per loan.
@@ -878,9 +900,18 @@ def build_sequences_multiobs(
     the reference age varies observation to observation, so "last timestep
     = now" must hold for every row for the positional embedding to mean
     anything consistent.
+
+    obs: optional pre-built observation table, same schema as
+    select_observations()'s return (_OBS_COLS: loan_id, t, ref_month, label,
+    is_terminal, incl_prob, n_eligible, k_actual, age_at_ref,
+    incentive_at_ref). When given, select_observations() is skipped and this
+    table drives the gather directly -- lets a caller substitute exactly one
+    right-aligned window per loan (e.g. one Dec-2002 ref_month per test
+    loan) without duplicating the gather/scaling logic below.
     """
-    obs = select_observations(df, k_draws, H, min_hist, draw_scheme, incentive_edges,
-                               sampling_mode, frac_draws)
+    if obs is None:
+        obs = select_observations(df, k_draws, H, min_hist, draw_scheme, incentive_edges,
+                                   sampling_mode, frac_draws)
     extras_dtype = {
         'incl_prob': np.float32, 'is_terminal': bool, 'n_eligible': np.int32,
         'k_actual': np.int32, 'ref_month': np.int64,
