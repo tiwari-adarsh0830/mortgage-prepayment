@@ -4,7 +4,8 @@
 **Valid checkpoints.** `cutoff_2002` multiobs f0.2 L33 `_hist` (post-CP/U-fix data): seeds 42, 7,
 123, 1001, 2026. `cutoff_2020` control f0.2 L33, all on pre-fix data: seeds 42, 7, 123 (original)
 plus 1001, 2026 (`_goldenbackup`, retrained after the bug below). Excluded: the two
-`*_POSTFIX_MISMATCH` seed1001/2026 runs — trained on data silently rewritten mid-flight.
+`*_POSTFIX_MISMATCH` seed1001/2026 runs — trained on the post-fix data written into the plain dir
+on Sep 19, not the pre-fix data the other three used.
 
 **Data warning.** The plain `cutoff_2020_zbc_multiobs_f0.2_h1` sequence dir was overwritten in
 place on Sep 19 with post-CP/U-fix codes; pre-fix data (used by seeds 42/7/123) lives only in
@@ -13,16 +14,16 @@ place on Sep 19 with post-CP/U-fix codes; pre-fix data (used by seeds 42/7/123) 
 **Standing test.** `scripts/tests/test_train_forecast_consistency.py` — last passed 2026-09-26,
 srun job 18613794 (`.claude_tmp/consistency_srun.log`), both cases, both negative controls each.
 
-**Settled:** the 3-6x calibration overshoot was a check artifact, corrected to 1.03x
-(cutoff_2020) / 1.07x (cutoff_2002); the sequence-alignment bug was corrected and Sep 5-8 numbers
+**Settled:** the 1.16x / 1.23x calibration overshoot was a check artifact (unweighted forecast vs IPW-weighted
+realized); corrected, it is 1.03x (cutoff_2020) / 1.07x (cutoff_2002); the sequence-alignment bug was corrected and Sep 5-8 numbers
 rescored; 2003 one-step-ahead five-seed ensemble predicted/realized = 0.87 pooled (seeds
 0.80-0.91); a low-incentive predicted-vs-realized gap exists in both 2003 and 2021; house-price
 growth doesn't explain most of the 2003 gap; within the training range the model is too low and
 under-responsive at low-to-moderate incentive (coupons 5.0-6.5).
 
 **Open:** why the model under-responds at low-to-moderate incentive; whether to add a recent
-house-price-growth feature; whether to rerun cutoff_2002 after a scaler refresh post-CP/U-fix —
-raised twice, no answer yet, treated as a caveat; HARP two-loan linkage not started; cutoff_2011
+house-price-growth feature; whether the CP/U fix warrants rerunning the cutoff_2020 window-length, no-history and
+seed-replication results (asked twice, no answer yet, treated as a caveat); HARP two-loan linkage not started; cutoff_2011
 and cutoff_2019 not built.
 
 **Next.** An advisor update on the seed, house-price, and responsiveness results is drafted, to
