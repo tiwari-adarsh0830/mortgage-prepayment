@@ -1,3 +1,35 @@
+## Current state
+*(Sep 26, 2026 — rewritten each session, not appended to.)*
+
+**Valid checkpoints.** `cutoff_2002` multiobs f0.2 L33 `_hist` (post-CP/U-fix data): seeds 42, 7,
+123, 1001, 2026. `cutoff_2020` control f0.2 L33, all on pre-fix data: seeds 42, 7, 123 (original)
+plus 1001, 2026 (`_goldenbackup`, retrained after the bug below). Excluded: the two
+`*_POSTFIX_MISMATCH` seed1001/2026 runs — trained on data silently rewritten mid-flight.
+
+**Data warning.** The plain `cutoff_2020_zbc_multiobs_f0.2_h1` sequence dir was overwritten in
+place on Sep 19 with post-CP/U-fix codes; pre-fix data (used by seeds 42/7/123) lives only in
+`..._GOLDEN_BACKUP`. Verify data by decoded content (e.g. `property_type_enc`), never by path.
+
+**Standing test.** `scripts/tests/test_train_forecast_consistency.py` — last passed 2026-09-26,
+srun job 18613794 (`.claude_tmp/consistency_srun.log`), both cases, both negative controls each.
+
+**Settled:** the 3-6x calibration overshoot was a check artifact, corrected to 1.03x
+(cutoff_2020) / 1.07x (cutoff_2002); the sequence-alignment bug was corrected and Sep 5-8 numbers
+rescored; 2003 one-step-ahead five-seed ensemble predicted/realized = 0.87 pooled (seeds
+0.80-0.91); a low-incentive predicted-vs-realized gap exists in both 2003 and 2021; house-price
+growth doesn't explain most of the 2003 gap; within the training range the model is too low and
+under-responsive at low-to-moderate incentive (coupons 5.0-6.5).
+
+**Open:** why the model under-responds at low-to-moderate incentive; whether to add a recent
+house-price-growth feature; whether to rerun cutoff_2002 after a scaler refresh post-CP/U-fix —
+raised twice, no answer yet, treated as a caveat; HARP two-loan linkage not started; cutoff_2011
+and cutoff_2019 not built.
+
+**Next.** An advisor update on the seed, house-price, and responsiveness results is drafted, to
+be sent Monday; the next direction depends on the reply.
+
+---
+
 # Mortgage Prepayment Prediction
 **NYU Stern — RA Project**
 
@@ -7,6 +39,17 @@
 Predicting mortgage prepayment using Fannie Mae Single-Family Loan Performance Data. The project builds a sequence of increasingly sophisticated models — from logistic regression through Transformer-based architectures — and is now applying the Diep-Eisfeldt-Richardson (DER) framework to explain the cross-section of TBA MBS returns using hazard-model-implied prepayment risk loadings.
 
 **Contribution angle:** The DER framework uses Bloomberg dealer survey forecasts as the prepayment forecast leg. We substitute our ML hazard model as the forecast, removing dependence on proprietary survey data.
+
+---
+
+## Standing tests
+
+`scripts/tests/test_train_forecast_consistency.py` checks that the training path and the
+forecasting path produce identical sequences and predictions for the same (loan_id, ref_month)
+observations, and that a multi-month forecast uses the window ending at each forecast month (not
+an earlier, frozen one). It is run after any change to data prep, the sequence builder, feature
+definitions, category maps, scalers, or any scoring/forecast script, and before any forecast
+number is reported here or elsewhere.
 
 ---
 
@@ -3825,3 +3868,278 @@ one-step-ahead tables above show the same asymmetry (`cutoff_2002` has usable bi
 no observations in the negative tail beyond -2.0). A slope number is therefore not comparable
 across runs or cohorts by itself — compare the per-bin predicted/realized rates directly instead,
 using the full bin tables above.
+
+## Five-seed ensembles, a train/forecast consistency test, and a house-price / responsiveness check on the low-incentive gap — cutoff_2002 (2003) and cutoff_2020 control (2021) (Sep 26, 2026)
+
+Extends the one-step-ahead forecasts above from 2/3 seeds per cohort to a full five-seed ensemble
+(42, 7, 123, 1001, 2026 for `cutoff_2002`; same five for the `cutoff_2020` control), adds a
+standing train/forecast consistency test with two negative controls, and tests whether zip3
+house-price growth explains the low-incentive predicted-vs-realized gap found in both years.
+Numbers below are read from saved CSVs under `outputs/rolling/ensemble_onestep_cutoff_{2002,2020_control}/`
+and `.claude_tmp/*.log`; nothing here was recomputed for this write-up. Per standing instruction,
+every cutoff_2020 computation this session ran under `srun`, never the login node.
+
+### Two control seeds were trained on the wrong data; retrained and verified by content
+
+Seeds 1001/2026 for the `cutoff_2020` control were first submitted against the plain
+`cutoff_2020_zbc_multiobs_f0.2_h1` sequence dir, which had been silently overwritten in place on
+Sep 19 with post-CP/U-fix category codes — five days after seeds 42/7/123 trained on the pre-fix
+version. Caught by decoding `property_type_enc`'s content, not by directory name: the plain
+(post-rewrite) dir has codes `{0,1,2,3,4}` (CP present), `..._GOLDEN_BACKUP` (pre-fix, frozen) has
+only `{0,1,2,3}`. The two mismatched runs were renamed `..._POSTFIX_MISMATCH` and excluded; both
+seeds were retrained pointed explicitly at `..._GOLDEN_BACKUP` (`best_auc` 0.71621 seed1001,
+0.71641 seed2026 — see full detail in `docs/mistakes_and_lessons.md`). Full detail: see the
+"Current state" data warning above.
+
+### Train/forecast consistency test made a standing test, with two negative controls per cutoff
+
+`scripts/tests/test_train_forecast_consistency.py` (srun job 18613794,
+`.claude_tmp/consistency_srun.log`) — **all checks passed, both cases:**
+
+- **`cutoff_2002_seed42_hist`** (random vintage 2002Q4): candidate-observation count, exact
+  sequence/mask reconstruction (n=2,000, max diff 0.000e+00), and prediction match against the
+  stored checkpoint (AUC 0.7743897241456773, max diff 0.000e+00) all passed. Negative control (b) —
+  a frozen Dec-cutoff window's last timestep checked against June-of-forecast-year's actual
+  features — **correctly disagreed** on 32,122/32,122 loan-months (max abs diff 2.331), confirming
+  the test can catch a real misalignment, not just pass trivially.
+- **`cutoff_2020_f0.2_seed42_GOLDEN_BACKUP`** (random vintage 2016Q3): same sequence/mask/prediction
+  checks passed (checkpoint AUC 0.7163846603462104, max diff 0.000e+00). Negative control (a) — the
+  left-aligned `TRAIL_SEQ_DIR` sequences checked against the correct right-aligned train
+  sequences — **correctly disagreed** on 2,000/2,000 shared observations (max abs diff 3.603).
+  Negative control (b) (same frozen-window check as above) **correctly disagreed** on
+  200,871/200,871 loan-months (max abs diff 1.191).
+
+Both negative controls exist specifically to catch the two historical bugs this project already
+made once each (frozen-window scoring, left/right sequence-alignment mismatch) — the test is
+useless if it can only pass, so both are designed to fail loudly if either bug reappears.
+
+### Five-seed ensemble: pooled ratios and dispersion at min_n=1,000
+
+**Pooled predicted/realized ratio, count- and UPB-weighted, ensemble and all five seeds:**
+
+| cohort | seed | count ratio | UPB ratio |
+|---|---|---|---|
+| cutoff_2002 | ensemble | 0.8734 | 0.8644 |
+| cutoff_2002 | 42 | 0.9138 | 0.9035 |
+| cutoff_2002 | 7 | 0.8416 | 0.8357 |
+| cutoff_2002 | 123 | 0.8013 | 0.7889 |
+| cutoff_2002 | 1001 | 0.8964 | 0.8960 |
+| cutoff_2002 | 2026 | 0.9142 | 0.8979 |
+| cutoff_2020 control | ensemble | 0.8750 | 0.8955 |
+| cutoff_2020 control | 42 | 0.9260 | 0.9390 |
+| cutoff_2020 control | 7 | 0.9067 | 0.9440 |
+| cutoff_2020 control | 123 | 0.7877 | 0.8027 |
+| cutoff_2020 control | 1001 | 0.7999 | 0.8120 |
+| cutoff_2020 control | 2026 | 0.9546 | 0.9797 |
+
+**Dispersion at min_n=1,000** (`dispersion_stats_minn1000.csv`): `cutoff_2002` coupons used
+[4.5-9.0 by 0.5] (10 groups); `cutoff_2020` control coupons used [1.5-6.0 by 0.5] (10 groups,
+derived from `per_coupon_ratio_disagreement.csv` filtered to n≥1,000 — matches n_groups=10).
+
+| cohort | model | PRIMARY predicted disp | PRIMARY realized disp | PRIMARY ratio |
+|---|---|---|---|---|
+| cutoff_2002 | ensemble | 11.525 | 8.486 | 1.358 |
+| cutoff_2002 | seed42 | 10.627 | 8.486 | 1.252 |
+| cutoff_2002 | seed7 | 11.119 | 8.486 | 1.310 |
+| cutoff_2002 | seed123 | 10.066 | 8.486 | 1.186 |
+| cutoff_2002 | seed1001 | 13.568 | 8.486 | 1.599 |
+| cutoff_2002 | seed2026 | 13.151 | 8.486 | 1.550 |
+| cutoff_2020 control | ensemble | 10.272 | 7.384 | 1.391 |
+| cutoff_2020 control | seed42 | 10.740 | 7.384 | 1.454 |
+| cutoff_2020 control | seed7 | 9.531 | 7.384 | 1.291 |
+| cutoff_2020 control | seed123 | 10.874 | 7.384 | 1.473 |
+| cutoff_2020 control | seed1001 | 10.350 | 7.384 | 1.402 |
+| cutoff_2020 control | seed2026 | 10.871 | 7.384 | 1.472 |
+
+Realized dispersion is identical across seeds within a cohort by construction (same realized
+outcomes, only the model predictions vary). Seed disagreement (min/max/spread across the 5 seeds,
+`disagreement_summary.csv`): pooled_ratio spread 0.167 count / 0.177 UPB for `cutoff_2020` control
+(the wider of the two cohorts).
+
+### House-price test: does zip3 house-price growth explain the low-incentive gap
+
+**Why zip3 ZHVI, not state-level Case-Shiller.** `data/zhvi_zip3.csv` is already zip3-level and
+already joined to every loan via the model's own `current_ltv` feature pipeline — Case-Shiller is
+published at the MSA/national level, too coarse to construct the per-zip3 `x` this test needs, and
+would collapse most of the within-state heterogeneity the test is trying to detect.
+
+**Unit of x:** percent, not fraction — `scripts/house_price_test_2002.py:67`:
+`return 100.0 * (now / prior - 1.0)`.
+
+**Pooled low-incentive gap** (pooled ensemble realized monthly rate minus pooled ensemble predicted
+monthly rate, over the same incentive≤0.5 loan-months the house-price test's WLS regression uses;
+`scripts/house_price_gap_quintiles.py`, run directly for `cutoff_2002`, via `srun` job 18619302 for
+the `cutoff_2020` control):
+
+| cohort | weight | pooled predicted | pooled realized | gap | n |
+|---|---|---|---|---|---|
+| cutoff_2002 (2003) | count | 0.017522 | 0.026135 | 0.008613 | 104,267 |
+| cutoff_2002 (2003) | upb | 0.023258 | 0.034501 | 0.011243 | 82,782 |
+| cutoff_2020 control (2021) | count | 0.010939 | 0.014171 | 0.003232 | 945,306 |
+| cutoff_2020 control (2021) | upb | 0.011345 | 0.014564 | 0.003219 | 945,302 |
+
+**x distribution, low-incentive group** (per-zip3 mean trailing-12mo ZHVI growth, %):
+
+| cohort | weight | n zip3s | min | 25th | median | 75th | max | IQR |
+|---|---|---|---|---|---|---|---|---|
+| cutoff_2002 (2003) | count | 342 | -4.91 | 3.31 | 6.08 | 12.61 | 43.97 | 9.30 |
+| cutoff_2002 (2003) | upb | 301 | -4.66 | 3.34 | 6.71 | 13.18 | 59.75 | 9.84 |
+| cutoff_2020 control (2021) | count/upb | 758 | -2.21 | 11.63 | 14.54 | 16.98 | 37.89 | 5.34 |
+
+**Quintile tables** (zip3s split into 5 equal-count groups by x; count-weighted shown, UPB-weighted
+in the saved CSV `house_price_zip3_quintiles.csv`):
+
+`cutoff_2002` low-incentive:
+
+| quintile | x range | n zip3s | n loan-months | predicted | realized | gap |
+|---|---|---|---|---|---|---|
+| 1 (lowest x) | -4.91 to 2.99 | 69 | 18,785 | 0.016803 | 0.023210 | 0.006407 |
+| 2 | 3.00 to 4.76 | 68 | 19,722 | 0.016278 | 0.021803 | 0.005525 |
+| 3 | 4.96 to 8.27 | 68 | 17,507 | 0.016294 | 0.029074 | 0.012780 |
+| 4 | 8.31 to 13.86 | 68 | 20,851 | 0.017886 | 0.026953 | 0.009067 |
+| 5 (highest x) | 13.89 to 43.97 | 69 | 27,402 | 0.019416 | 0.028757 | 0.009341 |
+
+`cutoff_2002` placebo:
+
+| quintile | x range | n zip3s | n loan-months | predicted | realized | gap |
+|---|---|---|---|---|---|---|
+| 1 | -6.19 to 2.93 | 75 | 22,610 | 0.046478 | 0.040823 | -0.005655 |
+| 2 | 2.93 to 4.31 | 75 | 23,755 | 0.049707 | 0.047822 | -0.001886 |
+| 3 | 4.31 to 7.52 | 75 | 23,610 | 0.047075 | 0.049089 | 0.002014 |
+| 4 | 7.57 to 13.18 | 75 | 23,233 | 0.058353 | 0.061507 | 0.003155 |
+| 5 | 13.20 to 38.86 | 75 | 25,274 | 0.064803 | 0.068133 | 0.003331 |
+
+Not monotone in the low-incentive group (quintile 3, not 5, has the largest gap) and quintile 1's
+gap (0.006407) is not near zero — 74% of the overall 0.008613 gap. The placebo group, which
+shouldn't show an incentive-driven relationship, itself shows a monotone gap rising with x — a
+wrinkle, not a clean confirmation.
+
+`cutoff_2020` control (2021) low-incentive:
+
+| quintile | x range | n zip3s | n loan-months | predicted | realized | gap |
+|---|---|---|---|---|---|---|
+| 1 (lowest x) | -2.21 to 10.70 | 152 | 145,617 | 0.011097 | 0.012993 | 0.001896 |
+| 2 | 10.71 to 13.56 | 151 | 206,258 | 0.010652 | 0.013086 | 0.002434 |
+| 3 | 13.56 to 15.42 | 152 | 195,411 | 0.011141 | 0.014713 | 0.003571 |
+| 4 | 15.44 to 17.63 | 151 | 199,146 | 0.010985 | 0.014803 | 0.003818 |
+| 5 (highest x) | 17.63 to 37.89 | 152 | 198,874 | 0.010876 | 0.014994 | 0.004118 |
+
+`cutoff_2020` control (2021) placebo:
+
+| quintile | x range | n zip3s | n loan-months | predicted | realized | gap |
+|---|---|---|---|---|---|---|
+| 1 (lowest x) | -3.33 to 10.76 | 132 | 65,799 | 0.030535 | 0.031201 | 0.000666 |
+| 2 | 10.79 to 13.22 | 131 | 90,171 | 0.031715 | 0.036264 | 0.004549 |
+| 3 | 13.26 to 14.98 | 131 | 79,640 | 0.031214 | 0.036226 | 0.005012 |
+| 4 | 14.98 to 16.80 | 131 | 83,338 | 0.030707 | 0.035662 | 0.004955 |
+| 5 (highest x) | 16.81 to 35.09 | 131 | 83,011 | 0.033648 | 0.041741 | 0.008094 |
+
+Both `cutoff_2020` control tables are monotone in x with the lowest-x quintile's gap smallest
+(low-incentive: 0.0019, ~59% of the overall 0.003232 gap; placebo: 0.0007, close to zero) — a
+cleaner pattern than `cutoff_2002` shows.
+
+**Slope × IQR(x) as a share of the low-incentive gap**, with a range of (slope ± 2×cluster_se) ×
+IQR / gap (clustering on zip3's first digit, 10 clusters):
+
+| cohort | weight | slope | cluster_se | slope×IQR | share of gap | range |
+|---|---|---|---|---|---|---|
+| cutoff_2002 (2003) | count | 0.0001880 | 0.0002167 | 0.001748 | 20.3% | [-26.5%, 67.1%] |
+| cutoff_2002 (2003) | upb | 0.0002031 | 0.0002717 | 0.001999 | 17.8% | [-29.8%, 65.3%] |
+| cutoff_2020 control (2021) | count | 0.0001659 | 0.0000797 | 0.000887 | 27.4% | [1.1%, 53.8%] |
+| cutoff_2020 control (2021) | upb | 0.0002421 | 0.0001022 | 0.001294 | 40.2% | [6.3%, 74.2%] |
+
+Point estimates put house-price growth at roughly a fifth to two-fifths of the low-incentive gap,
+but the interval straddles zero for `cutoff_2002` — consistent with `cutoff_2002`'s clustered
+t-stats not clearing significance (below). **House-price growth does not explain most of the 2003
+gap** either way, even at the high end of the range.
+
+**Clustered t-stats against the correct critical value.** With 10 clusters (9 df), the two-sided
+5% critical value is **t₉,0.975 ≈ 2.262**, not 1.96:
+
+| cohort | group | weight | cluster_t | clears 2.262 |
+|---|---|---|---|---|
+| cutoff_2002 | low_incentive | count | 0.867 | No |
+| cutoff_2002 | low_incentive | upb | 0.748 | No |
+| cutoff_2002 | placebo | count | 1.649 | No |
+| cutoff_2002 | placebo | upb | 1.931 | No |
+| cutoff_2020 control | low_incentive | count | 2.082 | No |
+| cutoff_2020 control | low_incentive | upb | 2.368 | Yes |
+| cutoff_2020 control | placebo | count | 3.274 | Yes |
+| cutoff_2020 control | placebo | upb | 3.087 | Yes |
+
+Only 3 of 8 clustered slopes clear the correct threshold, all in the `cutoff_2020` control cohort;
+none in `cutoff_2002`.
+
+### Responsiveness: too low and under-responsive at low-to-moderate incentive, within the training range
+
+`cutoff_2002`'s training incentive range is [-1.306, 2.967] (1st-99th percentile of the training
+set's own `incentive_at_ref`). **4.58%** of the 2003 one-step-ahead population (17,185/374,850
+loan-months) falls outside that range — for the `cutoff_2020` control, the corresponding figure is
+3.76% (90,084/2,397,271) against its own [-1.63, 2.156] range.
+
+**Per-coupon slope ratios with 95% CI** (`responsiveness_slope_se_ci.csv`):
+
+`cutoff_2002`:
+
+| coupon | ratio pred/real | 95% CI |
+|---|---|---|
+| 5.0 | 0.213 | [0.095, 0.332] |
+| 5.5 | 0.415 | [0.258, 0.572] |
+| 6.0 | 0.482 | [0.364, 0.600] |
+| 6.5 | 0.572 | [0.439, 0.705] |
+| 7.0 | 1.124 | [0.112, 2.136] |
+| 7.5 | 2.355 | [-4.219, 8.929] |
+| 8.0 | 1.622 | [-3.419, 6.664] |
+| 8.5 | 0.948 | [-6.635, 8.532] |
+| 9.0 | 0.529 | [-3.570, 4.629] |
+
+`cutoff_2020` control:
+
+| coupon | ratio pred/real | 95% CI |
+|---|---|---|
+| 1.5 | 0.267 | [0.067, 0.468] |
+| 2.0 | 0.355 | [-1.175, 1.885] |
+| 2.5 | 2.631 | [-5.736, 10.999] |
+| 3.0 | 1.330 | [0.721, 1.940] |
+| 3.5 | 1.407 | [0.591, 2.223] |
+| 4.0 | 2.568 | [-1.487, 6.624] |
+| 4.5 | 20.809 | [-319.699, 361.317] |
+| 5.0 | -2.238 | [-9.471, 4.996] |
+| 5.5 | -1.004 | [-5.996, 3.987] |
+
+Coupons 5.0-6.5 (`cutoff_2002`, within its training range) are the cleanest signal: all four ratios
+are well below 1 with 95% CIs that exclude 1 — **the model is too low and under-responsive to
+incentive at low-to-moderate coupons**. The high-coupon and `cutoff_2020` control ratios are mostly
+uninformative (wide or sign-flipping CIs off near-zero realized slopes), not evidence of the same
+or a different pattern.
+
+**1-month-lag ratios** (`responsiveness_lag_check.csv`, lag1_ratio column):
+
+`cutoff_2002`: 5.0→0.237, 5.5→0.425, 6.0→0.515, 6.5→0.502, 7.0→0.623, 7.5→0.881, 8.0→0.452,
+8.5→0.398, 9.0→0.134.
+
+`cutoff_2020` control: 1.5→0.191, 2.0→4.691, 2.5→7.357, 3.0→1.155, 3.5→0.970, 4.0→1.411,
+4.5→1.652, 5.0→2.766, 5.5→1.555.
+
+The lagged version doesn't change the `cutoff_2002` low-to-moderate-coupon conclusion (still
+well below 1 at 5.0-6.5).
+
+**Crossover shares** (`responsiveness_itm_crossover.csv`, share of loan-months with
+incentive ≤ 0):
+
+`cutoff_2002`, Dec 2002 vs Jun 2003, coupons 5.0-7.0: 5.0 → 1.000 to 0.000 (Δ -1.000); 5.5 → 0.647
+to 0.000 (Δ -0.647); 6.0/6.5/7.0 → 0.000 to 0.000 (Δ 0).
+
+`cutoff_2020` control, Dec 2020 vs Jun 2021, coupons 1.5-5.5: 1.5 → 1.000 to 1.000 (Δ 0); 2.0 →
+0.586 to 1.000 (Δ +0.414); 2.5 → 0.000 to 0.377 (Δ +0.377); 3.0-5.5 → 0.000 to 0.000 (Δ 0).
+
+Artifacts: `scripts/house_price_test_{2002,2020_control}.py`,
+`scripts/house_price_cluster_se_{2002,2020_control}.py`, `scripts/house_price_gap_quintiles.py`
+(new this session), `scripts/responsiveness_{2002,2020_control}.py`,
+`scripts/responsiveness_extras_{2002,2020_control}.py`, `scripts/ensemble_onestep_{2002,2020_control}.py`,
+`scripts/tests/test_train_forecast_consistency.py`. Logs: `.claude_tmp/consistency_srun.log`,
+`.claude_tmp/ensemble_2020_srun.log`, `.claude_tmp/house_price_2020.log`,
+`.claude_tmp/house_price_cse_2020.log`, `.claude_tmp/responsiveness_2020.log`,
+`.claude_tmp/responsiveness_extras_2020.log`, `.claude_tmp/gap_quintiles_{2002,2020}.log`. Jobs:
+18613794 (consistency), 18614134 (ensemble 2020), 18616110/18616335 (house-price 2020),
+18616339/18616475 (responsiveness 2020), 18619302 (gap/quintiles 2020).

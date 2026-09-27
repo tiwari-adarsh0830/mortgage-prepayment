@@ -127,7 +127,8 @@ def _atomic_pickle_write(obj, path: str):
 
 
 def build_combined_pass(cutoff_year: int, include_pre2013: bool, map_era: str,
-                         test_ids_set: set, cache_dir: str):
+                         test_ids_set: set, cache_dir: str,
+                         extra_keep_cols: list[str] | None = None):
     """ONE pass over the relevant vintage files, truncated at Dec of
     cutoff_year+1 (not cutoff_year -- see module docstring). Returns the
     concatenated, feature-complete df restricted to test_ids_set.
@@ -152,10 +153,19 @@ def build_combined_pass(cutoff_year: int, include_pre2013: bool, map_era: str,
          same population) skips straight past both the raw scan AND the
          per-vintage concat.
     """
+    _extra_keep_cols = extra_keep_cols or ['current_actual_upb']
+    # Fold the extra-cols schema into the cache path -- a different schema is
+    # a different cache-compatible-object entirely, and this must never
+    # silently collide with the 'current_actual_upb'-only cache another
+    # caller (e.g. score_rolling_one_step.py) already wrote/reads under the
+    # SAME cache_dir/pop_hash (see the population-hash isolation bug this
+    # module's docstring already documents -- same failure class).
+    _schema_tag = '' if _extra_keep_cols == ['current_actual_upb'] else \
+        '_cols' + ''.join(f'-{c}' for c in _extra_keep_cols)
     trunc_ym = dec_yyyymm(cutoff_year + 1)
     pop_hash = population_hash(cutoff_year, np.array(sorted(test_ids_set)), map_era)
     combined_path = os.path.join(
-        cache_dir, f'_raw_combined_pass_{pop_hash}_trunc{trunc_ym}_{CACHE_VERSION}.pkl')
+        cache_dir, f'_raw_combined_pass_{pop_hash}_trunc{trunc_ym}_{CACHE_VERSION}{_schema_tag}.pkl')
     if os.path.exists(combined_path):
         print(f'Cache hit (combined): {combined_path}', flush=True)
         with open(combined_path, 'rb') as f:
@@ -169,7 +179,7 @@ def build_combined_pass(cutoff_year: int, include_pre2013: bool, map_era: str,
     zhvi_df = load_zhvi()
 
     vintage_cache_dir = os.path.join(
-        cache_dir, f'_per_vintage_{cutoff_year}_{map_era}_trunc{trunc_ym}_{pop_hash}_{CACHE_VERSION}')
+        cache_dir, f'_per_vintage_{cutoff_year}_{map_era}_trunc{trunc_ym}_{pop_hash}_{CACHE_VERSION}{_schema_tag}')
     os.makedirs(vintage_cache_dir, exist_ok=True)
 
     frames = []
@@ -182,7 +192,7 @@ def build_combined_pass(cutoff_year: int, include_pre2013: bool, map_era: str,
         else:
             df = load_vintage_filtered(v, pmms_rates, zhvi_df, trunc_ym, keep_ids=test_ids_set,
                                         loan_purpose_map=lp_map, property_type_map=pt_map,
-                                        extra_keep_cols=['current_actual_upb'])
+                                        extra_keep_cols=_extra_keep_cols)
             _atomic_pickle_write(df, v_path)
             print(f'  {v}: {"empty" if df is None or df.empty else len(df)} rows '
                   f'(written {v_path})', flush=True)

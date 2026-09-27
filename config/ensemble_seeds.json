@@ -1,0 +1,4 @@
+{
+  "seeds": [42, 7, 123, 1001, 2026],
+  "note": "Fixed before any of the 123/1001/2026 runs were trained (2026-09-26), to rule out seed cherry-picking on the 2003 low-incentive gap ensemble. Applies to both cutoff_2002 (post-CP/U-fix _hist data) and the cutoff_2020 control (pre-fix GOLDEN_BACKUP-equivalent data, for comparability with the existing seed42/7/123 control runs)."
+}

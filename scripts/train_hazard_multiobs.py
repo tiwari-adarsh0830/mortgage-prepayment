@@ -460,6 +460,16 @@ def main():
                               'mirrored SEQ_DIR formula below until the historical-era (cutoff_2002) '
                               'rebuild needed it: default False was a silent no-op for every '
                               'modern-era (cutoff>=2013) invocation to date.')
+    parser.add_argument('--seq_dir',       type=str, default=None,
+                         help='Explicit sequence dir, overriding the --cutoff_year/--sampling_mode/'
+                              '--frac_draws/--max_seq_len/--label_horizon/--include_pre2013 formula '
+                              'below. Default: None, no-op for every existing invocation -- added '
+                              'after a plain SEQ_DIR (data/sequences_rolling/cutoff_2020_zbc_multiobs_'
+                              'f0.2_h1) was silently overwritten in place by a later rebuild (job '
+                              '18022825, 2026-09-19) between two ensemble seeds trained against the '
+                              'same formula-derived path, so seeds trained months apart on a path that '
+                              'looks unchanged can silently be trained on different data. Use this to '
+                              'pin a run to a specific, verified-by-content directory instead.')
     args = parser.parse_args()
 
     if args.sampling_mode == 'fixed_fraction':
@@ -478,7 +488,7 @@ def main():
     _cap          = '' if args.max_seq_len == 33 else f'_L{args.max_seq_len}'
     _budget_tag   = f'k{args.k_draws}' if args.sampling_mode == 'fixed_k' else f'f{args.frac_draws}'
     _hist_suffix  = '_hist' if args.include_pre2013 else ''
-    SEQ_DIR = os.path.join(
+    SEQ_DIR = args.seq_dir if args.seq_dir is not None else os.path.join(
         BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}_zbc_multiobs'
               f'_{_budget_tag}_h{args.label_horizon}{_cap}{_hist_suffix}')
     assert os.path.isdir(SEQ_DIR), (
