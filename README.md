@@ -1,5 +1,5 @@
 ## Current state
-*(Sep 26, 2026 — rewritten each session, not appended to.)*
+*(Sep 27, 2026 — rewritten each session, not appended to.)*
 
 **Valid checkpoints.** `cutoff_2002` multiobs f0.2 L33 `_hist` (post-CP/U-fix data): seeds 42, 7,
 123, 1001, 2026. `cutoff_2020` control f0.2 L33, all on pre-fix data: seeds 42, 7, 123 (original)
@@ -18,10 +18,14 @@ srun job 18613794 (`.claude_tmp/consistency_srun.log`), both cases, both negativ
 realized); corrected, it is 1.03x (cutoff_2020) / 1.07x (cutoff_2002); the sequence-alignment bug was corrected and Sep 5-8 numbers
 rescored; 2003 one-step-ahead five-seed ensemble predicted/realized = 0.87 pooled (seeds
 0.80-0.91); a low-incentive predicted-vs-realized gap exists in both 2003 and 2021; house-price
-growth doesn't explain most of the 2003 gap; within the training range the model is too low and
-under-responsive at low-to-moderate incentive (coupons 5.0-6.5).
+growth doesn't explain most of the 2003 gap; at the same incentive, the cutoff_2002 model is
+calibrated in 2001-02 (predicted/realized 0.94-1.13 for incentive -1 to 1.5) but 0.63-0.88 in
+2003 over that range, with every interval below 1, and about 1 above 1.5; realized slope in that
+band was about 6x steeper in 2003 (0.123 vs 0.021) while predicted barely moved (0.018 to 0.025).
+An out-of-time shift, not incentive extrapolation.
 
-**Open:** why the model under-responds at low-to-moderate incentive; whether to add a recent
+**Open:** why prepayment at a given incentive was higher in 2003 than in 2001-02; one untested
+candidate is a response to rates reaching new lows; whether to add a recent
 house-price-growth feature; whether the CP/U fix warrants rerunning the cutoff_2020 window-length, no-history and
 seed-replication results (asked twice, no answer yet, treated as a caveat); HARP two-loan linkage not started; cutoff_2011
 and cutoff_2019 not built.
@@ -156,6 +160,14 @@ Phase 15 adds 2013Q1–2017Q4 for the pre-2020 training experiment.
 > real codes (loan_purpose R/P/C → 0/1/2; property_type SF/PU/CO/MH → 0/1/2/3)
 > and retrain to add two genuinely live features. Net effect on current results
 > is nil since the model never used them.
+>
+> **This note describes `prepare_sequences.py` only.** The multiobs builder
+> (`prepare_sequences_multiobs_zbc.py`) encodes both features live, with the
+> CP/U fix (commit 2a5b283, 2026-09-19) — they are not inert there. The
+> `cutoff_2020` control checkpoints (seeds 42/7/123, plus the retrained
+> 1001/2026) were trained before that fix and use the pre-fix category maps
+> (`--map_era prefix`); only `cutoff_2002`'s frozen hist build uses the
+> post-fix maps (`--map_era fixed`).
 
 ---
 
@@ -4144,3 +4156,86 @@ Artifacts: `scripts/house_price_test_{2002,2020_control}.py`,
 `.claude_tmp/responsiveness_extras_2020.log`, `.claude_tmp/gap_quintiles_{2002,2020}.log`. Jobs:
 18613794 (consistency), 18614134 (ensemble 2020), 18616110/18616335 (house-price 2020),
 18616339/18616475 (responsiveness 2020), 18619302 (gap/quintiles 2020).
+
+---
+
+## Same-incentive comparison resolves the low-incentive gap: an out-of-time shift, not incentive extrapolation (Sep 27, 2026)
+
+The "Responsiveness" section above (Sep 26) read the 2003 low-incentive gap as the model being
+"too low and under-responsive" within `cutoff_2002`'s training range, based on a per-coupon
+comparison. This session scored the same five-seed ensemble one-step-ahead on `cutoff_2002`
+TEST-split loans for Jan2001-Nov2002 (23 months, same frozen scaler and explicit-obs path as the
+2003 test — reused the same cached combined pass, no new raw scan; Dec-2002 anchor check passed
+for all 5 seeds, max diff ≤7.4e-9 against the frozen 2003-run scores) to test whether the model
+under-responds in-sample too. It does, mildly, by coupon — but the coupon-level comparison
+against 2003 turned out to be confounded, and is **superseded** by the same-incentive comparison
+below.
+
+### The coupon-level comparison was confounded by S-curve region
+
+Market rates fell about 1.5pp between the two windows, so the same coupon sat on a different part
+of the S-curve in each period:
+
+| Coupon | 2001-02 mean-incentive range (23 months) | 2003 mean-incentive range (12 months) |
+|---|---|---|
+| 5.0 | -1.49 to -0.57 | -0.79 to +0.24 |
+| 5.5 | -1.13 to -0.05 | -0.26 to +0.78 |
+| 6.0 | -0.66 to +0.42 | +0.22 to +1.25 |
+| 6.5 | -0.15 to +0.90 | +0.70 to +1.73 |
+
+In 2001-02 these coupons sat mostly out-of-the-money; the same coupons in 2003 crossed through and
+past zero incentive. This is why the coupon-level read above looked like "responsive in-sample,
+shift in 2003" even though the in-sample ratios were themselves below 1 — see
+`docs/mistakes_and_lessons.md`. Full range, all coupons:
+`outputs/rolling/ensemble_onestep_insample_cutoff_2002/same_incentive_coupon_ranges.csv`.
+
+### Same-incentive bin comparison (pooled, bootstrap 95% CI over loans, 500 draws, seed 20260927)
+
+| Incentive bin | 2001-02 n | 2001-02 pred/real/ratio (95% CI) | 2003 n | 2003 pred/real/ratio (95% CI) |
+|---|---|---|---|---|
+| (-2,-1] | 20,985 | .0018/.0016/**1.124** [0.833, 1.556] | 2,180 | .0067/.0101/**0.664** [0.453, 1.099] |
+| (-1,-0.5] | 54,829 | .0032/.0029/**1.134** [0.979, 1.314] | 20,235 | .0072/.0109/**0.659** [0.587, 0.751] |
+| (-0.5,0] | 85,509 | .0064/.0068/**0.939** [0.871, 1.030] | 39,382 | .0123/.0195/**0.627** [0.591, 0.676] |
+| (0,0.5] | 126,944 | .0157/.0151/**1.035** [0.991, 1.079] | 56,818 | .0247/.0357/**0.692** [0.665, 0.723] |
+| (0.5,1] | 134,344 | .0303/.0296/**1.023** [0.990, 1.054] | 64,884 | .0419/.0516/**0.813** [0.786, 0.841] |
+| (1,1.5] | 115,014 | .0461/.0479/**0.962** [0.939, 0.988] | 58,596 | .0571/.0650/**0.878** [0.852, 0.908] |
+| (1.5,2] | 87,236 | .0498/.0475/**1.048** [1.018, 1.080] | 58,918 | .0579/.0579/**1.000** [0.967, 1.035] |
+| (2,3] | 59,305 | .0506/.0507/**0.999** [0.969, 1.037] | 57,271 | .0526/.0540/**0.975** [0.944, 1.006] |
+| (3,4] | 5,705 | .0368/.0337/**1.092** [0.958, 1.272] | 14,832 | .0384/.0405/**0.948** [0.876, 1.023] |
+
+At matched incentive, 2001-02 ratios sit at/near 1 across the whole -2 to 4 range (every CI
+straddles or exceeds 1 except the mildly-low (1,1.5] bin, 0.962). 2003 ratios are tightly and
+significantly below 1 for every bin from -1 to 1.5 (0.63-0.88, every CI excludes 1), converging
+back to ~1 with the in-sample period beyond incentive 1.5.
+
+### Fixed-band slope comparison, incentive in (-0.5, 1.5]
+
+| Period | months | loan-months | realized slope (SE) | predicted slope (SE) | ratio (95% CI) |
+|---|---|---|---|---|---|
+| 2001-02 | 23 | 461,811 | 0.0213 (0.0153) | 0.0185 (0.0113) | 0.865 [0.441, 1.289] |
+| 2003 | 12 | 219,680 | 0.1234 (0.0528) | 0.0252 (0.0236) | 0.204 [-0.063, 0.471] |
+
+Coupons supplying the band — 2001-02: 7.0 (183,394), 6.0 (95,125), 6.5 (70,298), 7.5 (50,302),
+8.0 (43,389), 5.5 (14,124), 5.0 (5,179). 2003: 6.0 (91,763), 5.0 (37,639), 5.5 (32,580),
+6.5 (31,091), 7.0 (26,190), 4.5 (405), 4.0 (12) — materially overlapping coupon sets, so the
+slope result isn't a coupon-composition artifact either.
+
+### Conclusion: an out-of-time shift, not incentive extrapolation
+
+At the same incentive, the model is calibrated in 2001-02 (predicted/realized 0.94-1.13 for
+incentive -1 to 1.5) but 0.63-0.88 in 2003 over that same range, with every interval below 1, and
+about 1 above 1.5. Realized slope in that band was about 6x steeper in 2003 (0.123 vs 0.021) while
+predicted barely moved (0.018 to 0.025). Both periods populate the same incentive bins with large,
+comparable loan-month counts (e.g. (-0.5,0]: 85,509 in 2001-02 vs 39,382 in 2003) — the incentive
+*values* were well within what the training-era population covered, so this is not incentive
+extrapolation. What changed is the realized rate-incentive relationship at those same incentive
+values between the two periods, which the model — calibrated on the earlier relationship — did
+not track into 2003. Open question: why prepayment at a given incentive was higher in 2003 than in
+2001-02; one untested candidate is a response to rates reaching new lows (PMMS 30yr: 6.05% Dec
+2002, the low for 2000-2002, vs 5.23% June 2003, a new low within 2003).
+
+Artifacts: `scripts/score_rolling_onestep_insample_2002.py`, `scripts/ensemble_onestep_insample_2002.py`,
+`scripts/responsiveness_insample_2002.py`, `scripts/responsiveness_same_incentive_2002.py`.
+Outputs: `outputs/rolling/rolling_onestep_insample_cutoff_2002_seed{42,7,123,1001,2026}/`,
+`outputs/rolling/ensemble_onestep_insample_cutoff_2002/same_incentive_*.csv`. Jobs: 18669329-18669333
+(five-seed in-sample scoring, cache hits, <1 min each).
