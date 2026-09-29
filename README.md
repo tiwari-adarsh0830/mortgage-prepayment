@@ -4336,7 +4336,17 @@ incentive).
 (origination date + original term): 0.97% overall by count, near-zero before 2010, rising to a
 **7.66% peak in 2018** (the 2003 15-year refi cohort reaching term); COVID window (2020-21) only
 ~0.5%. So code 01 is a near-clean voluntary label except where an older cohort matures.
-*(UPB-weighted version pending — job 18762696.)*
+**UPB-weighted, this is negligible** — near-maturity loans have amortized to tiny balances, so by
+balance the maturity share is 0.012% overall and 0.097% even in the 2018 peak (job 18762696):
+
+| year | count-share % | UPB-weighted % |
+|---|---|---|
+| 2013 | 1.38 | 0.019 |
+| 2017 | 3.36 | 0.042 |
+| 2018 | 7.66 | 0.097 |
+| 2023 | 2.62 | 0.036 |
+| 2025 | 3.72 | 0.056 |
+| ALL | 0.97 | 0.012 |
 
 **Estimated LTV.** An empirical search across all 93 files found no field carrying genuine
 current-LTV values: the only fields with LTV-range values are decoys (`$73` step-mod counts,
