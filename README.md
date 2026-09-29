@@ -1,18 +1,19 @@
 ## Current state
-*(Sep 27, 2026 — rewritten each session, not appended to.)*
+*(Sep 28, 2026 — rewritten each session, not appended to.)*
 
 **Valid checkpoints.** `cutoff_2002` multiobs f0.2 L33 `_hist` (post-CP/U-fix data): seeds 42, 7,
-123, 1001, 2026. `cutoff_2020` control f0.2 L33, all on pre-fix data: seeds 42, 7, 123 (original)
-plus 1001, 2026 (`_goldenbackup`, retrained after the bug below). Excluded: the two
-`*_POSTFIX_MISMATCH` seed1001/2026 runs — trained on the post-fix data written into the plain dir
-on Sep 19, not the pre-fix data the other three used.
+123, 1001, 2026 (50-epoch), plus a 10-epoch replicate of all five (`_ep10`). `cutoff_2020` control
+f0.2 L33, all on pre-fix data: seeds 42, 7, 123 (original) plus 1001, 2026 (`_goldenbackup`,
+retrained after the bug below). Excluded: the two `*_POSTFIX_MISMATCH` seed1001/2026 runs — trained
+on the post-fix data written into the plain dir on Sep 19, not the pre-fix data the other three used.
 
 **Data warning.** The plain `cutoff_2020_zbc_multiobs_f0.2_h1` sequence dir was overwritten in
 place on Sep 19 with post-CP/U-fix codes; pre-fix data (used by seeds 42/7/123) lives only in
 `..._GOLDEN_BACKUP`. Verify data by decoded content (e.g. `property_type_enc`), never by path.
 
-**Standing test.** `scripts/tests/test_train_forecast_consistency.py` — last passed 2026-09-26,
-srun job 18613794 (`.claude_tmp/consistency_srun.log`), both cases, both negative controls each.
+**Standing test.** `scripts/tests/test_train_forecast_consistency.py` — last passed 2026-09-28,
+srun job 18753120 (`.claude_tmp/consistency_srun.log`), both cases, both negative controls each.
+No pipeline code changed this session (only new sbatch + README), so it remains current.
 
 **Settled:** the 1.16x / 1.23x calibration overshoot was a check artifact (unweighted forecast vs IPW-weighted
 realized); corrected, it is 1.03x (cutoff_2020) / 1.07x (cutoff_2002); the sequence-alignment bug was corrected and Sep 5-8 numbers
@@ -22,16 +23,31 @@ growth doesn't explain most of the 2003 gap; at the same incentive, the cutoff_2
 calibrated in 2001-02 (predicted/realized 0.94-1.13 for incentive -1 to 1.5) but 0.63-0.88 in
 2003 over that range, with every interval below 1, and about 1 above 1.5; realized slope in that
 band was about 6x steeper in 2003 (0.123 vs 0.021) while predicted barely moved (0.018 to 0.025).
-An out-of-time shift, not incentive extrapolation.
+An out-of-time shift, not incentive extrapolation. One 50-epoch training run takes 2:01-2:06
+(cutoff_2002) or 2:14-2:17 (cutoff_2020) on one L40S, nearly independent of data size because
+`STEPS_PER_EPOCH = 10,000` fixes work per epoch regardless of the ~906K vs ~11.2M observations. The
+10-epoch 5-seed ensemble matches the 50-epoch one within what 5 seeds can detect (2003 pooled
+predicted/realized 0.922 vs 0.873, difference t = 1.40; no incentive bin reaches |t| > 2 in either
+period), though individual 10-epoch seeds are noisier. Every reported forecast test (Dec-window,
+one-step 2003 and 2021, 2001-02 in-sample) uses zero_balance_code 01 on both the predicted and
+realized side — none uses balance-to-zero.
 
-**Open:** why prepayment at a given incentive was higher in 2003 than in 2001-02; one untested
-candidate is a response to rates reaching new lows; whether to add a recent
-house-price-growth feature; whether the CP/U fix warrants rerunning the cutoff_2020 window-length, no-history and
-seed-replication results (asked twice, no answer yet, treated as a caveat); HARP two-loan linkage not started; cutoff_2011
-and cutoff_2019 not built.
+**Open:** why prepayment at a given incentive was higher in 2003 than in 2001-02 (candidate: a
+response to rates reaching new lows). Data-quality items surfaced this session, awaiting the
+advisor before any change: `realized_cpr_v6*` counts *every* balance-to-zero ending as a prepayment
+(non-voluntary share, by balance, 5.3-5.5% in 2010-11 and 0.45-4.1% across 2018-25), to be switched
+to code 01; code 01 itself includes maturities (0.97% of code-01 terminations overall, but 7.66% by
+count in 2018 as the 2003 15yr cohort matured); `refi_incentive` uses the original note rate `$8`
+while modified loans' current rate `$9` is lower in ~2/3 of post-modification months (median cut
+2.25pp among changed months), so incentive is overstated for rate-reduced modified loans; the HARP
+eligibility feature is not yet built (fields located, two-loan linkage via `Loan_Mapping.txt` not
+started). Also awaiting the advisor: the recency-weighting form, yearly vs monthly retraining, and
+whether to keep post-modification months. Still open from before: whether the CP/U fix warrants
+rerunning the cutoff_2020 window-length/no-history/seed-replication results; cutoff_2011 and
+cutoff_2019 not built.
 
-**Next.** An advisor update on the seed, house-price, and responsiveness results is drafted, to
-be sent Monday; the next direction depends on the reply.
+**Next.** An advisor update was sent Sep 28 covering training time, recency weighting,
+voluntary-prepayment cleanup, modifications, and HARP; data changes wait on the reply.
 
 ---
 
@@ -4239,3 +4255,105 @@ Artifacts: `scripts/score_rolling_onestep_insample_2002.py`, `scripts/ensemble_o
 Outputs: `outputs/rolling/rolling_onestep_insample_cutoff_2002_seed{42,7,123,1001,2026}/`,
 `outputs/rolling/ensemble_onestep_insample_cutoff_2002/same_incentive_*.csv`. Jobs: 18669329-18669333
 (five-seed in-sample scoring, cache hits, <1 min each).
+
+## Advisor's full-training-sequence plan: timing, cost, a 10-epoch ensemble, and a voluntary-prepayment audit (Sep 28, 2026)
+
+Fact-gathering for a proposed expanding-window training sequence. No pipeline code changed; new
+artifacts are five 10-epoch training sbatch files and this README. All numbers below are read from
+saved outputs (`outputs/zbc_audit/`, `outputs/master_audit/`, `outputs/rolling/`) and `sacct`.
+
+**Training time — all 10 f0.2 L33 50-epoch runs, on one L40S GPU (1 GPU / 4 CPU / 40G).** From
+`sacct` elapsed:
+
+| cutoff | seed | job | node | elapsed |
+|---|---|---|---|---|
+| 2002 | 42 | 18097822 | gl017 | 2:02:54 |
+| 2002 | 7 | 18138546 | gl022 | 2:02:05 |
+| 2002 | 123 | 18593821 | gl006 | 2:01:44 |
+| 2002 | 1001 | 18593824 | gl042 | 2:05:45 |
+| 2002 | 2026 | 18593826 | gl063 | 2:03:04 |
+| 2020 | 42 | 17355084 | gl020 | 2:17:05 |
+| 2020 | 7 | 17594751 | gl036 | 2:14:52 |
+| 2020 | 123 | 17594752 | gl007 | 2:14:22 |
+| 2020 | 1001gb | 18606771 | gl011 | 2:15:12 |
+| 2020 | 2026gb | 18606772 | gl026 | 2:15:55 |
+
+**Fixed steps per epoch.** `train_hazard_multiobs.py:74` sets `STEPS_PER_EPOCH = 10,000`
+(× `BATCH_SIZE = 2048` = 20,480,000 draws/epoch, sampled with replacement), so work per epoch is
+constant regardless of data size. 12.4× more data (11.2M vs 907K obs) costs only ~10% more wall
+(2:15 vs 2:03) — the residual is per-epoch `evaluate()` over a 12× larger test set, not training.
+A cutoff_2002 epoch sees each observation ~22.6× per epoch; a cutoff_2020 epoch ~1.82×.
+
+**10-epoch vs 50-epoch, 5-seed ensemble.** Trained a 10-epoch replicate of all five cutoff_2002
+seeds (`_ep10`; jobs 18750843, 18754368/70/72/73; each ~0:25:1x wall). Test AUC: 50-epoch mean
+0.7742 (0.7734-0.7746), 10-epoch mean 0.7723 (0.7717-0.7728). Same-incentive comparison with the
+difference divided by the standard error of two 5-seed means, √(sd₁₀²/5 + sd₅₀²/5):
+
+| period | pooled 50ep | pooled 10ep | pooled t | max \|t\| over bins |
+|---|---|---|---|---|
+| 2003 (out-of-sample) | 0.873 | 0.922 | +1.40 | 1.72 (bin (-2,-1]) |
+| 2001-02 (in-sample) | 1.008 | 1.049 | +1.26 | 1.64 (bin (3,4]) |
+
+No incentive bin, and neither pooled figure, reaches |t| > 2 in either period — the 10-epoch
+ensemble is indistinguishable from the 50-epoch ensemble at the seed level. The 10-epoch seeds are,
+however, systematically noisier across seeds (per-bin sd ~0.07-0.15 vs 0.03-0.10). (An earlier
+single-seed claim that "10 epochs worsens the low-incentive tail" was retracted: it was one seed vs
+a 5-seed ensemble, inside the 0.09-0.41 per-bin seed spread.)
+
+**Voluntary-prepayment label audit.** Training label (`prepare_sequences_multiobs_zbc.py:527`) and
+every forecast test use `zero_balance_code_actual == 1` (code 01) only. But `realized_cpr_v6*.py`
+defines a prepayment as UPB==0 at the true last row — *any* balance-to-zero ending. Column positions
+were verified empirically on both raw dirs (113 fields each): loan_id `$2`, MRP `$3`, current_upb
+`$12`, delinquency `$40`, modification flag `$42` (Y, persists post-mod), ZBC `$44`. Terminations by
+code, all vintages 2000-2025 (source `outputs/zbc_audit/`): 01 = 40,820,568; 09 = 453,043;
+16 = 145,072; 03 = 107,905; 06 = 93,656; 02 = 68,850; 15 = 45,959. Non-voluntary (non-01) share of
+balance-to-zero endings, by count and UPB-weighted (last nonzero balance):
+
+| year | non-vol % (count) | non-vol % (UPB-wt) |
+|---|---|---|
+| 2008 | 2.68 | 2.99 |
+| 2009 | 2.58 | 2.69 |
+| 2010 | 5.11 | 5.28 |
+| 2011 | 5.17 | 5.50 |
+| 2018 | 3.24 | 4.06 |
+| 2020 | 0.65 | 0.45 |
+| 2024 | 2.27 | 3.01 |
+
+Peak contamination is 2010-11 (crisis: REO code 09 + short sales code 03); across the DER window
+(2018-25) it is 0.45-4.1% UPB-weighted, driven mostly by code 16 (reperforming/NPL loan sales).
+UPB-weighting raises it in recent years (larger-balance non-voluntary endings) and lowers it pre-2008.
+
+**Modifications.** Ever-modified share by vintage year (`$42==Y`): crisis vintages peak — 2007 7.56%,
+2006 5.94%, 2008 5.11%, 2005 4.27% (HAMP era) — vs ~0.4-1.4% for normal vintages; 1.33% overall
+across 54.9M loans. Post-modification rate divergence (source `outputs/master_audit/`, current rate
+`$9` vs original `$8` on post-mod months): 67.7% of post-mod months carry a rate change, of which
+**99.4% are cuts**, mean 2.50pp / median 2.25pp; crisis vintages 2005-08 have 78.9-91.0% of post-mod
+months changed at 2.3-2.8pp. Because `refi_incentive = original_rate − market` uses `$8`, incentive
+is **overstated** for rate-reduced modified loans (a cut lowers the current rate, hence the true
+incentive).
+
+**Maturities inside code 01.** Share of code-01 terminations within 2 months of scheduled maturity
+(origination date + original term): 0.97% overall by count, near-zero before 2010, rising to a
+**7.66% peak in 2018** (the 2003 15-year refi cohort reaching term); COVID window (2020-21) only
+~0.5%. So code 01 is a near-clean voluntary label except where an older cohort matures.
+*(UPB-weighted version pending — job 18762696.)*
+
+**Estimated LTV.** An empirical search across all 93 files found no field carrying genuine
+current-LTV values: the only fields with LTV-range values are decoys (`$73` step-mod counts,
+`$79` the constant "7"), and the one mid-range field (`$49`) holds non-LTV rising values (7% in-band).
+File-native estimated LTV is effectively unpopulated; the pipeline uses the derived `current_ltv`
+(original_upb × ZHVI ratio) instead.
+
+**Cost estimates (ESTIMATES, from the measured times above).** Expanding-window retrain 2002→2024,
+50 epochs from scratch: yearly (23 retrains) ≈ 51 GPU-h at 1 seed / ≈ 253 GPU-h at 5 seeds; monthly
+(276 retrains) ≈ 607 / ≈ 3,035 GPU-h. Warm-starting ~10 epochs (justified by the ensemble result
+above) cuts these ~5×. The real bottleneck is the CPU-side data build (cold 1.5-7h, warm 0.5-1.2h)
+per retrain, and sequence-array memory scales with observation count (the current 11.2M-obs / 40G
+profile will need to grow for an expanding window) — GPU *time* will not, because steps are fixed.
+`l40s_public` has no per-user GPU cap (272 GPUs physical in the partition, QOS pool cap 208 GPUs
+shared across all users); `cpu_short` caps a user at 32 CPU / 120G.
+
+Artifacts: `scripts/slurm/run_train_multiobs_2002_f0.2_L33_hist_ep10.sbatch` and the four
+`_seed{7,123,1001,2026}_ep10` variants. Outputs:
+`outputs/rolling/{rolling_onestep,rolling_onestep_insample}_cutoff_2002_seed*ep10/`,
+`outputs/zbc_audit/`, `outputs/master_audit/`. Consistency test passed 2026-09-28 (srun 18753120).
