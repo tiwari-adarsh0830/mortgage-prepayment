@@ -14,3 +14,4 @@ work_log.txt.bak_*
 work_log_archive_*.txt
 slurm-*.out
 docs/mistakes_and_lessons.md
+work_log*
