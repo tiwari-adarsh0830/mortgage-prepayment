@@ -1,11 +1,21 @@
 ## Current state
-*(Sep 28, 2026 — rewritten each session, not appended to.)*
+*(Sep 29, 2026 — rewritten each session, not appended to.)*
+
+**Advisor's decisions (Sep 29).** 30-year loans only, throughout — label, features, both realized
+series, census panel, and sampler. Yearly retraining (quarterly possibly later). Drop all
+post-modification loan-months. Skip the HARP two-loan linkage for now; build only the eligibility
+feature. Two realized series: **voluntary** (zero_balance_code 01, 30-year only — what the model
+forecasts and is validated against) and **total payoffs** (all terminations, for pricing). The
+post-month-33 terminal curve is fit on voluntary refis only. Rebuild the 2002 and "2021" cutoffs
+first (which cutoff "2021" means is being clarified — see Open, below).
 
 **Valid checkpoints.** `cutoff_2002` multiobs f0.2 L33 `_hist` (post-CP/U-fix data): seeds 42, 7,
 123, 1001, 2026 (50-epoch), plus a 10-epoch replicate of all five (`_ep10`). `cutoff_2020` control
 f0.2 L33, all on pre-fix data: seeds 42, 7, 123 (original) plus 1001, 2026 (`_goldenbackup`,
 retrained after the bug below). Excluded: the two `*_POSTFIX_MISMATCH` seed1001/2026 runs — trained
 on the post-fix data written into the plain dir on Sep 19, not the pre-fix data the other three used.
+**All of the above predate today's decisions (360-only, no post-mod) and will be superseded by the
+rebuild.**
 
 **Data warning.** The plain `cutoff_2020_zbc_multiobs_f0.2_h1` sequence dir was overwritten in
 place on Sep 19 with post-CP/U-fix codes; pre-fix data (used by seeds 42/7/123) lives only in
@@ -13,41 +23,43 @@ place on Sep 19 with post-CP/U-fix codes; pre-fix data (used by seeds 42/7/123) 
 
 **Standing test.** `scripts/tests/test_train_forecast_consistency.py` — last passed 2026-09-28,
 srun job 18753120 (`.claude_tmp/consistency_srun.log`), both cases, both negative controls each.
-No pipeline code changed this session (only new sbatch + README), so it remains current.
+No pipeline code changed today (only two new analysis-only scripts under `scripts/diag/`, one
+sbatch file, and README), so it remains current.
 
-**Settled:** the 1.16x / 1.23x calibration overshoot was a check artifact (unweighted forecast vs IPW-weighted
-realized); corrected, it is 1.03x (cutoff_2020) / 1.07x (cutoff_2002); the sequence-alignment bug was corrected and Sep 5-8 numbers
-rescored; 2003 one-step-ahead five-seed ensemble predicted/realized = 0.87 pooled (seeds
-0.80-0.91); a low-incentive predicted-vs-realized gap exists in both 2003 and 2021; house-price
-growth doesn't explain most of the 2003 gap; at the same incentive, the cutoff_2002 model is
-calibrated in 2001-02 (predicted/realized 0.94-1.13 for incentive -1 to 1.5) but 0.63-0.88 in
-2003 over that range, with every interval below 1, and about 1 above 1.5; realized slope in that
-band was about 6x steeper in 2003 (0.123 vs 0.021) while predicted barely moved (0.018 to 0.025).
-An out-of-time shift, not incentive extrapolation. One 50-epoch training run takes 2:01-2:06
-(cutoff_2002) or 2:14-2:17 (cutoff_2020) on one L40S, nearly independent of data size because
-`STEPS_PER_EPOCH = 10,000` fixes work per epoch regardless of the ~906K vs ~11.2M observations. The
-10-epoch 5-seed ensemble matches the 50-epoch one within what 5 seeds can detect (2003 pooled
-predicted/realized 0.922 vs 0.873, difference t = 1.40; no incentive bin reaches |t| > 2 in either
-period), though individual 10-epoch seeds are noisier. Every reported forecast test (Dec-window,
-one-step 2003 and 2021, 2001-02 in-sample) uses zero_balance_code 01 on both the predicted and
-realized side — none uses balance-to-zero.
+**Settled (Sep 29 update — supersedes the Sep 27 "out-of-time shift" reading below).** At matched
+incentive, the 2003 gap is **mostly a loan-term effect, not a genuine behavioral shift**. Non-360-term
+loans (mostly 15-year) are 41.0% of 2003 loan-months but 76.8% of the realized-minus-predicted
+shortfall; pooled predicted/realized is 0.956 for 360-term (bins 0.89-1.05 across the populated
+range) vs 0.705 for non-360 (bins 0.58-0.83 up to incentive 1.5). The 2021 control shows the same
+direction, milder: non-360 is 27.6% of loan-months and 37.3% of the shortfall (360: 0.899, non-360:
+0.791). The 15-year `refi_incentive` has been measured against the 30-year PMMS throughout — a
+term-mismatched incentive is the leading candidate for why non-360 underperforms. The 2018 code-01
+near-maturity spike (7.66% pooled, previously reported) is **entirely a non-360 phenomenon**: 20.0%
+of non-360 code-01 endings in 2018 vs 0.00% for 360-term in every year 2001-2025 (no 30-year loan in
+this data window has yet reached maturity). Post-modification loan-months are 0.06-0.50% of every
+scored population (cutoff_2002 train 0.06%, 2001-02 in-sample 0.06%, 2003 one-step 0.25%, cutoff_2020
+train 0.22%, 2021 one-step 0.50%) — dropping them removes very little. GPU queue: 53 `l40s_public`
+jobs since Sep 20, submit-to-start median 1.45 min, max 54.5 min (long waits traced to self-batching
+6 jobs at once, not external contention); the account has no GPU-hour or job-count cap (QOS `normal`,
+fair-share 0.233 as of Sep 29 — a live metric that moves with usage, not a fixed number). Full detail,
+all figures, and file citations: the Sep 29 section below.
 
-**Open:** why prepayment at a given incentive was higher in 2003 than in 2001-02 (candidate: a
-response to rates reaching new lows). Data-quality items surfaced this session, awaiting the
-advisor before any change: `realized_cpr_v6*` counts *every* balance-to-zero ending as a prepayment
-(non-voluntary share, by balance, 5.3-5.5% in 2010-11 and 0.45-4.1% across 2018-25), to be switched
-to code 01; code 01 itself includes maturities (0.97% of code-01 terminations overall, but 7.66% by
-count in 2018 as the 2003 15yr cohort matured); `refi_incentive` uses the original note rate `$8`
-while modified loans' current rate `$9` is lower in ~2/3 of post-modification months (median cut
-2.25pp among changed months), so incentive is overstated for rate-reduced modified loans; the HARP
-eligibility feature is not yet built (fields located, two-loan linkage via `Loan_Mapping.txt` not
-started). Also awaiting the advisor: the recency-weighting form, yearly vs monthly retraining, and
-whether to keep post-modification months. Still open from before: whether the CP/U fix warrants
-rerunning the cutoff_2020 window-length/no-history/seed-replication results; cutoff_2011 and
-cutoff_2019 not built.
+**Open:** which cutoff "rebuild the 2021 cutoff" means — the existing cutoff_2020 design (train ≤
+Dec 2020, forecast 2021) or a new cutoff_2021 (train ≤ Dec 2021, forecast 2022); no
+`cutoff_2021_zbc_multiobs` build exists either way (only the old June plain-pipeline
+`data/sequences_rolling/cutoff_2021`), and CY2022 realized data is available (raw performance rows
+run through Dec 2025) so either reading is buildable. The rebuild itself (30-year filter, post-mod
+drop, sampler/census/sequence/realized-series changes) has not started. The HARP eligibility feature
+is not yet built (fields located; changes input dim, so it cannot share a training run with models
+that lack it). The recency-weighting form is still open. Still open from before: whether the CP/U
+fix warrants rerunning the cutoff_2020 window-length/no-history/seed-replication results;
+cutoff_2011 and cutoff_2019 not built.
 
-**Next.** An advisor update was sent Sep 28 covering training time, recency weighting,
-voluntary-prepayment cleanup, modifications, and HARP; data changes wait on the reply.
+**Next.** Implement the 30-year filter and post-modification drop at the raw-read stage (loaders in
+`prepare_sequences_multiobs_zbc.py` + siblings, `build_cell_grid_sample_pre2013.py`,
+`census_panel_baseline.py`, `realized_cpr_v6.py`), in that order (raw-read filter first, since the
+sampler and census panel both depend on it). Rerun the cell-grid sampler, census baseline, and
+realized series; rebuild `cutoff_2002`; retrain five seeds; rerun the one-step 2003 test.
 
 ---
 
@@ -4177,6 +4189,8 @@ Artifacts: `scripts/house_price_test_{2002,2020_control}.py`,
 
 ## Same-incentive comparison resolves the low-incentive gap: an out-of-time shift, not incentive extrapolation (Sep 27, 2026)
 
+**SUPERSEDED (Sep 29): the same-incentive gap is mostly a loan-term effect; see the Sep 29 section.**
+
 The "Responsiveness" section above (Sep 26) read the 2003 low-incentive gap as the model being
 "too low and under-responsive" within `cutoff_2002`'s training range, based on a per-coupon
 comparison. This session scored the same five-seed ensemble one-step-ahead on `cutoff_2002`
@@ -4367,3 +4381,230 @@ Artifacts: `scripts/slurm/run_train_multiobs_2002_f0.2_L33_hist_ep10.sbatch` and
 `_seed{7,123,1001,2026}_ep10` variants. Outputs:
 `outputs/rolling/{rolling_onestep,rolling_onestep_insample}_cutoff_2002_seed*ep10/`,
 `outputs/zbc_audit/`, `outputs/master_audit/`. Consistency test passed 2026-09-28 (srun 18753120).
+
+## Advisor's Sep 29 decisions; loan-term mix resolves the 2003 gap; modification, cutoff_2021, and compute facts (Sep 29, 2026)
+
+Fact-gathering for the advisor's Sep 29 decisions. No pipeline code changed; new artifacts are two
+analysis-only scripts (`scripts/diag/term_pass_worker.py`, `scripts/diag/term_report.py`), one
+sbatch file (`scripts/diag/run_term_pass.sbatch`), and this README section. All numbers below trace
+to `.claude_tmp/term_pass/` (`report.txt`, `gap_decomp_out.txt`, `sacct_l40s_raw.txt`,
+`compute_budget_facts.txt`) — a local, not-committed scratch dir — plus the two committed scripts
+that produced them.
+
+### Advisor's decisions (verbatim intent)
+
+30-year loans only, throughout — label, features, both realized series, census panel, and sampler.
+Yearly retraining (quarterly possibly later). Drop all post-modification loan-months. Skip the HARP
+two-loan linkage for now; build only the eligibility feature. Two realized series: **voluntary**
+(zero_balance_code 01, 30-year only — what the model forecasts and is validated against) and
+**total payoffs** (all terminations, for pricing). The post-month-33 terminal curve is fit on
+voluntary refis only. Rebuild the 2002 and "2021" cutoffs first (which cutoff "2021" means is being
+clarified with him).
+
+### Method
+
+One CPU pass over all 93 raw vintage files (`data_pre2013_raw/2000Q1.csv` .. `data/raw/2023Q1.csv`,
+~908 GB combined) built a per-loan table: `original_loan_term` (`$13`), `original_upb` (`$10`),
+`note_rate` (`$8`), origination month (`$14`), the earliest month `modification_flag` (`$42`) reads
+`Y`, the earliest non-blank `zero_balance_code` (`$44`) and its month, and the loan's last reporting
+month + balance. `MMYYYY`→`YYYYMM` converted before every ordering/comparison (standing lesson).
+Field positions re-verified empirically on both `data/raw` and `data_pre2013_raw` before use;
+`$13`=360 on the first rows of both 2000Q1 and 2013Q1. Run as a 93-way SLURM array
+(`scripts/diag/run_term_pass.sbatch`, job 18844165, `cpu_short`, ~40 min wall, 0 failures) producing
+54,899,569 unique loans. `modification_flag` is monotone — checked directly (107 ever-`Y` loans in a
+2013Q1 sample, 0 reverted to `N`; the existing `outputs/zbc_audit/` shows `nmod`≈`nmod_persist` per
+vintage throughout) — so post-modification is exactly `ref_month ≥ first-Y month` per loan; no
+loan-month-level raw join was needed. `scripts/diag/term_report.py` then joins this table against
+the five scored populations' `loan_id`s (0 unmatched in every population) to produce everything
+below.
+
+### 1. Loan-term mix
+
+**(a) Original-term distribution by origination year**, loan count and original UPB, 360/240/180/other:
+
+| year | 360 (n) | 240 | 180 | other | total | non-360 % | 360 UPB ($B) | non-360 % (UPB) |
+|---|---|---|---|---|---|---|---|---|
+| 2000 | 1,064,868 | 26,151 | 155,233 | 21,640 | 1,267,892 | 16.0 | 140.3 | 12.7 |
+| 2001 | 2,331,641 | 111,932 | 827,245 | 101,052 | 3,371,870 | 30.9 | 347.6 | 26.5 |
+| 2002 | 2,374,635 | 160,304 | 1,165,252 | 157,076 | 3,857,267 | 38.4 | 372.1 | 34.1 |
+| 2003 | 2,990,406 | 258,513 | 1,571,822 | 286,582 | 5,107,323 | **41.5** | 494.1 | **36.5** |
+| 2004 | 1,183,793 | 95,709 | 371,887 | 93,108 | 1,744,497 | 32.1 | 199.3 | 27.3 |
+| 2005 | 1,123,820 | 71,171 | 201,886 | 49,305 | 1,446,182 | 22.3 | 207.1 | 17.9 |
+| 2006 | 889,390 | 44,493 | 122,362 | 24,557 | 1,080,802 | 17.7 | 171.4 | 13.7 |
+| 2007 | 1,056,344 | 50,035 | 118,734 | 27,312 | 1,252,425 | 15.7 | 216.5 | 11.9 |
+| 2008 | 1,173,656 | 52,565 | 223,859 | 41,608 | 1,491,688 | 21.3 | 261.0 | 17.1 |
+| 2009 | 1,751,247 | 98,619 | 425,321 | 87,976 | 2,363,163 | 25.9 | 416.0 | 20.3 |
+| 2010 | 1,195,965 | 121,212 | 491,711 | 142,643 | 1,951,531 | 38.7 | 294.5 | 31.9 |
+| 2011 | 1,000,142 | 94,727 | 425,264 | 141,640 | 1,661,773 | 39.8 | 234.6 | 34.4 |
+| 2012 | 1,704,837 | 147,440 | 662,260 | 165,605 | 2,680,142 | 36.4 | 416.4 | 31.5 |
+| 2013 | 1,518,439 | 81,112 | 486,920 | 120,944 | 2,207,415 | 31.2 | 355.2 | 26.5 |
+| 2014 | 1,091,133 | 48,848 | 249,311 | 60,358 | 1,449,650 | 24.7 | 247.2 | 20.7 |
+| 2015 | 1,404,425 | 74,932 | 319,792 | 69,971 | 1,869,120 | 24.9 | 333.5 | 21.2 |
+| 2016 | 1,719,029 | 136,857 | 409,872 | 88,002 | 2,353,760 | 27.0 | 423.4 | 23.7 |
+| 2017 | 1,571,179 | 100,097 | 288,795 | 54,015 | 2,014,086 | 22.0 | 377.6 | 18.2 |
+| 2018 | 1,514,613 | 71,271 | 170,441 | 31,695 | 1,788,020 | 15.3 | 368.8 | 12.2 |
+| 2019 | 1,814,200 | 78,682 | 263,435 | 55,943 | 2,212,260 | 18.0 | 494.5 | 15.0 |
+| 2020 | 3,636,583 | 313,840 | 831,778 | 209,370 | 4,991,571 | 27.2 | 1,074.3 | 23.3 |
+| 2021 | 3,302,258 | 289,303 | 838,127 | 221,917 | 4,651,605 | 29.0 | 1,001.5 | 23.9 |
+| 2022 | 1,509,170 | 55,335 | 181,159 | 44,296 | 1,789,960 | 15.7 | 476.5 | 11.6 |
+| 2023 | 125,139 | 2,560 | 6,871 | 1,016 | 135,586 | 7.7 | 39.5 | 5.6 |
+
+Non-360 (15-year the bulk) peaks at both boom periods — 2002-03 (rate-driven refi wave into 15-year)
+and 2010-11 (post-crisis refi into shorter terms) — and is lowest in the purchase-heavy/high-rate
+years 2018-19 and 2022-23. The UPB share is consistently lower than the count share (15-year loans
+are smaller). Full parquet-level table is in `.claude_tmp/term_pass/report.txt`.
+
+**(b) Non-360 share of loan-months in the five scored populations** (join clean — 0 unmatched loans
+in any population):
+
+| population | loan-months | non-360 share |
+|---|---|---|
+| cutoff_2002 train | 906,877 | 30.8% |
+| cutoff_2002 test | 227,078 | 30.8% |
+| 2001-02 in-sample | 690,358 | 31.5% |
+| **2003 one-step-ahead** | 374,850 | **41.0%** |
+| cutoff_2020 train | 11,230,531 | 26.3% |
+| cutoff_2020 test | 2,808,691 | 26.3% |
+| **2021 one-step-ahead** | 2,397,271 | **27.6%** |
+
+**(c) Same-incentive bin ratios split 360 vs non-360, pooled decomposition.** Ratio = Σ predicted
+event-probability (`h`) / Σ realized events, count-weighted; bin edges `[-2,-1,-0.5,0,0.5,1,1.5,2,3,4]`
+(same as the Sep 27 same-incentive comparison).
+
+*2003 one-step-ahead — 374,850 loan-months, exact split 221,001 (360) + 153,849 (non-360):*
+
+| group | n | Σh | Σrealized | ratio | shortfall (real−pred) |
+|---|---|---|---|---|---|
+| 360 | 221,001 | 11,127.69 | 11,637 | **0.9562** | 509.31 |
+| non-360 | 153,849 | 4,028.31 | 5,715 | **0.7049** | 1,686.69 |
+| pooled | 374,850 | 15,156.00 | 17,352 | 0.8734 | 2,196.00 |
+
+**Non-360 is 41.0% of loan-months but 76.8% of the total shortfall.** Per-bin (360 / non-360, exact
+counts):
+
+| incentive bin | 360 n | 360 ratio | non-360 n | non-360 ratio |
+|---|---|---|---|---|
+| (-2,-1] | 173 | n/a (real=0) | 2,007 | 0.635 |
+| (-1,-0.5] | 575 | 0.402 | 19,660 | 0.672 |
+| (-0.5,0] | 3,526 | 1.027 | 35,856 | 0.596 |
+| (0,0.5] | 18,429 | 1.046 | 38,389 | 0.577 |
+| (0.5,1] | 38,512 | 0.925 | 26,372 | 0.672 |
+| (1,1.5] | 45,209 | 0.893 | 13,387 | 0.827 |
+| (1.5,2] | 50,161 | 1.001 | 8,757 | 0.995 |
+| (2,3] | 49,760 | 0.977 | 7,511 | 0.960 |
+| (3,4] | 13,099 | 0.978 | 1,733 | 0.738 |
+
+(Bin totals sum to 373,116, not 374,850 — 1,734 loan-months fall outside `[-2,4]` incentive and are
+excluded from the bin table but included in the pooled totals above.) 360-term is essentially
+calibrated (0.89-1.05) everywhere populated; non-360 sits at 0.58-0.83 through incentive 1.5, then
+converges to ~1 above it — the same shape the Sep 27 note attributed to an out-of-time shift, now
+resolved as concentrated in the 15-year population.
+
+*2021 one-step-ahead / cutoff_2020 control — 2,397,271 loan-months, split 1,736,441 (360) +
+660,830 (non-360):*
+
+| group | n | Σh | Σrealized | ratio | shortfall |
+|---|---|---|---|---|---|
+| 360 | 1,736,441 | 42,445.72 | 47,212 | **0.8990** | 4,766.29 |
+| non-360 | 660,830 | 10,741.70 | 13,576 | **0.7912** | 2,834.30 |
+| pooled | 2,397,271 | 53,187.42 | 60,788 | 0.8750 | 7,600.58 |
+
+Non-360 is 27.6% of loan-months and **37.3%** of the shortfall — same direction, much milder than
+2003. Full 2021 per-bin table (360/non-360) is in `.claude_tmp/term_pass/gap_decomp_out.txt`.
+
+**(d) Code-01 near-maturity share** (`|age_at_termination − original_term| ≤ 2`), by term, by
+termination year:
+
+- **360-term: 0.00% in every year 2001-2025.** No 30-year loan in this data window (acquisitions
+  start 2000, data through Dec 2025) has reached scheduled maturity.
+- **Non-360:** ramps from ~0 pre-2010 to a **20.0% peak in 2018** (98,879 of 493,691 non-360 code-01
+  terminations) — the 2003 15-year cohort maturing (2003+15=2018) — with 2017 at 9.2%, and a later
+  rise (2023 7.4%, 2024 6.8%, 2025 10.0%) from the 2008-10 15-year cohorts.
+- **Pooled, both terms: 7.66% in 2018** — reproduces the figure already in this README (job
+  18762696) exactly, and confirms it is **entirely a non-360 phenomenon**.
+
+### 2. Modification scope
+
+Post-modification loan-month share, all five populations: cutoff_2002 train 0.063%, cutoff_2002
+test 0.065%, 2001-02 in-sample 0.061%, **2003 one-step 0.254%**, cutoff_2020 train 0.221%, cutoff_2020
+test 0.228%, **2021 one-step 0.496%**. Dropping post-mod months removes well under 1% of every
+population — the change is essentially free in sample size.
+
+### 3. Cutoff 2021 status
+
+No `cutoff_2021_zbc_multiobs` build exists. The only `cutoff_2021*` artifact is
+`data/sequences_rolling/cutoff_2021/` — the old June-21 **plain pipeline** (non-ZBC, non-multiobs),
+not comparable to the current cutoff_2002/cutoff_2020 multiobs design. Everything scored to date
+used `cutoff_2020` (train ≤ Dec 2020, forecast CY2021). Realized data for CY2022 exists — raw
+performance rows run through Dec 2025 (`outputs/realized_cpr_by_coupon_v6.csv` has months through
+2025-09) — so either a relabeled cutoff_2020 or a genuine new train-≤-Dec-2021/forecast-CY2022
+cutoff_2021 is buildable; which one the advisor means is the open clarifying question.
+
+### 4. Compute budget
+
+**Account limits — no hard cap.** `torch_pr_932_general` under QOS `normal`: no `GrpTRESMins`,
+`MaxJobs`, `MaxSubmit`, or GPU-hour cap (`sacctmgr show qos normal`, `sacctmgr show assoc` — both
+blank). Scheduling is fair-share only; `sshare -A torch_pr_932_general` gives FairShare 0.233 as of
+Sep 29 23:37 EDT (a live metric that moves with usage, not a fixed limit — it read 0.236 a few hours
+earlier the same day). Full output in `.claude_tmp/term_pass/compute_budget_facts.txt`.
+
+**GPU queue-wait distribution (measured, full population, not a sample).** All 53 `l40s_public`
+jobs submitted since Sep 20 (`.claude_tmp/term_pass/sacct_l40s_raw.txt`), submit-to-start wait:
+**min 0.02 min, median 1.45 min, max 54.5 min** (job 18479425 `measure_alignment_effect`). Seven
+jobs waited 13-55 min; all seven were submitted in batches of 5-6 jobs at once and queued behind
+each other for a small number of GPUs — self-contention, not external queue pressure. `l40s_public`
+itself is deep (695 jobs, 506 pending, snapshot Sep 29 23:37) but jobs submitted 1-2 at a time
+started in under 3 minutes throughout.
+
+**Wall-clock for yearly retraining 2002-2024 × 5 seeds (~115 runs, ~250 GPU-h) — ESTIMATES beyond
+the two measured points.** Measured: one 50-epoch run = 2:01-2:17 wall on one L40S (work per epoch
+is fixed by `STEPS_PER_EPOCH`, independent of data size); a cutoff_2002-scale data build = 31 min
+CPU wall (job 18054077). *Estimated:* ~26 h wall with 10 concurrent L40S, ~51 h with 5 concurrent
+(12/23 waves × ~2.2 h); the cutoff_2020-scale build time was not separately measured this session
+(previously noted as 1.5-7h cold / 0.5-1.2h warm in the Sep 28 section, likely still applicable but
+not re-verified). Given the account has no hard cap and recent queue waits are dominated by
+self-batching rather than external pressure, nothing in (a) or the queue snapshot blocks this run —
+the main risk is queue-wait stretching wall-clock if we submit a large burst, not a hard stop.
+
+### 5. Implementation scope and order
+
+**(i) 30-year filter at raw-read.** Add `original_loan_term` (`$13`) to the column map and filter
+`== 360` in: `prepare_sequences_multiobs_zbc.py` (`_COL_MAP`/`load_vintage_filtered`) and siblings
+`prepare_sequences_rolling_zbc.py`, `prepare_sequences_trailing_zbc.py`; the cell-grid sampler
+`scripts/build_cell_grid_sample_pre2013.py` (`scan_file`); the census panel
+`scripts/diag/census_panel_baseline.py`; `scripts/realized_cpr_v6.py` (+ `_upb`, `_upb_byage`).
+**Must land first** — the sampler and census panel both consume its output, so the sampler must be
+rebuilt before the census/sequence builds.
+
+**(ii) Drop post-modification rows.** Read `$42` in the same raw loaders; drop each loan's rows with
+`ref_month ≥ first-Y month`. **Must land before window/age computation** — dropping interior rows
+changes `L`, `loan_age`, and `term_t`, all of which are computed from the row-indexed panel.
+
+**(iii) Incentive from current rate `$9`** *(not part of the Sep 29 decision list above — carried
+over from the Sep 28 open item, still awaiting explicit confirmation)*: change
+`original_interest_rate`→`current_interest_rate` in `prepare_sequences_multiobs_zbc.py:458` and in
+every script that recomputes incentive for scoring/binning (`ensemble_onestep_2002.py`,
+`ensemble_onestep_2020_control.py`, `ensemble_onestep_insample_2002.py`, `forecast_rolling_cpr.py`,
+`realized_cpr_by_refi_v1.py`, `house_price_*`, the `diag_*` incentive scripts). Interacts with (ii):
+current rate differs from note rate almost only on rate-reduced modified loans, so once (ii) drops
+those rows this becomes close to a no-op — decide (ii) first.
+
+**(iv) Two realized series from `realized_cpr_v6.py`.** Split into **voluntary** (zbc `01` AND
+30-year, per (i)) and **total payoffs** (any UPB→0 / any zbc, all terms — for pricing). The
+post-month-33 terminal curve fit (`scripts/diag/fit_terminal_scurve.py`) switches to the voluntary
+series. **Depends on (i)** landing first.
+
+**(v) HARP eligibility feature.** Build the eligibility flag from `data_harp_raw/` (fields located;
+two-loan linkage via `Loan_Mapping.txt` explicitly skipped per today's decision). Add to
+`FEATURE_COLS` in the builders — a new sequence channel, so it changes the input dimension consumed
+by `train_hazard_multiobs.py` and the scoring path. **Cannot share a training run with models that
+omit it** — build the eligibility map and join it in the builder before any run that includes it,
+and do not mix HARP/non-HARP checkpoints in the same ensemble.
+
+Artifacts: `scripts/diag/term_pass_worker.py`, `scripts/diag/term_report.py`,
+`scripts/diag/run_term_pass.sbatch`. Outputs: `.claude_tmp/term_pass/parquet/` (93 per-vintage
+parquets, 710M, local/not committed), `.claude_tmp/term_pass/report.txt`,
+`.claude_tmp/term_pass/gap_decomp_out.txt`, `.claude_tmp/term_pass/sacct_l40s_raw.txt`,
+`.claude_tmp/term_pass/compute_budget_facts.txt`. Jobs: 18844165 (93-way term-pass array, `cpu_short`,
+~40 min, 0 failures), 18846369/18848299 (srun report/decomposition runs, `cpu_short`). Consistency
+test not re-run today (no pipeline code changed); last pass remains 2026-09-28 (srun 18753120).
