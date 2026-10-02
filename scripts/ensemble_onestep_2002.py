@@ -17,6 +17,7 @@ own ratios.
 Run:
     python scripts/ensemble_onestep_2002.py
 """
+import argparse
 import os
 import sys
 
@@ -32,8 +33,9 @@ OUT_DIR = os.path.join(BASE, 'outputs/rolling/ensemble_onestep_cutoff_2002')
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
-def load_seed(seed):
-    path = os.path.join(BASE, f'outputs/rolling/rolling_onestep_cutoff_2002_seed{seed}/rolling_all_months.csv')
+def load_seed(seed, run_tag=''):
+    path = os.path.join(
+        BASE, f'outputs/rolling/rolling_onestep_cutoff_2002{run_tag}_seed{seed}/rolling_all_months.csv')
     df = pd.read_csv(path)
     df['coupon'] = ((df['note_rate'] - 0.5) * 2).round() / 2
     return df
@@ -57,7 +59,20 @@ def pooled_stats(df, label):
 
 
 def main():
-    seed_dfs = {s: load_seed(s) for s in SEEDS}
+    global OUT_DIR
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--run_tag', type=str, default='',
+                     help='Suffix (e.g. "_30y") selecting which per-seed '
+                          'rolling_onestep_cutoff_2002{run_tag}_seed{seed} dirs to read, same role '
+                          'as prepare_sequences_multiobs_zbc.py --run_tag. Output also goes to '
+                          'outputs/rolling/ensemble_onestep_cutoff_2002{run_tag} instead of the '
+                          'default, so a _30y ensemble never overwrites the original one. '
+                          'Default "" -- unchanged behavior.')
+    args = ap.parse_args()
+    OUT_DIR = os.path.join(BASE, f'outputs/rolling/ensemble_onestep_cutoff_2002{args.run_tag}')
+    os.makedirs(OUT_DIR, exist_ok=True)
+
+    seed_dfs = {s: load_seed(s, args.run_tag) for s in SEEDS}
 
     # --- population identity check across all five seeds ---
     keys = {s: set(zip(d['loan_id'], d['ref_month'])) for s, d in seed_dfs.items()}

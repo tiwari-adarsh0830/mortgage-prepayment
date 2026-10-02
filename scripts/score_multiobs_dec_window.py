@@ -377,6 +377,12 @@ def main():
                           'runs for the SAME cutoff_year+map_era hit the same cache instead of each '
                           'redoing the ~raw-file scan. Default: outputs/rolling/_dec_window_raw_cache.')
     ap.add_argument('--batch_size', type=int, default=8192)
+    ap.add_argument('--cell_sample', type=str, default=PRE2013_CELL_SAMPLE_PATH,
+                     help='loan_id CSV gating the historical-era (PRE2013_VINTAGES) population, '
+                          'threaded to build_combined_pass the same way '
+                          'prepare_sequences_multiobs_zbc.py --cell_sample is. Default is the '
+                          'original pre-30y-filter sample, for backward compatibility; pass e.g. '
+                          'outputs/pre2013_cell_sample_30y_loans.csv when --seq_dir is a _30y build.')
     ap.add_argument('--build_cache_only', action='store_true',
                      help='CPU-only mode: run build_combined_pass (+ population diagnostics) and exit. '
                           'No checkpoint load, no scoring, no GPU needed. Intended for the CPU '
@@ -418,7 +424,7 @@ def main():
         os.path.join(args.out_dir, f'pmms_series_{args.cutoff_year}_{args.cutoff_year + 1}.csv'), index=False)
 
     full_df = build_combined_pass(args.cutoff_year, args.include_pre2013, args.map_era,
-                                   test_ids_set, cache_dir=cache_dir)
+                                   test_ids_set, cache_dir=cache_dir, cell_sample_path=args.cell_sample)
 
     obs, dec_rows, diag = build_dec_window_obs(full_df, args.cutoff_year)
     print('Population diagnostics:', flush=True)
