@@ -176,6 +176,13 @@ def main():
                               '(default: all files found there)')
     parser.add_argument('--out_prefix', default=os.path.join(OUT, 'pre2013_cell_sample'))
     parser.add_argument('--cap', type=int, default=TARGET_CAP)
+    parser.add_argument('--counts_csv', default=COUNTS_CSV,
+                         help='per-cell (vintage_quarter, coupon) loan/event census CSV, '
+                              'as produced by count_prepay_events_pre2013.py; default '
+                              'matches the COUNTS_CSV module constant (the pre-30y-filter '
+                              'census) -- override to point at a fresh census (e.g. the '
+                              '_30y rerun) so the loan budget is computed from the '
+                              'filter-consistent population, not a stale one')
     args = parser.parse_args()
 
     if args.files:
@@ -184,7 +191,7 @@ def main():
         files = sorted(f for f in os.listdir(DATA) if f.endswith('.csv'))
     print('files: %d' % len(files), flush=True)
 
-    budget = compute_budgets(cap=args.cap)
+    budget = compute_budgets(counts_path=args.counts_csv, cap=args.cap)
     ckpt_path = args.out_prefix + '_scan_ckpt.pkl'
     records = scan_files(files, ckpt_path=ckpt_path)
     print('records: %d' % len(records), flush=True)
