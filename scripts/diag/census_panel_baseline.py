@@ -106,7 +106,7 @@ def classify_terminal(is_prepaid: np.ndarray, last_zbc: pd.Series) -> np.ndarray
                      np.where(non_prepay, 'non_prepay_termination', 'censored_survivor'))
 
 
-def process_vintage(vintage, cutoff_ym, pmms_rates, zhvi_df, ckpt_dir):
+def process_vintage(vintage, cutoff_ym, pmms_rates, zhvi_df, ckpt_dir, cell_sample_path):
     ckpt_path = os.path.join(ckpt_dir, f'{vintage}.pkl')
     if os.path.exists(ckpt_path):
         with open(ckpt_path, 'rb') as f:
@@ -114,7 +114,8 @@ def process_vintage(vintage, cutoff_ym, pmms_rates, zhvi_df, ckpt_dir):
         print(f'  {vintage}: loaded from checkpoint', flush=True)
         return result
 
-    df = m.load_vintage_filtered(vintage, pmms_rates, zhvi_df, cutoff_ym, keep_ids=None)
+    df = m.load_vintage_filtered(vintage, pmms_rates, zhvi_df, cutoff_ym, keep_ids=None,
+                                  cell_sample_path=cell_sample_path)
     if df is None or df.empty:
         result = None
     else:
@@ -211,6 +212,12 @@ def summarize(coupon_key, n_eligible_series, terminal_df, months, events):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--cutoff_year', type=int, required=True)
+    parser.add_argument('--cell_sample', type=str, default=m.PRE2013_CELL_SAMPLE_PATH,
+                         help='loan_id CSV gating the historical-era (PRE2013_VINTAGES) '
+                              'population, threaded to m.load_vintage_filtered the same '
+                              'way prepare_sequences_multiobs_zbc.py --cell_sample is. '
+                              'Default is the original pre-30y-filter sample, for '
+                              'backward compatibility.')
     args = parser.parse_args()
 
     cutoff_ym = m.dec_yyyymm(args.cutoff_year)
@@ -233,7 +240,7 @@ def main():
     n_divergent_total       = 0
 
     for v in m.ALL_VINTAGES:
-        result = process_vintage(v, cutoff_ym, pmms_rates, zhvi_df, ckpt_dir)
+        result = process_vintage(v, cutoff_ym, pmms_rates, zhvi_df, ckpt_dir, args.cell_sample)
         if result is None:
             continue
         per_loan_n_eligible_parts.append(result['per_loan_n_eligible'])

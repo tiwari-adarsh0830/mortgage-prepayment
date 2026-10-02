@@ -313,23 +313,21 @@ def _data_dir_for_vintage(vintage: str) -> str:
     return PRE2013_DATA_DIR if vintage in _PRE2013_VINTAGE_SET else DATA_DIR
 
 
-_pre2013_cell_sample_ids_cache: frozenset | None = None
+_pre2013_cell_sample_ids_cache: dict[str, frozenset] = {}
 
 
-def _load_pre2013_cell_sample_ids() -> frozenset:
+def _load_pre2013_cell_sample_ids(path: str = PRE2013_CELL_SAMPLE_PATH) -> frozenset:
     """loan_ids selected by the cell-grid sampler
-    (scripts/build_cell_grid_sample_pre2013.py): 1,677,060 of the 29.1M raw
-    pre-2013 loans, drawn to target ~5,000 zero_balance_code==01 events per
-    (vintage_quarter, coupon) cell. Cached module-wide after the first call
-    -- this is a ~1.7M-row CSV and load_vintage_filtered calls this once per
-    PRE2013_VINTAGES file (52x for a full historical build)."""
-    global _pre2013_cell_sample_ids_cache
-    if _pre2013_cell_sample_ids_cache is None:
-        ids = pd.read_csv(PRE2013_CELL_SAMPLE_PATH, usecols=['loan_id'])['loan_id']
-        _pre2013_cell_sample_ids_cache = frozenset(ids.tolist())
-        print(f'  Loaded pre-2013 cell-grid sample: '
-              f'{len(_pre2013_cell_sample_ids_cache):,} loan_ids', flush=True)
-    return _pre2013_cell_sample_ids_cache
+    (scripts/build_cell_grid_sample_pre2013.py) at `path`. Cached per-path
+    module-wide after the first call -- this is a multi-hundred-thousand-row
+    CSV and load_vintage_filtered calls this once per PRE2013_VINTAGES file
+    (52x for a full historical build)."""
+    if path not in _pre2013_cell_sample_ids_cache:
+        ids = pd.read_csv(path, usecols=['loan_id'])['loan_id']
+        _pre2013_cell_sample_ids_cache[path] = frozenset(ids.tolist())
+        print(f'  Loaded pre-2013 cell-grid sample from {path}: '
+              f'{len(_pre2013_cell_sample_ids_cache[path]):,} loan_ids', flush=True)
+    return _pre2013_cell_sample_ids_cache[path]
 
 
 def _encode_categorical(series: pd.Series, mapping: dict, label: str) -> pd.Series:
@@ -382,6 +380,7 @@ def load_vintage_filtered(
     property_type_map: dict | None = None,
     extra_keep_cols: list[str] | None = None,
     term_filter: int | None = 360,
+    cell_sample_path: str = PRE2013_CELL_SAMPLE_PATH,
 ) -> pd.DataFrame | None:
     """Load one vintage file, apply calendar cutoff, compute all features.
 
@@ -414,18 +413,26 @@ def load_vintage_filtered(
     Pass None to disable (diagnostics only). Applied BEFORE the calendar
     cutoff filter, sort, loan_age derivation, or any window/sequence
     construction, so a dropped loan never reaches those stages.
+
+    cell_sample_path: loan_id CSV (as produced by
+    build_cell_grid_sample_pre2013.py) used to gate the historical-era
+    (PRE2013_VINTAGES) population -- see _load_pre2013_cell_sample_ids().
+    Default is PRE2013_CELL_SAMPLE_PATH (the original, pre-30y-filter
+    sample) for backward compatibility; pass e.g.
+    outputs/pre2013_cell_sample_30y_loans.csv to use a fresher sample.
+    Ignored for modern-era vintages.
     """
     path = os.path.join(_data_dir_for_vintage(vintage), f'{vintage}.csv')
     if not os.path.exists(path):
         return None
 
-    # HISTORICAL-ERA GATE: restrict loan selection to the cell-grid sample
-    # (1,677,060 of 29.1M loans) instead of processing the full pre-2013
-    # corpus. Only ever fires for PRE2013_VINTAGES -- modern-era `keep_ids`
-    # (None in Pass 1/3's initial load, or the train/test id_set passed
-    # elsewhere) passes through completely untouched.
+    # HISTORICAL-ERA GATE: restrict loan selection to the cell-grid sample at
+    # cell_sample_path, instead of processing the full pre-2013 corpus. Only
+    # ever fires for PRE2013_VINTAGES -- modern-era `keep_ids` (None in Pass
+    # 1/3's initial load, or the train/test id_set passed elsewhere) passes
+    # through completely untouched.
     if vintage in _PRE2013_VINTAGE_SET:
-        cell_ids = _load_pre2013_cell_sample_ids()
+        cell_ids = _load_pre2013_cell_sample_ids(cell_sample_path)
         keep_ids = cell_ids if keep_ids is None else (set(keep_ids) & cell_ids)
 
     print(f'  Loading {vintage}...', flush=True)
@@ -1103,12 +1110,17 @@ def main():
                              'BEFORE the resume guards run; errors hard if anything is missing.')
     parser.add_argument('--include_pre2013', action='store_true',
                         help='Include the historical era (2000Q1-2012Q4 acquisition '
-                             'files, PRE2013_VINTAGES), gated to the cell-grid sample '
-                             '(outputs/pre2013_cell_sample_loans.csv, 1,677,060 loans) '
-                             'instead of the full 29.1M-loan pre-2013 corpus. Default '
-                             'off -- every modern-era (2013+) invocation is byte-for-byte '
-                             'unaffected: ALL_VINTAGES only gains the historical files '
-                             'when this flag is passed.')
+                             'files, PRE2013_VINTAGES), gated to the cell-grid sample at '
+                             '--cell_sample instead of the full 29.1M-loan pre-2013 '
+                             'corpus. Default off -- every modern-era (2013+) invocation '
+                             'is byte-for-byte unaffected: ALL_VINTAGES only gains the '
+                             'historical files when this flag is passed.')
+    parser.add_argument('--cell_sample', type=str, default=PRE2013_CELL_SAMPLE_PATH,
+                        help='loan_id CSV (build_cell_grid_sample_pre2013.py output) '
+                             'gating the historical-era population when --include_pre2013 '
+                             'is passed; default is the original pre-30y-filter sample '
+                             '(outputs/pre2013_cell_sample_loans.csv) for backward '
+                             'compatibility. Ignored without --include_pre2013.')
     args = parser.parse_args()
 
     if args.sampling_mode == 'fixed_fraction':
@@ -1209,7 +1221,8 @@ def main():
         for vi in range(_start_idx, len(RELEVANT_VINTAGES)):
             v = RELEVANT_VINTAGES[vi]
             df = load_vintage_filtered(v, pmms_rates, zhvi_df, cutoff_ym,
-                                       keep_ids=None, sample_frac=args.sample_frac)
+                                       keep_ids=None, sample_frac=args.sample_frac,
+                                       cell_sample_path=args.cell_sample)
             if df is not None and not df.empty:
                 info_chunks.append(df.groupby('loan_id')['prepaid'].first().reset_index())
                 del df; gc.collect()
@@ -1382,7 +1395,8 @@ def main():
             print(f'  {v}: shard exists — skip', flush=True)
             continue
 
-        df = load_vintage_filtered(v, pmms_rates, zhvi_df, cutoff_ym, keep_ids=None)
+        df = load_vintage_filtered(v, pmms_rates, zhvi_df, cutoff_ym, keep_ids=None,
+                                   cell_sample_path=args.cell_sample)
         if df is None or df.empty:
             # mark empty so rerun doesn't retry a vintage with no in-window rows
             open(os.path.join(shard_dir, f'{v}_empty.flag'), 'w').close()
