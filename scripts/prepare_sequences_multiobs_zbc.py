@@ -1121,6 +1121,15 @@ def main():
                              'is passed; default is the original pre-30y-filter sample '
                              '(outputs/pre2013_cell_sample_loans.csv) for backward '
                              'compatibility. Ignored without --include_pre2013.')
+    parser.add_argument('--run_tag', type=str, default='',
+                        help='Suffix appended to SAVE_DIR (e.g. "_30y"), same role as '
+                             'train_hazard_multiobs.py --run_tag. Without this, a run '
+                             'under a different --cell_sample computes the SAME SAVE_DIR '
+                             'as a prior run with identical cutoff/sampling/horizon/cap '
+                             'args -- the resume guards would then silently reuse that '
+                             'prior run'"'"'s split/scaler/sequences instead of rebuilding '
+                             'from the new population. Default "" -- every existing '
+                             'invocation computes the same SAVE_DIR as before.')
     args = parser.parse_args()
 
     if args.sampling_mode == 'fixed_fraction':
@@ -1161,7 +1170,7 @@ def main():
     _hist_suffix = '_hist' if args.include_pre2013 else ''
     SAVE_DIR = os.path.join(
         BASE, f'data/sequences_rolling/cutoff_{args.cutoff_year}_zbc_multiobs'
-              f'_{_budget_tag}_h{args.label_horizon}{_scheme_suffix}{_cap}{_hist_suffix}')
+              f'_{_budget_tag}_h{args.label_horizon}{_scheme_suffix}{_cap}{_hist_suffix}{args.run_tag}')
     os.makedirs(SAVE_DIR, exist_ok=True)
 
     print(f'Multiobs builder | cutoff = Dec {args.cutoff_year} (YYYYMM={cutoff_ym}) | '
