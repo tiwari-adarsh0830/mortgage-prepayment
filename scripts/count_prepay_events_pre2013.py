@@ -50,6 +50,7 @@ existing pipeline deliberately -- flag it as a choice when reporting.
 Checkpointed per file with a resume guard: a prior long scan was lost to a
 SLURM timeout holding state in memory.
 """
+import argparse
 import os
 import pickle
 from collections import defaultdict
@@ -113,10 +114,22 @@ def scan_file(path):
     """
     vint, cpn, zbc = {}, {}, {}
     bad_term_loans, ever_y = set(), set()
+    # usecols/names MUST be listed in ASCENDING column-index order: pandas
+    # selects usecols columns in ascending file-index order regardless of
+    # the order they're listed in, then zips the result positionally with
+    # `names` -- so an out-of-order usecols list silently scrambles which
+    # name gets which column's data (found 2026-10-01: COL_ZBC=43 was
+    # listed before COL_TERM=12/COL_MOD=41, so 'orig' actually received
+    # original_loan_term, 'zbc' received origination_date, 'term' received
+    # modification_flag, and 'mod' received zero_balance_code -- every row's
+    # 'orig' value then failed mmyyyy_to_quarter(), silently producing 0
+    # loans for every file; never run end-to-end before this was caught).
+    # Ascending order here: COL_LOAN=1, COL_RATE=7, COL_TERM=12, COL_ORIG=13,
+    # COL_MOD=41, COL_ZBC=43.
     for chunk in pd.read_csv(
             path, sep='|', header=None,
-            usecols=[COL_LOAN, COL_RATE, COL_ORIG, COL_ZBC, COL_TERM, COL_MOD],
-            names=['loan_id', 'rate', 'orig', 'zbc', 'term', 'mod'],
+            usecols=[COL_LOAN, COL_RATE, COL_TERM, COL_ORIG, COL_MOD, COL_ZBC],
+            names=['loan_id', 'rate', 'term', 'orig', 'mod', 'zbc'],
             chunksize=CHUNK, low_memory=False):
         chunk['rate'] = pd.to_numeric(chunk['rate'], errors='coerce')
         chunk['zbc'] = pd.to_numeric(chunk['zbc'], errors='coerce')
@@ -168,11 +181,23 @@ def scan_file(path):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--ckpt', default=CKPT,
+                         help='checkpoint path (resume guard); default matches the '
+                              'pre-fix CKPT module constant -- override to point a '
+                              'rerun (e.g. with the loan-level term/mod filters) at a '
+                              'fresh path so it does not resume from stale state')
+    parser.add_argument('--final', default=FINAL,
+                         help='output CSV path; default matches the pre-fix FINAL '
+                              'module constant')
+    args = parser.parse_args()
+    ckpt_path, final_path = args.ckpt, args.final
+
     files = sorted(f for f in os.listdir(DATA) if f.endswith('.csv'))
     print('found %d quarter files' % len(files), flush=True)
 
-    if os.path.exists(CKPT):
-        with open(CKPT, 'rb') as fh:
+    if os.path.exists(ckpt_path):
+        with open(ckpt_path, 'rb') as fh:
             start_idx, events, loans, terms = pickle.load(fh)
         print('RESUME from file %d/%d' % (start_idx, len(files)), flush=True)
     else:
@@ -196,7 +221,7 @@ def main():
                     events[cell] += 1
                     n_prepaid += 1
 
-        with open(CKPT, 'wb') as fh:
+        with open(ckpt_path, 'wb') as fh:
             pickle.dump((fi + 1, events, loans, terms), fh)
         print('[%2d/%2d] %-12s loans=%-9d prepaid=%-9d rate=%.3f'
               % (fi + 1, len(files), f, len(vint), n_prepaid,
@@ -209,7 +234,7 @@ def main():
                      'loans': nl, 'prepay_events': events.get(cell, 0)})
     df = pd.DataFrame(rows)
     df['event_rate'] = df['prepay_events'] / df['loans']
-    df.to_csv(FINAL, index=False)
+    df.to_csv(final_path, index=False)
 
     print()
     print('zero-balance code distribution (all files):')
@@ -226,7 +251,7 @@ def main():
     print()
     print('cells with >=300 events: %d of %d'
           % ((df['prepay_events'] >= 300).sum(), len(df)))
-    print('wrote %s' % FINAL)
+    print('wrote %s' % final_path)
 
 
 if __name__ == '__main__':
