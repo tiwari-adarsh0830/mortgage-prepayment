@@ -110,7 +110,7 @@ def main():
         fail(f'no cell-sample loader line found in {args.build_log}')
     log_path, log_count = m.group(1), int(m.group(2).replace(',', ''))
     print(f'\nBuild log loader line: path={log_path} count={log_count:,}', flush=True)
-    if log_path != EXPECTED_CELL_SAMPLE_PATH:
+    if os.path.abspath(log_path) != os.path.abspath(EXPECTED_CELL_SAMPLE_PATH):
         fail(f'build log cell-sample path {log_path} != expected {EXPECTED_CELL_SAMPLE_PATH}')
     if log_count != EXPECTED_N_IDS:
         fail(f'build log cell-sample count {log_count:,} != expected {EXPECTED_N_IDS:,}')
