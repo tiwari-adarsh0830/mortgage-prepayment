@@ -121,6 +121,17 @@ _COL_MAP = dict(sorted({
     _ALL_COLS.index('loan_age') + 1:                  'loan_age',
     _ALL_COLS.index('origination_date') + 1:          'origination_date',
     _ALL_COLS.index('zip') + 1:                       'zip3',
+    # original_loan_term is index 11 in _BASE_COLS (+1 = usecols 12 = awk
+    # $13), well before the field-42 drift zone, so the name lookup is safe
+    # -- verified: name-based result is usecols 12 on both eras, matching
+    # the awk ground truth ($13 == 360 on first rows of 2000Q1 and 2013Q1).
+    _ALL_COLS.index('original_loan_term') + 1:        'original_loan_term',
+    # MODIFICATION FLAG -- hardcoded, do NOT switch to a name lookup, same
+    # reason as zero_balance_code_actual below: _ALL_COLS.index(
+    # 'modification_flag')+1 gives usecols 71 (drifted), but the real
+    # modification_flag is usecols 41 (awk field 42) -- verified against
+    # both eras (e.g. 2013Q1/2018Q1 row values 'N'/blank at this position).
+    41:                                                'modification_flag',
     # LABEL COLUMN -- hardcoded, do NOT switch to a name lookup.
     # _ALL_COLS has 109 names for 113 fields, so it drifts:
     # _ALL_COLS.index('zero_balance_code')+1 gives usecols 42, but the
@@ -194,6 +205,7 @@ def load_vintage_filtered(
     cutoff_yyyymm: int,
     keep_ids=None,
     sample_frac: float = 1.0,
+    term_filter: int | None = 360,
 ) -> pd.DataFrame | None:
     """Load one vintage file, apply calendar cutoff, compute all features.
 
@@ -201,6 +213,15 @@ def load_vintage_filtered(
         prepaid=1 only if zero_balance_code_actual==1 appears in a row that
         survives the cutoff filter. A loan that prepays AFTER the cutoff is
         labeled prepaid=0 in the training data — no lookahead leakage.
+
+    term_filter: drop a loan ENTIRELY (all its rows) if ANY observed
+    original_loan_term across its own rows != term_filter, including
+    blank/unparseable (NaN) term values (default 360, i.e. 30-year loans
+    only -- advisor's Sep 29 decision). LOAN-level, not row-level: a loan
+    is never partially kept (found necessary 2026-10-01 -- real loans carry
+    more than one distinct term value across their own rows). Pass None to
+    disable (diagnostics only). Applied BEFORE the calendar cutoff filter,
+    sort, loan_age derivation, or any window construction.
     """
     path = os.path.join(DATA_DIR, f'{vintage}.csv')
     if not os.path.exists(path):
@@ -226,6 +247,23 @@ def load_vintage_filtered(
     del chunks
     gc.collect()
 
+    # ── 30-year filter — must run before cutoff/sort/loan_age/windows ────────
+    # Advisor's Sep 29 decision: 30-year loans only, throughout. LOAN-LEVEL,
+    # not row-level: a loan with ANY row whose original_loan_term !=
+    # term_filter (including blank/NaN -- NaN != x is True) is dropped
+    # entirely, never partially kept.
+    if term_filter is not None:
+        df['original_loan_term'] = pd.to_numeric(df['original_loan_term'], errors='coerce')
+        n_loans_before = df['loan_id'].nunique()
+        bad_term_loans = set(df.loc[df['original_loan_term'] != term_filter, 'loan_id'].unique())
+        df = df[~df['loan_id'].isin(bad_term_loans)].copy()
+        n_loans_after = df['loan_id'].nunique()
+        print(f'    term filter (=={term_filter}, loan-level): kept {n_loans_after:,} of '
+              f'{n_loans_before:,} loans ({n_loans_before - n_loans_after:,} dropped)',
+              flush=True)
+        if df.empty:
+            return None
+
     # ── Calendar cutoff filter — must use YYYYMM, not raw MMYYYY integer ──────
     df['monthly_reporting_period'] = pd.to_numeric(
         df['monthly_reporting_period'], errors='coerce'
@@ -240,6 +278,46 @@ def load_vintage_filtered(
     # This fixes the sort bug in prepare_sequences.py where cross-year ordering
     # was wrong (Dec-2018 sorted before Jan-2019 as integers 122018 > 12019).
     df = df.sort_values(['loan_id', 'yyyymm']).reset_index(drop=True)
+
+    # ── Post-modification drop — must run before loan_age/window/sequence ───
+    # Advisor's Sep 29 decision: drop every loan-month from the first
+    # modification_flag=='Y' month onward, per loan, PERMANENTLY -- this is
+    # a DESIGN CHOICE ("drop all post-modification data"), not a claim that
+    # modification_flag itself never reverts. The flag WAS found non-monotone
+    # in 2002Q1 (142 loans show a later N after an earlier Y -- see
+    # scripts/diag/verify_term_mod_filters.py's decisive decode, 2026-10-01,
+    # and prepare_sequences_multiobs_zbc.py for the full note); the sticky
+    # "first Y onward" rule below still drops such a loan from its first Y
+    # forward regardless of any later reversion. CONSEQUENCE: a loan that is
+    # modified and later terminates has its termination row dropped, so it
+    # becomes CENSORED at its last pre-mod month -- UNLESS its very first
+    # kept row is already a Y month, in which case every row is dropped and
+    # the loan vanishes from this vintage's panel entirely.
+    mod_y = df['modification_flag'] == 'Y'
+    first_y_month = (df.loc[mod_y].groupby('loan_id')['yyyymm'].min())
+    df['_first_y_month'] = df['loan_id'].map(first_y_month)
+    on_or_after_first_y = df['_first_y_month'].notna() & (df['yyyymm'] >= df['_first_y_month'])
+    # Reversion diagnostic -- NOT an assertion, see prepare_sequences_
+    # multiobs_zbc.py for rationale. Reported, does not change the drop.
+    violation = on_or_after_first_y & (df['modification_flag'] == 'N')
+    n_violations = int(violation.sum())
+    if n_violations > 0:
+        n_viol_loans = int(df.loc[violation, 'loan_id'].nunique())
+        first_reversion_month = df.loc[violation].groupby('loan_id')['yyyymm'].min()
+        hist = first_reversion_month.value_counts().sort_index()
+        print(f'    modification_flag reversion diagnostic: {n_viol_loans:,} loans '
+              f'({n_violations:,} loan-months) show an N after a prior Y -- '
+              f'dropped anyway under the sticky rule. First-reversion-month '
+              f'histogram:', flush=True)
+        for ym, cnt in hist.items():
+            print(f'      {int(ym)}: {int(cnt):,} loans', flush=True)
+    n_loans_dropped_any = int(df.loc[on_or_after_first_y, 'loan_id'].nunique())
+    n_rows_dropped = int(on_or_after_first_y.sum())
+    df = df[~on_or_after_first_y].drop(columns=['_first_y_month']).copy()
+    print(f'    post-mod drop: {n_rows_dropped:,} loan-months dropped across '
+          f'{n_loans_dropped_any:,} ever-modified loans', flush=True)
+    if df.empty:
+        return None
 
     # Optional loan subsampling (pass 1 discovery only)
     if keep_ids is None and sample_frac < 1.0:

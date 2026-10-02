@@ -64,6 +64,12 @@ CKPT = os.path.join(OUT, 'prepay_event_counts_ckpt.pkl')
 FINAL = os.path.join(OUT, 'prepay_event_counts_pre2013.csv')
 
 COL_LOAN, COL_RATE, COL_ORIG, COL_ZBC = 1, 7, 13, 43
+# original_loan_term (awk $13 -> usecols 12) and modification_flag
+# (awk $42 -> usecols 41, HARDCODED position -- see
+# prepare_sequences_multiobs_zbc.py's _COL_MAP comment for why a name
+# lookup would drift here; this script has no name list, so the literal
+# index is the only form, same as COL_ORIG/COL_ZBC above).
+COL_TERM, COL_MOD = 12, 41
 PREPAID_CODE = 1.0
 CHUNK = 1_000_000
 
@@ -81,15 +87,40 @@ def mmyyyy_to_quarter(v):
 
 
 def scan_file(path):
-    """Per-loan vintage, coupon, and zero-balance code for one quarter file."""
+    """Per-loan vintage, coupon, and zero-balance code for one quarter file.
+
+    30-YEAR FILTER + POST-MOD: a loan with ANY observed original_loan_term
+    != 360 within this file -- including a blank/unparseable (NaN) term on
+    any row -- is dropped from the returned dicts entirely (advisor's Sep 29
+    decision; was first-observed-only until 2026-10-01, when 2 loans in
+    2002Q1 were found to carry more than one distinct term value across
+    their own rows -- any-observed is now used everywhere, matching the
+    _zbc readers' loan-level filter). A loan with any observed
+    modification_flag=='Y' has its zbc entry removed (CONSEQUENCE: build_
+    cell_grid_sample_pre2013.py's `zbc.get(lid)` then returns None for it,
+    i.e. treated as censored/no event for sampling purposes -- the same
+    "termination row dropped -> censored" consequence as the main readers,
+    collapsed to a single loan-level flag since this reader only tracks
+    loan-level vintage/coupon/zbc, not a full per-row panel). This loan-
+    level "ever Y -> censor" rule does NOT depend on modification_flag
+    being monotone (no Y->N reversion) -- it does not need chronological
+    order at all, since any observed Y anywhere in the file censors the
+    loan. That said, monotonicity is NOT a safe assumption: it was found
+    FALSE for 2002Q1 (142 loans revert Y->N -- see scripts/diag/
+    verify_term_mod_filters.py's decisive decode, 2026-10-01, and
+    prepare_sequences_multiobs_zbc.py, whose per-row panel reader reports
+    this as a diagnostic rather than asserting it).
+    """
     vint, cpn, zbc = {}, {}, {}
+    bad_term_loans, ever_y = set(), set()
     for chunk in pd.read_csv(
             path, sep='|', header=None,
-            usecols=[COL_LOAN, COL_RATE, COL_ORIG, COL_ZBC],
-            names=['loan_id', 'rate', 'orig', 'zbc'],
+            usecols=[COL_LOAN, COL_RATE, COL_ORIG, COL_ZBC, COL_TERM, COL_MOD],
+            names=['loan_id', 'rate', 'orig', 'zbc', 'term', 'mod'],
             chunksize=CHUNK, low_memory=False):
         chunk['rate'] = pd.to_numeric(chunk['rate'], errors='coerce')
         chunk['zbc'] = pd.to_numeric(chunk['zbc'], errors='coerce')
+        chunk['term'] = pd.to_numeric(chunk['term'], errors='coerce')
 
         first = chunk.dropna(subset=['loan_id', 'rate', 'orig'])
         first = first.drop_duplicates('loan_id')
@@ -106,6 +137,33 @@ def scan_file(path):
         for lid, z in zip(term['loan_id'], term['zbc']):
             if lid not in zbc:
                 zbc[lid] = float(z)
+
+        # ANY row with term != 360 disqualifies the loan -- including blank/
+        # unparseable term (NaN != 360 is True elementwise), not just a
+        # dropna'd subset. This is a loan-level filter: no partial keeping.
+        bad_rows = chunk.loc[chunk['term'] != 360]
+        bad_term_loans.update(bad_rows['loan_id'].tolist())
+
+        y_rows = chunk.loc[chunk['mod'] == 'Y']
+        ever_y.update(y_rows['loan_id'].tolist())
+
+    n_vint_before = len(vint)
+    n_dropped_from_vint = len(bad_term_loans & vint.keys())
+    for lid in bad_term_loans:
+        vint.pop(lid, None)
+        cpn.pop(lid, None)
+        zbc.pop(lid, None)
+
+    n_censored = 0
+    for lid in ever_y:
+        if lid in zbc:
+            del zbc[lid]
+            n_censored += 1
+
+    print(f'    {os.path.basename(path)}: term filter dropped '
+          f'{n_dropped_from_vint:,} of {n_vint_before:,} loans; post-mod censored '
+          f'{n_censored:,} zbc entries of {len(ever_y):,} ever-modified loans',
+          flush=True)
     return vint, cpn, zbc
 
 

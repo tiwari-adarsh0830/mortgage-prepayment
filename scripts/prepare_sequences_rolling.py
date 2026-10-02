@@ -1,6 +1,13 @@
 """
 prepare_sequences_rolling.py — Calendar-time truncated sequence builder.
 
+SUPERSEDED by prepare_sequences_rolling_zbc.py. This module's own
+load_vintage_filtered() applies NEITHER the 30-year (original_loan_term==360)
+filter NOR the post-modification drop (advisor's Sep 29 decisions) -- it
+predates both. Left unpatched and in place, not deleted; confirm nothing
+still depends on it before using its output for anything downstream of that
+decision.
+
 Builds train/test sequences for all loans with activity through Dec CUTOFF_YEAR.
 Key differences from prepare_sequences.py:
 

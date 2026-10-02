@@ -38,6 +38,8 @@ COL_LOAN  = 1
 COL_MONTH = 2
 COL_RATE  = 7
 COL_UPB   = 11
+COL_TERM  = 12   # original_loan_term, awk $13
+COL_MOD   = 41   # modification_flag, awk $42 (HARDCODED, no name list here)
 GFEE      = 0.50
 CHUNK     = 2_000_000
 CKPT_P0   = os.path.join(OUT, "realized_v6_pass0_checkpoint.pkl")
@@ -57,11 +59,38 @@ def parse_date_yyyymm(v):
     return pd.Timestamp(year=yyyy, month=mm, day=1)
 
 
-def pass0_global_last(files):
+def pass0_global_last(files, term_filter=360):
     """Per loan: note rate + global last appearance (YYYYMM) and UPB there.
-    Prepaid iff UPB==0 at the true (YYYYMM-ordered) last row."""
+    Prepaid iff UPB==0 at the true (YYYYMM-ordered) last row.
+
+    30-YEAR FILTER + POST-MOD (advisor's Sep 29 decision), applied here in
+    Pass 0 since it is the only pass that sees every row per loan:
+      - term_filter: a loan with ANY observed original_loan_term !=
+        term_filter -- including a blank/unparseable (NaN) term on any row
+        -- is dropped from rate_map entirely (Pass 1's existing
+        dropna(subset=['rate']) then excludes it for free). LOAN-level, not
+        row-level. (Fixed 2026-10-01: previously checked only the
+        first-observed term per loan, which silently kept mixed-term loans
+        on whichever term value appeared first in the file and never
+        flagged blank-term rows at all.) Pass None to disable.
+      - post-mod: an ever-modified loan's prepay_month is unconditionally
+        forced to -1 (censored) regardless of what its last-row UPB said --
+        same sticky "drop all post-modification data" design choice as the
+        _zbc readers (see prepare_sequences_multiobs_zbc.py). Pass 1 then
+        separately caps that loan's at-risk window at `mo < fm`, fm being
+        its first-Y month -- well-defined from a plain min() over Y rows,
+        regardless of whether the flag later reverts to N. Monotonicity of
+        modification_flag is NOT required by either step and is NOT a safe
+        assumption to make elsewhere: it was found FALSE for 2002Q1 (142
+        loans revert Y->N -- see scripts/diag/verify_term_mod_filters.py's
+        decisive decode, 2026-10-01). CONSEQUENCE: such a loan no longer
+        counts as a realized payoff in Pass 1's numerator, even if its true
+        last row shows UPB==0.
+    """
     print("Pass 0: global last appearance per loan (YYYYMM-ordered)...", flush=True)
     global_last = {}   # loan_id -> (last_ym, last_upb, rate)
+    bad_term_loans = set()  # loan_id -> has ANY row with term != term_filter (incl. blank/NaN)
+    first_mod_ym = {}    # loan_id -> earliest YYYYMM with modification_flag=='Y'
 
     for fi, f in enumerate(files):
         fname = os.path.basename(f)
@@ -69,12 +98,13 @@ def pass0_global_last(files):
         n_rows = 0
         for chunk in pd.read_csv(
                 f, sep='|', header=None,
-                usecols=[COL_LOAN, COL_MONTH, COL_RATE, COL_UPB],
-                names=['loan_id', 'month', 'rate', 'upb'],
+                usecols=[COL_LOAN, COL_MONTH, COL_RATE, COL_UPB, COL_TERM, COL_MOD],
+                names=['loan_id', 'month', 'rate', 'upb', 'term', 'mod'],
                 chunksize=CHUNK, engine='c', dtype=str):
             chunk['month'] = pd.to_numeric(chunk['month'], errors='coerce')
             chunk['rate']  = pd.to_numeric(chunk['rate'],  errors='coerce')
             chunk['upb']   = pd.to_numeric(chunk['upb'],   errors='coerce')
+            chunk['term']  = pd.to_numeric(chunk['term'],  errors='coerce')
             chunk = chunk.dropna(subset=['loan_id', 'month', 'rate'])
             chunk['month'] = chunk['month'].astype(np.int64)
             chunk['ym']    = mmyyyy_to_yyyymm(chunk['month'].values)   # correct order
@@ -86,6 +116,21 @@ def pass0_global_last(files):
                 ym = int(row['ym']); u = row['upb']; r = row['rate']
                 if lid not in global_last or ym > global_last[lid][0]:
                     global_last[lid] = (ym, float(u) if not np.isnan(u) else np.nan, float(r))
+
+            # ANY row with term != term_filter disqualifies the loan --
+            # including blank/unparseable term (NaN != x is True elementwise)
+            # -- not just a dropna'd subset. Loan-level, not row-level.
+            if term_filter is not None:
+                bad_rows = chunk.loc[chunk['term'] != term_filter]
+                bad_term_loans.update(bad_rows['loan_id'].tolist())
+
+            y_rows = chunk.loc[chunk['mod'] == 'Y']
+            if not y_rows.empty:
+                y_min = y_rows.groupby('loan_id')['ym'].min()
+                for lid, ym in y_min.items():
+                    ym = int(ym)
+                    if lid not in first_mod_ym or ym < first_mod_ym[lid]:
+                        first_mod_ym[lid] = ym
         print(f"{n_rows:,} rows", flush=True)
 
     prepay_month = {}; rate_map = {}; n_prepaid = 0
@@ -98,10 +143,28 @@ def pass0_global_last(files):
             prepay_month[lid] = -1
     print(f"\nPass 0 done: {len(global_last):,} unique loans, "
           f"{n_prepaid:,} prepaid ({100*n_prepaid/max(len(global_last),1):.2f}%)", flush=True)
-    return prepay_month, rate_map
+
+    if term_filter is not None:
+        n_before = len(rate_map)
+        n_dropped = len(bad_term_loans & rate_map.keys())
+        for lid in bad_term_loans:
+            rate_map.pop(lid, None)
+            prepay_month.pop(lid, None)
+        print(f"  term filter (=={term_filter}, loan-level): dropped {n_dropped:,} "
+              f"of {n_before:,} loans", flush=True)
+
+    n_censored = 0
+    for lid in first_mod_ym:
+        if prepay_month.get(lid, -1) != -1:
+            prepay_month[lid] = -1
+            n_censored += 1
+    print(f"  post-mod: {len(first_mod_ym):,} ever-modified loans, "
+          f"{n_censored:,} had their terminal payoff censored", flush=True)
+
+    return prepay_month, rate_map, first_mod_ym
 
 
-def pass1_aggregate(files, prepay_month, rate_map, atrisk, prepays):
+def pass1_aggregate(files, prepay_month, rate_map, first_mod_ym, atrisk, prepays):
     """Count at-risk and new prepayments per (coupon_bucket, YYYYMM)."""
     print("\nPass 1: aggregating at-risk and prepayments...", flush=True)
     for fi, f in enumerate(files):
@@ -121,12 +184,18 @@ def pass1_aggregate(files, prepay_month, rate_map, atrisk, prepays):
             chunk = chunk.dropna(subset=['rate'])
             chunk['cb']  = (np.round(chunk['rate'] * 2) / 2.0).astype(np.float32)
             chunk['pm']  = chunk['loan_id'].map(prepay_month).fillna(-1).astype(np.int64)
+            chunk['fm']  = chunk['loan_id'].map(first_mod_ym).fillna(np.inf)
 
             mo = chunk['ym'].values        # compare in YYYYMM
             pm = chunk['pm'].values        # YYYYMM (or -1)
             cb = chunk['cb'].values
+            fm = chunk['fm'].values        # first post-mod YYYYMM (or +inf)
 
-            ar = (pm == -1) | (mo <= pm)   # at risk through payoff month
+            # Post-mod months are dropped entirely, not just unpaid: an
+            # ever-modified loan is forced to pm==-1 above, so without the
+            # `mo < fm` term it would stay at-risk forever, including every
+            # month from its first modification onward.
+            ar = ((pm == -1) | (mo <= pm)) & (mo < fm)   # at risk through payoff month
             pp = (mo == pm) & (pm != -1)   # new prepayment this month
 
             if ar.any():
@@ -146,17 +215,21 @@ def main():
     atrisk  = defaultdict(int)
     prepays = defaultdict(int)
 
+    # NOTE: CKPT_P0's pickle format changed from a 2-tuple to a 3-tuple
+    # (added first_mod_ym) when the 30-year filter / post-mod drop landed.
+    # A pre-existing checkpoint from before that change will fail to
+    # unpack here -- delete it and re-run Pass 0, do not catch/ignore.
     if os.path.exists(CKPT_P0):
         print(f"Pass 0: SKIPPED — loading checkpoint from {CKPT_P0}", flush=True)
         with open(CKPT_P0, "rb") as fh:
-            prepay_month, rate_map = pickle.load(fh)
+            prepay_month, rate_map, first_mod_ym = pickle.load(fh)
         print(f"  {len(rate_map):,} loans, {sum(v>0 for v in prepay_month.values()):,} prepaid", flush=True)
     else:
-        prepay_month, rate_map = pass0_global_last(files)
+        prepay_month, rate_map, first_mod_ym = pass0_global_last(files)
         with open(CKPT_P0, "wb") as fh:
-            pickle.dump((prepay_month, rate_map), fh)
+            pickle.dump((prepay_month, rate_map, first_mod_ym), fh)
         print(f"Pass 0 checkpoint saved: {CKPT_P0}", flush=True)
-    pass1_aggregate(files, prepay_month, rate_map, atrisk, prepays)
+    pass1_aggregate(files, prepay_month, rate_map, first_mod_ym, atrisk, prepays)
 
     print("\nBuilding output...", flush=True)
     rows = []
