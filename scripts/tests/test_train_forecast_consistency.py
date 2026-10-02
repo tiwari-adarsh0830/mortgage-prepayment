@@ -74,7 +74,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 from prepare_sequences_multiobs_zbc import (
     load_pmms, load_zhvi, load_vintage_filtered, build_sequences_multiobs,
-    _prepare_panel, dec_yyyymm, FEATURE_COLS,
+    _prepare_panel, dec_yyyymm, FEATURE_COLS, PRE2013_CELL_SAMPLE_PATH,
 )
 from score_multiobs_dec_window import (
     build_combined_pass, build_dec_window_obs, load_checkpoint, score,
@@ -107,6 +107,16 @@ CASES = [
         map_era='prefix',
         include_pre2013=False,
         has_trail_control=True,
+    ),
+    dict(
+        name='cutoff_2002_seed42_30y',
+        cutoff_year=2002,
+        seq_dir=os.path.join(BASE, 'data/sequences_rolling/cutoff_2002_zbc_multiobs_f0.2_h1_hist_30y'),
+        ckpt_path=os.path.join(BASE, 'outputs/rolling/cutoff_2002_multiobs_k5_h1_ipw_cutoff_2002_30y_s42/hazard_best.pt'),
+        map_era='fixed',
+        include_pre2013=True,
+        has_trail_control=False,  # TRAIL_SEQ_DIR is a cutoff_2020-only build
+        cell_sample_path=os.path.join(BASE, 'outputs/pre2013_cell_sample_30y_loans.csv'),
     ),
 ]
 
@@ -171,7 +181,8 @@ def check1_positive(case):
           f'({len(train_split_ids):,} loan_ids)...', flush=True)
     df = load_vintage_filtered(vintage, pmms_rates, zhvi_df, cutoff_ym,
                                 keep_ids=set(train_split_ids.tolist()),
-                                loan_purpose_map=lp_map, property_type_map=pt_map)
+                                loan_purpose_map=lp_map, property_type_map=pt_map,
+                                cell_sample_path=case.get('cell_sample_path', PRE2013_CELL_SAMPLE_PATH))
     assert df is not None and not df.empty, f'{vintage} produced no rows for this train split -- STOP.'
 
     vintage_loan_ids = set(df['loan_id'].unique().tolist())
@@ -306,7 +317,8 @@ def _load_test_population(case):
     test_ids = np.load(os.path.join(seq_dir, 'test_loan_ids_split.npy'), allow_pickle=True)
     test_ids_set = set(test_ids.tolist())
     full_df = build_combined_pass(case['cutoff_year'], case['include_pre2013'], case['map_era'],
-                                   test_ids_set, CACHE_DIR)
+                                   test_ids_set, CACHE_DIR,
+                                   cell_sample_path=case.get('cell_sample_path', PRE2013_CELL_SAMPLE_PATH))
     return scaler, full_df
 
 
@@ -385,9 +397,9 @@ def check2_negative_frozen(case, full_df, scaler):
         f'(max abs diff over all: {float(per_obs_max_diff.max()):.3e})')
 
 
-def run():
+def run(cases):
     overall_t0 = time.time()
-    for case in CASES:
+    for case in cases:
         pos_result = check1_positive(case)
         check1_negative_trail(case, pos_result)
         scaler, full_df = _load_test_population(case)
@@ -399,8 +411,21 @@ def run():
     if FAILURES:
         print(f'{len(FAILURES)} FAILURE(S): {FAILURES}')
         sys.exit(1)
-    print(f'All checks passed ({len(CASES)} cases).')
+    print(f'All checks passed ({len(cases)} cases).')
 
 
 if __name__ == '__main__':
-    run()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--case', type=str, default=None,
+                     help="run only the named CASES entry (see CASES[*]['name']); "
+                          'default runs the full standing-test suite (all cases).')
+    args = ap.parse_args()
+    if args.case is None:
+        run(CASES)
+    else:
+        matches = [c for c in CASES if c['name'] == args.case]
+        if not matches:
+            print(f'no case named {args.case!r}; known: {[c["name"] for c in CASES]}')
+            sys.exit(1)
+        run(matches)
