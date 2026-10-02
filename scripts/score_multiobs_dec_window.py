@@ -69,7 +69,7 @@ from prepare_sequences_multiobs_zbc import (
     load_vintage_filtered, load_pmms, load_zhvi, _prepare_panel,
     _eligible_candidates, build_sequences_multiobs, PRE2013_VINTAGES,
     _MODERN_VINTAGES, _vintage_quarter_start_yyyymm, dec_yyyymm, BASE,
-    FEATURE_COLS, N_FEATURES, MAX_SEQ_LEN,
+    FEATURE_COLS, N_FEATURES, MAX_SEQ_LEN, PRE2013_CELL_SAMPLE_PATH,
 )
 from train_hazard_multiobs import PrepaymentTransformer
 
@@ -128,7 +128,8 @@ def _atomic_pickle_write(obj, path: str):
 
 def build_combined_pass(cutoff_year: int, include_pre2013: bool, map_era: str,
                          test_ids_set: set, cache_dir: str,
-                         extra_keep_cols: list[str] | None = None):
+                         extra_keep_cols: list[str] | None = None,
+                         cell_sample_path: str = PRE2013_CELL_SAMPLE_PATH):
     """ONE pass over the relevant vintage files, truncated at Dec of
     cutoff_year+1 (not cutoff_year -- see module docstring). Returns the
     concatenated, feature-complete df restricted to test_ids_set.
@@ -152,6 +153,15 @@ def build_combined_pass(cutoff_year: int, include_pre2013: bool, map_era: str,
          fully-resumed rerun (e.g. a different seed/checkpoint scoring the
          same population) skips straight past both the raw scan AND the
          per-vintage concat.
+
+    cell_sample_path: threaded straight to load_vintage_filtered's
+    cell_sample_path (see its docstring) -- gates which pre-2013 loans are
+    even candidates before intersecting with test_ids_set. Default is the
+    original pre-30y-filter sample, for backward compatibility; pass e.g.
+    outputs/pre2013_cell_sample_30y_loans.csv when test_ids_set itself was
+    drawn from that sample, so the keep_ids intersection in
+    load_vintage_filtered doesn't silently drop loans that are in
+    test_ids_set but not in the (wrong) default cell sample.
     """
     _extra_keep_cols = extra_keep_cols or ['current_actual_upb']
     # Fold the extra-cols schema into the cache path -- a different schema is
@@ -192,7 +202,8 @@ def build_combined_pass(cutoff_year: int, include_pre2013: bool, map_era: str,
         else:
             df = load_vintage_filtered(v, pmms_rates, zhvi_df, trunc_ym, keep_ids=test_ids_set,
                                         loan_purpose_map=lp_map, property_type_map=pt_map,
-                                        extra_keep_cols=_extra_keep_cols)
+                                        extra_keep_cols=_extra_keep_cols,
+                                        cell_sample_path=cell_sample_path)
             _atomic_pickle_write(df, v_path)
             print(f'  {v}: {"empty" if df is None or df.empty else len(df)} rows '
                   f'(written {v_path})', flush=True)

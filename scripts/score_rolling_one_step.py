@@ -61,7 +61,7 @@ from score_multiobs_dec_window import (
 )
 from prepare_sequences_multiobs_zbc import (
     _prepare_panel, _eligible_candidates, build_sequences_multiobs, dec_yyyymm,
-    FEATURE_COLS,
+    FEATURE_COLS, PRE2013_CELL_SAMPLE_PATH,
 )
 
 H = 1
@@ -212,6 +212,14 @@ def main():
     ap.add_argument('--out_dir', type=str, required=True)
     ap.add_argument('--cache_dir', type=str, default=None)
     ap.add_argument('--batch_size', type=int, default=8192)
+    ap.add_argument('--cell_sample', type=str, default=PRE2013_CELL_SAMPLE_PATH,
+                     help='loan_id CSV gating the historical-era (PRE2013_VINTAGES) population, '
+                          'threaded to build_combined_pass the same way '
+                          'prepare_sequences_multiobs_zbc.py --cell_sample is. Default is the '
+                          'original pre-30y-filter sample, for backward compatibility; pass e.g. '
+                          'outputs/pre2013_cell_sample_30y_loans.csv when --seq_dir is a _30y build, '
+                          'so test_ids_set (drawn from that build) is not silently intersected '
+                          'against the wrong cell sample.')
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
     cache_dir = args.cache_dir or os.path.join(BASE, 'outputs/rolling/_dec_window_raw_cache')
@@ -222,7 +230,7 @@ def main():
     test_ids_set = set(test_ids.tolist())
 
     full_df = build_combined_pass(args.cutoff_year, args.include_pre2013, args.map_era,
-                                   test_ids_set, cache_dir)
+                                   test_ids_set, cache_dir, cell_sample_path=args.cell_sample)
     elig = build_rolling_eligible(full_df)
 
     model = load_checkpoint(args.ckpt_path)
