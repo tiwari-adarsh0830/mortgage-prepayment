@@ -218,11 +218,24 @@ def main():
                               'way prepare_sequences_multiobs_zbc.py --cell_sample is. '
                               'Default is the original pre-30y-filter sample, for '
                               'backward compatibility.')
+    parser.add_argument('--include_pre2013', action='store_true',
+                         help='Include historical-era (PRE2013_VINTAGES) files, gated to '
+                              '--cell_sample, same flag name/semantics as '
+                              'prepare_sequences_multiobs_zbc.py --include_pre2013. '
+                              'Default off -- m.ALL_VINTAGES is modern-only, so without '
+                              'this flag a cutoff_year whose Dec cutoff predates every '
+                              'modern vintage (e.g. 2002) scans files that are all empty '
+                              'after the cutoff filter, producing an empty census.')
+    parser.add_argument('--out_tag', type=str, default='',
+                         help='Suffix appended to the output json/csv filenames and the '
+                              'checkpoint dir (e.g. "_30y"), so a rerun under a different '
+                              '--cell_sample does not collide with or overwrite a '
+                              'previous cutoff_year run.')
     args = parser.parse_args()
 
     cutoff_ym = m.dec_yyyymm(args.cutoff_year)
     ckpt_dir = os.path.join(BASE, 'outputs', 'census_panel_baseline_checkpoints',
-                             f'cutoff_{args.cutoff_year}')
+                             f'cutoff_{args.cutoff_year}{args.out_tag}')
     os.makedirs(ckpt_dir, exist_ok=True)
 
     print(f'Census panel baseline | cutoff = Dec {args.cutoff_year} (YYYYMM={cutoff_ym}) | '
@@ -232,6 +245,16 @@ def main():
     pmms_rates = m.load_pmms()
     zhvi_df    = m.load_zhvi()
 
+    # Vintage set: modern-only by default (byte-for-byte unaffected), same as
+    # prepare_sequences_multiobs_zbc.py's ALL_VINTAGES rebind. Then filtered to
+    # RELEVANT_VINTAGES (multiobs_zbc.py:1141-1143's logic, reused verbatim via
+    # m._vintage_quarter_start_yyyymm) so a cutoff whose Dec predates a vintage's
+    # first possible row never opens that file only to find it empty.
+    vintages = (m.PRE2013_VINTAGES + m.ALL_VINTAGES) if args.include_pre2013 else m.ALL_VINTAGES
+    relevant_vintages = [v for v in vintages if m._vintage_quarter_start_yyyymm(v) <= cutoff_ym]
+    print(f'Relevant vintages: {len(relevant_vintages)}/{len(vintages)} '
+          f'(cutoff_ym={cutoff_ym}, include_pre2013={args.include_pre2013})', flush=True)
+
     per_loan_n_eligible_parts = []
     per_loan_terminal_parts   = []
     eligible_months_total = pd.Series(dtype=np.int64)
@@ -239,7 +262,7 @@ def main():
     n_prepaid_loans_total   = 0
     n_divergent_total       = 0
 
-    for v in m.ALL_VINTAGES:
+    for v in relevant_vintages:
         result = process_vintage(v, cutoff_ym, pmms_rates, zhvi_df, ckpt_dir, args.cell_sample)
         if result is None:
             continue
@@ -283,7 +306,7 @@ def main():
 
     out_dir = os.path.join(BASE, 'outputs')
     os.makedirs(out_dir, exist_ok=True)
-    json_path = os.path.join(out_dir, f'census_panel_baseline_cutoff_{args.cutoff_year}.json')
+    json_path = os.path.join(out_dir, f'census_panel_baseline_cutoff_{args.cutoff_year}{args.out_tag}.json')
     with open(json_path, 'w') as f:
         json.dump(out, f, indent=2, default=str)
     print(f'Wrote {json_path}', flush=True)
@@ -308,7 +331,7 @@ def main():
             'terminal_censored_count':     stats['terminal_month']['censored_survivor']['count'],
             'terminal_censored_share':     stats['terminal_month']['censored_survivor']['share'],
         })
-    csv_path = os.path.join(out_dir, f'census_panel_baseline_cutoff_{args.cutoff_year}.csv')
+    csv_path = os.path.join(out_dir, f'census_panel_baseline_cutoff_{args.cutoff_year}{args.out_tag}.csv')
     pd.DataFrame(rows).to_csv(csv_path, index=False)
     print(f'Wrote {csv_path}', flush=True)
 
