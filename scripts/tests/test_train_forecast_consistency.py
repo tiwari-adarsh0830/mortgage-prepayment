@@ -118,6 +118,15 @@ CASES = [
         has_trail_control=False,  # TRAIL_SEQ_DIR is a cutoff_2020-only build
         cell_sample_path=os.path.join(BASE, 'outputs/pre2013_cell_sample_30y_loans.csv'),
     ),
+    dict(
+        name='cutoff_2020_seed42_30y',
+        cutoff_year=2020,
+        seq_dir=os.path.join(BASE, 'data/sequences_rolling/cutoff_2020_zbc_multiobs_f0.2_h1_30y'),
+        ckpt_path=os.path.join(BASE, 'outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw_cutoff_2020_30y_s42/hazard_best.pt'),
+        map_era='fixed',
+        include_pre2013=False,
+        has_trail_control=True,  # TRAIL_SEQ_DIR is cutoff_2020 -- applies here (unlike the cutoff_2002 cases)
+    ),
 ]
 
 FAILURES = []
