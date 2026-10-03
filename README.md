@@ -1,57 +1,62 @@
 ## Current state
-*(Oct 2, 2026 — rewritten each session, not appended to.)*
+*(Oct 3, 2026 — rewritten each session, not appended to.)*
 
 **Advisor's Oct 1 clarification.** "Rebuild the 2021 cutoff" means the existing `cutoff_2020`
 design (train ≤ Dec 2020, forecast CY2021) — not a new train-≤-Dec-2021 cutoff. No new
-`cutoff_2021` build is needed; `cutoff_2020` is rebuilt under the same 30-year/post-mod rules as
-`cutoff_2002` and that *is* the "2021" rebuild.
+`cutoff_2021` build is needed; `cutoff_2020` rebuilt under the same 30-year/post-mod rules as
+`cutoff_2002` *is* the "2021" rebuild, and it's now done (below).
 
-**Valid build: `cutoff_2002` `_30y`.** `data/sequences_rolling/cutoff_2002_zbc_multiobs_f0.2_h1_hist_30y`
-— 360-term-only, post-mod rows dropped, built from the `_30y` cell-grid sample (1,482,004 loans).
-277,042 loans through the loader; 269,536 in train+test; 833,720 train / 208,187 test observations.
-Five checkpoints, `outputs/rolling/cutoff_2002_multiobs_k5_h1_ipw_cutoff_2002_30y_s{42,7,123,1001,2026}/`,
-AUC 0.7744–0.7759 (`hazard_best.pt` — **use `hazard_best.pt`, not `hazard_final.pt`**, see mistakes
-log). Gate (`check_build_30y.py`) and census check (`census_check_2002_30y.py`) both pass. Standing
-consistency test passes (below).
+**Valid builds, both cutoffs rebuilt 30-year/post-mod.**
+- `cutoff_2002` `_30y`: `data/sequences_rolling/cutoff_2002_zbc_multiobs_f0.2_h1_hist_30y` —
+  277,042 loans through the loader, 269,536 in train+test, 833,720/208,187 train/test obs. Five
+  checkpoints `outputs/rolling/cutoff_2002_multiobs_k5_h1_ipw_cutoff_2002_30y_s{42,7,123,1001,2026}/`,
+  AUC 0.7744–0.7759.
+- `cutoff_2020` `_30y`: `data/sequences_rolling/cutoff_2020_zbc_multiobs_f0.2_h1_30y` —
+  1,412,264 loans through the loader, 1,378,753 in train+test, 8,247,014/2,064,977 train/test obs.
+  Five checkpoints `outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw_cutoff_2020_30y_s{42,7,123,1001,2026}/`,
+  AUC 0.7245–0.7268.
 
-**Superseded: `cutoff_2002` `_hist` (no `_30y` suffix).** The old 5-seed checkpoint set
-(`cutoff_2002_multiobs_k5_h1_ipw_f0.2_L33_hist{,_seed7,_seed123,_seed1001,_seed2026}`) predates the
-30-year filter and post-mod drop — includes non-360 loans, no post-mod drop. Kept for the
-matched-intersection model-vs-population comparison (below); not used for any new forecast number.
+Both: **use `hazard_best.pt`, not `hazard_final.pt`** (see mistakes log). Both gates
+(`check_build_30y.py`, `check_build_2020_30y.py`) and both census checks (`census_check_2002_30y.py`,
+`census_check_2020_30y.py`) pass. Standing consistency test passes on both (below).
 
-**`cutoff_2020` control: still pre-fix and pre-30y. Rebuild pending, chain launched this session**
-(§6 below) — `cutoff_2020_multiobs_k5_h1_ipw_f0.2_L33` (seeds 42/7/123, pre-CP/U-fix) and
-`..._GOLDEN_BACKUP`/`..._goldenbackup` (seeds 1001/2026 retrained post-fix) remain the only trained
-`cutoff_2020` checkpoints until the `_30y` rebuild finishes. No `cutoff_2020` `_30y` build or
-checkpoint exists yet (confirmed by directory listing this session).
+**Superseded: both cutoffs' pre-rebuild checkpoint sets.** `cutoff_2002_multiobs_k5_h1_ipw_f0.2_L33_hist{,_seed7,_seed123,_seed1001,_seed2026}`
+and `cutoff_2020_multiobs_k5_h1_ipw_f0.2_L33{,_seed7,_seed123,_seed1001_goldenbackup,_seed2026_goldenbackup}`
+predate the 30-year filter and post-mod drop — non-360 loans included, no post-mod drop. Kept only
+for the `cutoff_2002` matched-intersection model-vs-population comparison (below); not used for any
+new forecast number.
 
-**Pending, not started this session:** the two-realized-series split (voluntary code-01-30y vs.
-total payoffs, for `realized_cpr_v6.py`); the HARP eligibility feature (fields located, changes
-input dim, cannot share a training run with models that lack it).
+**Pending, not started:** the two-realized-series split (voluntary code-01-30y vs. total payoffs,
+for `realized_cpr_v6.py`); the HARP eligibility feature (fields located, changes input dim, cannot
+share a training run with models that lack it); the recency-weighting form; the advisor reply
+email.
 
-**Standing test.** `scripts/tests/test_train_forecast_consistency.py` — last passed Oct 2, 2026,
-srun (cpu_short, 40G, 30 min), case `cutoff_2002_seed42_30y`, `hazard_best.pt`: Check 1 exact
-(max_seq_diff=0.0, max_pred_diff=0.0, n=2,000), Check 2 window-end verified at 3 sampled months,
-negative control (b) correctly caught the frozen-window bug (27,733/27,733 disagree). Negative
-control (a) is structurally inapplicable to `cutoff_2002` (`TRAIL_SEQ_DIR` is `cutoff_2020`-only).
+**Standing test.** `scripts/tests/test_train_forecast_consistency.py` — both `_30y` cases now pass:
+`cutoff_2002_seed42_30y` (Oct 2, Check 1 exact n=2,000, Check 2 verified at 3 months, negative
+control (b) caught the frozen-window bug — control (a) structurally inapplicable, `TRAIL_SEQ_DIR`
+is `cutoff_2020`-only) and `cutoff_2020_seed42_30y` (Oct 3, same Check 1/2 pattern, **both**
+negative controls fire here since `TRAIL_SEQ_DIR` is a `cutoff_2020` build).
 
-**Settled (Sep 29, still true as stated — see the Oct 1-2 section for the superseding 30-year-only
-number).** The Sep 29 "76.8% of the shortfall" finding is a decomposition of the **all-term**
-model's shortfall (360 pooled 0.9562, non-360 pooled 0.7049, on the old mixed-term build) — it
-remains true as a statement about that model/population pair. It is **not** the same as the
-30-year-only model's number: the `_30y` build's own pooled ratio (pure 360-term population, 323,203
-loan-months, five fresh seeds) is **0.8982**, not 0.9562 — see the Oct 1-2 section for why these
-differ (population and checkpoint both changed, not term filtering alone).
+**Settled.** The Sep 29 "76.8% of the shortfall" and "2021... 37.3% of the shortfall" findings are
+decompositions of the **all-term** models' shortfalls (`cutoff_2002` 360-pooled 0.9562/non-360
+0.7049; `cutoff_2020` control 360-pooled 0.8990/non-360 0.7912) — both remain true as statements
+about those model/population pairs. Neither is the 30-year-only models' own number: `_30y` pooled
+ratios are **0.8982** (`cutoff_2002`, 323,203 loan-months) and **0.8441** (`cutoff_2020`,
+1,723,631 loan-months) — both below their respective all-term 360-only subset figures. The 30-year
+restriction fixed the incentive-measurement mismatch (15-year loans scored against the 30-year
+PMMS) but did not close the predicted-vs-realized gap for either cutoff — see the Oct 2-3 section's
+"what the two rebuilt tests say together."
 
-**Open:** the recency-weighting form; whether the CP/U fix warrants rerunning the `cutoff_2020`
-window-length/no-history/seed-replication results; `cutoff_2011`/`cutoff_2019` not built; the
-matched-intersection model-vs-population result (old ckpt 0.9723 vs new ckpt 0.9341 on a 4,911-loan
-held-out-for-both population) runs in the *opposite* direction from the full-population comparison
-(0.8734 old vs 0.8982 new) — not reconciled this session, reported as-is.
+**Open:** `cutoff_2011`/`cutoff_2019` not built; the matched-intersection model-vs-population
+result for `cutoff_2002` (old ckpt 0.9723 vs new ckpt 0.9341 on a 4,911-loan held-out-for-both
+population) runs opposite the full-population comparison (0.8734 old vs 0.8982 new), within a
+single seed's typical noise band — not reconciled, reported as-is; no equivalent
+matched-intersection decomposition run for `cutoff_2020` (not needed per this session's
+instruction). `cutoff_2002`'s Dec-window in-sample calibration (0.7137) and one-step result (0.8982)
+disagree in direction from `cutoff_2020`'s (Dec-window 1.0303, one-step 0.8441) — not reconciled.
 
-**Next.** Run the `cutoff_2020` `_30y` rebuild chain (census → build → gate → five seeds → one-step
-2021 scoring → ensemble), same pattern as `cutoff_2002`. Then the realized-series split and HARP
-feature.
+**Next.** The two-realized-series split, HARP eligibility feature, recency weighting, advisor
+reply email.
 
 ---
 
@@ -4631,11 +4636,12 @@ monotonicity assumption directly rather than trusting the 2013Q1-sample check fr
 session, and found: 142 of 594,425 30-year loans in 2002Q1 revert `Y`→`N` for at least one month,
 140 of those 142 reverting in the same single reporting month (April 2020); 64 2018Q1 loans revert,
 spread across six months from June 2020 through August 2025. The April-2020 concentration is
-consistent with (not confirmed as) a COVID-era servicer reporting change. D.4: of the loan-months
-the sticky rule drops, a small share are themselves terminations (carry a nonblank
-`zero_balance_code`) — 4,416 of 403,889 in 2002Q1, 2,193 of 195,749 in 2018Q1 (code-01 specifically:
-2,268 and 1,285) — cited here as the user's ~0.75%/0.79%-of-terminations framing of that same D.4
-finding; the exact denominator for that percentage wasn't independently re-derived this session.
+consistent with (not confirmed as) a COVID-era servicer reporting change. D.4
+(`.claude_tmp/verify_term_mod_filters_18992408.log`, not committed): of the term==360 population's
+589,311 total nonblank-zbc terminations (2002Q1) and 278,641 (2018Q1), the loan-months the sticky
+post-mod rule drops that are themselves terminations are **4,416/589,311 = 0.75%** (2002Q1) and
+**2,193/278,641 = 0.79%** (2018Q1) — code-01 specifically: 2,268/577,984 = 0.39% and
+1,285/276,472 = 0.46%.
 
 ### Sampler rerun
 
@@ -4809,3 +4815,262 @@ Artifacts: `scripts/diag/census_check_2002_30y.py`, `scripts/score_matched_inter
 `scripts/score_rolling_one_step.py`/`scripts/score_multiobs_dec_window.py`/`scripts/ensemble_onestep_2002.py`
 (`--cell_sample`/`--run_tag` threaded), `scripts/tests/test_train_forecast_consistency.py` (`_30y`
 case added). Consistency test passed (above) — current as of this section.
+
+---
+
+## cutoff_2020 control rebuilt 30-year: census, build, five seeds, consistency test, 2021 one-step 0.844, in-sample calibration on both cutoffs (Oct 2-3, 2026)
+
+Same chain as `cutoff_2002`'s `_30y` rebuild above, run for the `cutoff_2020` control. All jobs
+submitted with `set -euo pipefail` and `--dependency=afterok` chaining (census → build → gate →
+five trainings → five dec-window scorings → five one-step scorings → ensemble); none polled after
+submission, all verified against real output (not just exit codes) once complete.
+
+### Census: old vs new
+
+| | old 2020 census | new 2020 `_30y` census |
+|---|---|---|
+| n_loans | 18,709,686 | 14,122,835 |
+| n_prepay_events | 7,155,149 | 5,646,103 |
+| non-event loan-months | 585,243,056 | 427,396,836 |
+| raw_prepay_rate | 1.2081% | 1.3038% |
+
+Source: `outputs/census_panel_baseline_cutoff_2020_30y.json` (`overall.*`), job 19067717.
+
+### a_eff/b_eff, 10% subsample divided out
+
+`scripts/diag/census_check_2020_30y.py` (committed `0c709d0`), srun cpu_short 48G. Unlike
+`cutoff_2002`'s cell-grid stratified sample, `cutoff_2020`'s population is a uniform 10% LOAN
+subsample (`load_vintage_filtered`'s `--sample_frac`, applied at Pass-1 discovery, before the
+per-loan fixed_fraction `incl_prob` logic) — so `a_eff`/`b_eff` are divided by
+`r = sample_loans / census_loans` first, the same step used for the original Sep 25 check:
+```
+r = 1,378,753 / 14,122,835 = 0.097626
+a_eff_raw = 564,939 / 5,646,103 = 0.100058
+b_eff_raw = 9,747,052 / 427,396,836 = 0.022806
+a_eff = a_eff_raw / r = 1.024916
+b_eff = b_eff_raw / r = 0.233602
+log(a_eff / b_eff) = 1.478745
+IPW-weighted sample prepay rate = 0.013048   (census raw_prepay_rate = 0.013038)
+```
+Closely matches the Sep 25 pre-fix figures (a_eff=0.9985, b_eff=0.2277, log=1.478) — the 30-year/
+post-mod filtering changed the population substantially (see census table above) but left this
+particular diagnostic's shape essentially unchanged.
+
+### Build: old vs new
+
+| | old build (trail/GOLDEN_BACKUP) | new `_30y` build |
+|---|---|---|
+| total loans | 1,870,909 | 1,412,264 |
+| train / test loans | 1,496,727 / 374,182 | 1,129,811 / 282,453 |
+| train / test obs | 11,230,531 / 2,808,691 | 8,247,014 / 2,064,977 |
+
+Gate (`check_build_2020_30y.py`, job 19067733) **PASSED** on first run (no masked-failure repeat —
+`set -e` present from the start this time). One note from the gate log: `loan_purpose_enc` codes
+are `[0, 1, 2]` in both train and test, not `[0, 1, 2, 3]` — a subset check (`⊆ {0,1,2,3}`) so this
+still passes, it just means no `U`-coded loan survived into this build's sampled population (`U`
+is already known to be rare in the modern era — see the Sep 19 CP/U-fix section above, "U drew zero
+sampled observations").
+
+### Five seeds, old vs new best_auc
+
+| seed | new `_30y` best_auc | old control best_auc |
+|---|---|---|
+| 42 | 0.72565 | 0.71638 |
+| 7 | 0.72678 | 0.71658 |
+| 123 | 0.72450 | 0.71696 |
+| 1001 | 0.72674 | 0.71621 |
+| 2026 | 0.72527 | 0.71641 |
+
+**The populations differ, so this is not a clean model-only comparison**: new checkpoints trained
+on 1,129,811/282,453 train/test loans (360-only, post-mod dropped, fresh 10% subsample); old
+checkpoints trained on 1,496,727/374,182 train/test loans (pre-fix, no term/post-mod filtering).
+Source: `outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw_{cutoff_2020_30y_s{N},f0.2_L33{,_seed7,_seed123,_seed1001_goldenbackup,_seed2026_goldenbackup}}/results.json`, `best_auc`.
+
+### Consistency test — PASSED
+
+`scripts/tests/test_train_forecast_consistency.py --case cutoff_2020_seed42_30y` (case added this
+session), srun cpu_short 40G 30min:
+```
+Check 1 (positive): vintage 2016Q1, n=2,000, max_seq_diff=0.000e+00, max_pred_diff=0.000e+00 (AUC=0.7256461)
+Check 1 (negative control a) vs TRAIL_SEQ_DIR: [PASS (bug caught)] 162/162 shared observations disagree (max abs diff 4.144e+00)
+Check 2 (positive): months 202012/202106/202111, max abs diff 1.17e-07 to 2.28e-07
+Check 2 (negative control b): [PASS (bug caught)] 144,274/144,274 loan-months disagree (max abs diff 1.251e+00)
+Total elapsed: 726.0s. All checks passed (1 cases).
+```
+Unlike the `cutoff_2002` cases, `TRAIL_SEQ_DIR` **is** a `cutoff_2020` build, so negative control
+(a) applies here and fired correctly — both negative controls exercised for this cutoff, not just
+one.
+
+### 2021 one-step result in full
+
+`scripts/score_rolling_one_step.py` per seed (jobs 19067955/57/59/60/61, each depending on its own
+dec-window scoring job 19067928/29/30/31/32 for the Dec-consistency check — no cache-read errors in
+any of the 5 dec-window logs, confirmed by `grep -i "cache hit|traceback|error"`), pooled via
+`scripts/ensemble_onestep_2020_control.py --run_tag _30y` (job 19067981):
+
+**Pooled, n=1,723,631 loan-months:**
+
+| model | weight | predicted monthly | realized monthly | ratio |
+|---|---|---|---|---|
+| ensemble | count | 0.02307 | 0.02733 | **0.8441** |
+| ensemble | upb | 0.02490 | 0.02937 | **0.8479** |
+| seed42 | count | 0.02611 | 0.02733 | 0.9553 |
+| seed7 | count | 0.02221 | 0.02733 | 0.8126 |
+| seed123 | count | 0.02161 | 0.02733 | 0.7907 |
+| seed1001 | count | 0.02026 | 0.02733 | 0.7413 |
+| seed2026 | count | 0.02516 | 0.02733 | 0.9206 |
+
+**Incentive-bin table** (edges `[-6,-4,-3,-2,-1,-0.5,0,0.5,1,1.5,2,3,4,6]`, count-weighted monthly):
+
+| bin | n | predicted | realized |
+|---|---|---|---|
+| (-1.0,-0.5] | 9,886 | 0.003012 | 0.005058 |
+| (-0.5,0.0] | 170,654 | 0.005050 | 0.007102 |
+| (0.0,0.5] | 344,428 | 0.011686 | 0.014781 |
+| (0.5,1.0] | 446,997 | 0.025410 | 0.028622 |
+| (1.0,1.5] | 376,160 | 0.031784 | 0.037311 |
+| (1.5,2.0] | 245,363 | 0.031466 | 0.037145 |
+| (2.0,3.0] | 123,459 | 0.029493 | 0.037049 |
+| (3.0,4.0] | 6,662 | 0.025487 | 0.035425 |
+
+**Month-by-month** (ensemble, annualized):
+
+| ref_month | n | predicted | realized |
+|---|---|---|---|
+| 202012 | 168,035 | 0.3111 | 0.2874 |
+| 202101 | 163,331 | 0.3035 | 0.3146 |
+| 202102 | 158,227 | 0.2853 | 0.3561 |
+| 202103 | 152,485 | 0.2480 | 0.2957 |
+| 202104 | 148,061 | 0.2256 | 0.2647 |
+| 202105 | 144,274 | 0.2249 | 0.2737 |
+| 202106 | 140,428 | 0.2192 | 0.2541 |
+| 202107 | 136,971 | 0.2239 | 0.2843 |
+| 202108 | 133,167 | 0.2315 | 0.2829 |
+| 202109 | 129,502 | 0.2233 | 0.2696 |
+| 202110 | 126,105 | 0.1975 | 0.2507 |
+| 202111 | 123,045 | 0.1840 | 0.2262 |
+
+**Per-coupon with `n_loans`** (distinct loans):
+
+| coupon | n_loans | n_loan_months | predicted | realized | ratio |
+|---|---|---|---|---|---|
+| 1.5 | 14 | 159 | 0.002244 | 0.012579 | 0.1784 |
+| 2.0 | 8,544 | 100,131 | 0.003889 | 0.005683 | 0.6843 |
+| 2.5 | 22,514 | 257,829 | 0.007631 | 0.009948 | 0.7671 |
+| 3.0 | 51,191 | 530,902 | 0.022458 | 0.025555 | 0.8788 |
+| 3.5 | 32,735 | 318,990 | 0.031063 | 0.035694 | 0.8703 |
+| 4.0 | 37,171 | 361,192 | 0.030992 | 0.036820 | 0.8417 |
+| 4.5 | 9,835 | 95,499 | 0.029544 | 0.037445 | 0.7890 |
+| 5.0 | 5,219 | 51,008 | 0.026774 | 0.036288 | 0.7378 |
+| 5.5 | 647 | 6,276 | 0.024333 | 0.037444 | 0.6499 |
+| 6.0 | 165 | 1,645 | 0.023999 | 0.034043 | 0.7050 |
+
+**Dispersion, both restrictions:**
+
+| version | restriction | n_groups | PRIMARY pred disp | PRIMARY real disp | PRIMARY ratio | SECONDARY max | SECONDARY min | pooled_ratio |
+|---|---|---|---|---|---|---|---|---|
+| as saved | n_loan_months≥100 | 10 | 13.844 | 6.590 | 2.101 | 0.879 | 0.178 | 0.8441 (full-pop) |
+| `pooled_comparison()`-style | distinct n_loans≥5000 | **7** | 7.988 | 6.590 | 1.212 | 0.879 | 0.684 | 0.8457 (n=167,209) |
+
+Unlike `cutoff_2002` (2/12 coupons survived the stricter threshold), **7 of 10 coupons clear
+n_loans≥5000 here** (2.0-5.0) — the larger `cutoff_2020` population makes the stricter restriction
+usable.
+
+### Three-way comparison
+
+| population | pooled count ratio |
+|---|---|
+| Sep 26 ensemble, old all-term control (2,397,271 loan-months, 360+non-360 mixed) | **0.8750** |
+| Sep 29 `term_report.py` decomposition, old control's 360-only subset (1,736,441 loan-months) | **0.8990** |
+| `_30y` control, pure 360-term by construction (1,723,631 loan-months) | **0.8441** |
+
+Same pattern as `cutoff_2002`'s three-way comparison (0.8734/0.9562/0.8982): the new 30-year-only
+number sits *below* both old figures here, rather than between them as it did for `cutoff_2002` —
+a different relative position, not a contradiction, since both the population and the checkpoint
+set changed together in the rebuild (not term filtering alone).
+
+### In-sample (Dec-window) calibration, both cutoffs, five seeds
+
+From the existing dec-window scoring outputs — no new scoring needed. Each
+`dec_window_scores_seed{N}.csv` already saves a realized side (`realized_prepay`, whether the loan
+prepaid — `zero_balance_code_actual==1` — anywhere in the forecast calendar year) alongside the
+predicted side (`h_t`, monthly hazard; `annual_pp = 1-(1-h_t)**12`, the proper annualized
+conversion). Both sides are simple count-weighted means (`.mean()` over the frozen Dec-cutoff
+population) — weighted the same way on both sides, per the Sep 23 lesson (`ipw_consistent_gap.py`'s
+correction: comparing an unweighted mean against an IPW-weighted one is the bug that correction
+fixed; here neither side is IPW-weighted, so there's no asymmetry to begin with).
+
+| cutoff | n | pred (annual_pp) | realized | ratio |
+|---|---|---|---|---|
+| `cutoff_2002` `_30y`, seed42 | 35,243 | 0.3268 | 0.4553 | 0.7177 |
+| `cutoff_2002` `_30y`, seed7 | 35,243 | 0.3149 | 0.4553 | 0.6915 |
+| `cutoff_2002` `_30y`, seed123 | 35,243 | 0.3336 | 0.4553 | 0.7327 |
+| `cutoff_2002` `_30y`, seed1001 | 35,243 | 0.3222 | 0.4553 | 0.7077 |
+| `cutoff_2002` `_30y`, seed2026 | 35,243 | 0.3273 | 0.4553 | 0.7188 |
+| `cutoff_2002` `_30y`, **ensemble** | 35,243 | 0.3249 | 0.4553 | **0.7137** |
+| `cutoff_2020` `_30y`, seed42 | 168,035 | 0.2978 | 0.2803 | 1.0623 |
+| `cutoff_2020` `_30y`, seed7 | 168,035 | 0.2884 | 0.2803 | 1.0287 |
+| `cutoff_2020` `_30y`, seed123 | 168,035 | 0.2779 | 0.2803 | 0.9914 |
+| `cutoff_2020` `_30y`, seed1001 | 168,035 | 0.2798 | 0.2803 | 0.9980 |
+| `cutoff_2020` `_30y`, seed2026 | 168,035 | 0.3002 | 0.2803 | 1.0709 |
+| `cutoff_2020` `_30y`, **ensemble** | 168,035 | 0.2888 | 0.2803 | **1.0303** |
+
+Source for every row: `outputs/rolling/dec_window_cutoff_{2002,2020}_30y_seed{N}/dec_window_scores_seed{N}.csv`, columns `annual_pp`/`realized_prepay`, computed this session (not previously saved as a table anywhere).
+
+**Next to the Sep 23 `ipw_consistent_gap.py` figures** (both sides IPW-weighted, on the TRAIN/TEST
+SAMPLE population — a different population and a different weighting than the frozen Dec-window
+table above, not a direct replication): `cutoff_2020` = 1.0269x; `cutoff_2002` seed42 = 1.0696x,
+seed7 = 1.0212x (README, "cutoff_2002: seed replication..." section, Sep 21/corrected Sep 23).
+`cutoff_2020`'s new Dec-window ensemble figure (1.0303) lands almost exactly on top of its Sep 23
+one-step-sample figure (1.0269) despite the population/weighting difference. `cutoff_2002`'s does
+not (0.7137 new Dec-window vs. 1.02-1.07 old one-step-sample) — a real divergence, not a
+computation error (re-verified: using `h_t` directly instead of `annual_pp` gives nonsense ~0.08
+ratios from comparing a monthly rate to an annual flag, which is the wrong-units mistake to rule
+out first; `annual_pp` is the correct conversion and what's reported above).
+
+**Next to the one-step results:** `cutoff_2002` `_30y` one-step pooled = 0.8982 vs. Dec-window
+in-sample = 0.7137; `cutoff_2020` `_30y` one-step pooled = 0.8441 vs. Dec-window in-sample = 1.0303.
+
+### What the two rebuilt tests say together
+
+`cutoff_2002`'s 2003 one-step shortfall concentrates at low-to-moderate incentive (bins up to
+~1.5) and is roughly calibrated above it (bin table above, Oct 1-2 section). `cutoff_2020`'s 2021
+one-step shortfall, by contrast, shows up in **every** incentive bin and at **both** coupon ends
+(per-coupon table above: ratio 0.18 at the sparse 1.5 coupon tail, climbing to ~0.88 at 3.0, falling
+back to 0.65-0.70 at 5.5-6.0 — a shortfall on both sides, not concentrated at one end the way
+`cutoff_2002`'s is at the low-incentive end). Both pooled ratios (0.898, 0.844) sit **below** the
+corresponding all-term model's own 360-only subset ratio (0.956, 0.899) — the 30-year restriction
+changes which population is being scored and, for `cutoff_2020`, the Dec-window frozen-window
+calibration looks fine (1.03) even though the one-step rolling test (0.844) does not, the opposite
+pattern from `cutoff_2002` (Dec-window 0.71, one-step 0.898) — and the matched-intersection
+decomposition for `cutoff_2002` already showed the model-vs-population gap is within a single
+seed's typical noise band (seed ranges 0.74-0.96 and 0.79-1.07 here are comparably wide). **The
+30-year restriction fixed the incentive-measurement mismatch (15-year loans scored against the
+30-year PMMS) that the Sep 29 term-mix finding diagnosed, but it did not close the predicted-vs-
+realized gap** — the gap is still there under the cleaner, term-matched population; it has simply
+moved to look different (concentrated vs. uniform across bins, Dec-window-fine vs. Dec-window-off)
+between the two cutoffs rather than disappearing.
+
+### Number audit (this section)
+
+| number | file | key |
+|---|---|---|
+| census totals (14,122,835 / 5,646,103 / 427,396,836 / 1.3038%) | `outputs/census_panel_baseline_cutoff_2020_30y.json` | `overall.*` |
+| a_eff=1.025, b_eff=0.234, log=1.479, r=0.0976 | this session's `scripts/diag/census_check_2020_30y.py` stdout | printed lines |
+| build loans/obs (1,412,264 / 1,129,811+282,453 / 8,247,014+2,064,977) | `logs/multiobs_2020_30y_19067719.out` | "Total loans"/"Train:"/"Test:"/shape lines |
+| gate n_loans/n_obs (1,378,753 / 10,311,991) | `logs/check_build_2020_30y_19067733.out` | gate output |
+| loan_purpose_enc codes [0,1,2] | `logs/check_build_2020_30y_19067733.out` | "distinct loan_purpose_enc codes" lines |
+| five best_auc (0.72450-0.72678) | `outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw_cutoff_2020_30y_s{seed}/results.json` | `best_auc` |
+| five old best_auc (0.71621-0.71696) | `outputs/rolling/cutoff_2020_multiobs_k5_h1_ipw_f0.2_L33{...}/results.json` | `best_auc` |
+| consistency test diffs/counts | this session's srun output (job 19086048) | printed Check1/Check2/negative-control lines |
+| dec-window AUC verifications (5x PASSED) | `logs/score_decwin_2020_30y_s{seed}_*.out` | "Checkpoint AUC verification" lines |
+| pooled 0.8441/0.8479, seeds 0.7413-0.9553 | `outputs/rolling/ensemble_onestep_cutoff_2020_control_30y/pooled_stats.csv` | rows `model=ensemble`/`model=seed{N}` |
+| n=1,723,631 | `logs/ensemble_2020_30y_19067981.out` | "Population identity check PASSED" |
+| incentive-bin table | `outputs/rolling/ensemble_onestep_cutoff_2020_control_30y/per_bin_ratio_disagreement.csv` | `n_loan_months` col |
+| month-by-month table | `outputs/rolling/ensemble_onestep_cutoff_2020_control_30y/month_by_month.csv` | rows `model=ensemble` |
+| per-coupon n_loans table | `outputs/rolling/ensemble_onestep_cutoff_2020_control_30y/per_coupon_by_distinct_loans.csv` | full table, computed this session |
+| dispersion n_loans≥5000 → 7 coupons | same file | rows with `n_loans≥5000` |
+| 0.8750/0.8990 (old all-term/360-only) | README.md Sep 26/Sep 29 sections | pooled ratio tables |
+| Dec-window in-sample table (both cutoffs) | `outputs/rolling/dec_window_cutoff_{2002,2020}_30y_seed{N}/dec_window_scores_seed{N}.csv` | `annual_pp`/`realized_prepay` columns, computed this session |
+| Sep 23 one-step-sample figures (1.0269/1.0696/1.0212) | README.md "cutoff_2002: seed replication..." section | `ipw_consistent_gap.py` correction text |
+| D.4 denominators (589,311/278,641) | `.claude_tmp/verify_term_mod_filters_18992408.log` (not committed) | `D.4` lines, both vintages |
