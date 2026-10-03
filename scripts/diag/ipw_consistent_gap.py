@@ -71,17 +71,28 @@ def wmean(x, w):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--cutoff', type=int, required=True, choices=[2002, 2020])
+    ap.add_argument('--seq_dir', type=str, default=None,
+                     help='Override CFG[cutoff]["seq_dir"] (e.g. a _30y build dir). When given, '
+                          'the expected_n_test assert is skipped (that reference figure is only '
+                          'valid for the hardcoded CFG build it was measured on).')
+    ap.add_argument('--ckpt_dir', type=str, default=None,
+                     help='Override CFG[cutoff]["out_dir"] (dir containing hazard_best.pt and '
+                          'results.json) -- e.g. a specific seed\'s _30y checkpoint dir, so this '
+                          'script can be run per-seed instead of only the CFG-hardcoded seed42.')
     args = ap.parse_args()
     cfg = CFG[args.cutoff]
+    overridden = args.seq_dir is not None or args.ckpt_dir is not None
 
     print(f'Device: {DEVICE}', flush=True)
-    seq_dir, out_dir = cfg['seq_dir'], cfg['out_dir']
+    seq_dir = args.seq_dir or cfg['seq_dir']
+    out_dir = args.ckpt_dir or cfg['out_dir']
     assert os.path.isdir(seq_dir), seq_dir
     assert os.path.isdir(out_dir), out_dir
 
     with open(os.path.join(out_dir, 'results.json')) as f:
         results = json.load(f)
-    assert results['n_test'] == cfg['expected_n_test']
+    if not overridden:
+        assert results['n_test'] == cfg['expected_n_test']
     print(f"use_ipw={results['use_ipw']} best_auc={results['best_auc']:.4f}", flush=True)
 
     seq        = np.load(os.path.join(seq_dir, 'test_seq.npy'),        mmap_mode='r')
@@ -92,7 +103,8 @@ def main():
     ref_month  = np.load(os.path.join(seq_dir, 'test_ref_month.npy'))
     loan_ids   = np.load(os.path.join(seq_dir, 'test_loan_ids.npy'), allow_pickle=True)
     n = len(labels)
-    assert n == cfg['expected_n_test']
+    if not overridden:
+        assert n == cfg['expected_n_test']
     print(f'Loaded {n:,} test observations', flush=True)
 
     ckpt = torch.load(os.path.join(out_dir, 'hazard_best.pt'), map_location=DEVICE, weights_only=False)

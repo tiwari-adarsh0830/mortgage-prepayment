@@ -52,8 +52,9 @@ result for `cutoff_2002` (old ckpt 0.9723 vs new ckpt 0.9341 on a 4,911-loan hel
 population) runs opposite the full-population comparison (0.8734 old vs 0.8982 new), within a
 single seed's typical noise band — not reconciled, reported as-is; no equivalent
 matched-intersection decomposition run for `cutoff_2020` (not needed per this session's
-instruction). `cutoff_2002`'s Dec-window in-sample calibration (0.7137) and one-step result (0.8982)
-disagree in direction from `cutoff_2020`'s (Dec-window 1.0303, one-step 0.8441) — not reconciled.
+instruction). Frozen-Dec-window 12-month forecast, superseded design, reported for continuity:
+`cutoff_2002` 0.7137, `cutoff_2020` 1.0303; not comparable to the one-step numbers (0.8982, 0.8441)
+and not an in-sample check.
 
 **Next.** The two-realized-series split, HARP eligibility feature, recency weighting, advisor
 reply email.
@@ -4989,16 +4990,19 @@ number sits *below* both old figures here, rather than between them as it did fo
 a different relative position, not a contradiction, since both the population and the checkpoint
 set changed together in the rebuild (not term filtering alone).
 
-### In-sample (Dec-window) calibration, both cutoffs, five seeds
+### Frozen-Dec-window 12-month forecast (superseded design), both cutoffs, five seeds
 
-From the existing dec-window scoring outputs — no new scoring needed. Each
-`dec_window_scores_seed{N}.csv` already saves a realized side (`realized_prepay`, whether the loan
-prepaid — `zero_balance_code_actual==1` — anywhere in the forecast calendar year) alongside the
-predicted side (`h_t`, monthly hazard; `annual_pp = 1-(1-h_t)**12`, the proper annualized
-conversion). Both sides are simple count-weighted means (`.mean()` over the frozen Dec-cutoff
-population) — weighted the same way on both sides, per the Sep 23 lesson (`ipw_consistent_gap.py`'s
-correction: comparing an unweighted mean against an IPW-weighted one is the bug that correction
-fixed; here neither side is IPW-weighted, so there's no asymmetry to begin with).
+From the existing dec-window scoring outputs — no new scoring needed. **This is not an in-sample
+check and not comparable to the one-step numbers.** It is the frozen-December-features 12-month
+forecast — window frozen at Dec of the cutoff year, realized over the next 12 months — the design
+the Sep 24 one-step-ahead redesign superseded (frozen incentive can't capture a within-year rate
+move; see "The frozen Dec-window 2003 test, and why frozen scoring was the wrong design" above).
+Reported here for continuity only. Each `dec_window_scores_seed{N}.csv` already saves a realized
+side (`realized_prepay`, whether the loan prepaid — `zero_balance_code_actual==1` — anywhere in the
+forecast calendar year) alongside the predicted side (`h_t`, monthly hazard;
+`annual_pp = 1-(1-h_t)**12`, the proper annualized conversion). Both sides are simple
+count-weighted means (`.mean()` over the frozen Dec-cutoff population) — weighted the same way on
+both sides.
 
 | cutoff | n | pred (annual_pp) | realized | ratio |
 |---|---|---|---|---|
@@ -5028,8 +5032,9 @@ computation error (re-verified: using `h_t` directly instead of `annual_pp` give
 ratios from comparing a monthly rate to an annual flag, which is the wrong-units mistake to rule
 out first; `annual_pp` is the correct conversion and what's reported above).
 
-**Next to the one-step results:** `cutoff_2002` `_30y` one-step pooled = 0.8982 vs. Dec-window
-in-sample = 0.7137; `cutoff_2020` `_30y` one-step pooled = 0.8441 vs. Dec-window in-sample = 1.0303.
+**Frozen-Dec-window 12-month forecast, superseded design, reported for continuity: `cutoff_2002`
+0.7137, `cutoff_2020` 1.0303; not comparable to the one-step numbers (`cutoff_2002` one-step pooled
+0.8982, `cutoff_2020` one-step pooled 0.8441) and not an in-sample check.**
 
 ### What the two rebuilt tests say together
 
