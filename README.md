@@ -4921,6 +4921,19 @@ any of the 5 dec-window logs, confirmed by `grep -i "cache hit|traceback|error"`
 | seed1001 | count | 0.02026 | 0.02733 | 0.7413 |
 | seed2026 | count | 0.02516 | 0.02733 | 0.9206 |
 
+Pooled events (count-weighted): Σh=39,762.3, Σrealized=47,106.0, **shortfall = 7,343.7 (15.6% of
+47,106.0 realized events)** — derived from `outputs/rolling/ensemble_onestep_cutoff_2020_control_30y/pooled_stats.csv`
+(`pred_rate_monthly×n`, `real_rate_monthly×n`, row `model=ensemble, weight=count`), same method as
+`cutoff_2002`'s 1,633.0/16,046.0=10.2% figure above.
+
+**Independent audit's B3 result** (fresh Claude Code session, Oct 3, no README consulted as
+evidence — see mistakes log and STANDING TESTS): of 1,555,596 forecast-year-2021 one-step rows
+matched 1:1 against the raw `current_interest_rate` field, **11 (0.001%)** have
+`current_interest_rate != original_interest_rate` — i.e. the loan's note rate changed between
+origination and the 2021 scoring window (rate-modified survivors) on a negligible share of the
+`cutoff_2020` `_30y` population. The equivalent `cutoff_2002` figure is **305 of 287,961 (0.106%)**
+2003 one-step rows. Source: `logs/audit_partB_19093910.log`, `--- B3 ---` sections, both cutoffs.
+
 **Incentive-bin table** (edges `[-6,-4,-3,-2,-1,-0.5,0,0.5,1,1.5,2,3,4,6]`, count-weighted monthly):
 
 | bin | n | predicted | realized |
