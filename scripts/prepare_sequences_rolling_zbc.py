@@ -62,7 +62,6 @@ ALL_VINTAGES = [
 
 MAX_SEQ_LEN  = 33   # default; override per-run with --max_seq_len
 _DEFAULT_SEQ_LEN = 33   # frozen reference — MAX_SEQ_LEN is rebound at runtime
-N_FEATURES   = 9
 FEATURE_COLS = [
     'refi_incentive',       # [0] original_rate - PMMS (time-varying)
     'borrower_credit_score',# [1]
@@ -73,7 +72,12 @@ FEATURE_COLS = [
     'dti',                  # [6]
     'loan_purpose_enc',     # [7] FIXED: R=0, C=1, P=2
     'property_type_enc',    # [8] FIXED: SF=0, PU=1, CO=2, MH=3
+    'harp_eligible',        # [9] HARP eligibility flag (advisor's Oct 4 decision) --
+                             # present in every build from now on; all zeros until the
+                             # yearly sequence reaches the HARP years. No eligibility
+                             # logic implemented yet -- zeros only.
 ]
+N_FEATURES = len(FEATURE_COLS)   # derived, not an independent literal
 
 # ── Fannie Mae column schema (same as prepare_sequences.py) ───────────────────
 _BASE_COLS = [
@@ -405,6 +409,10 @@ def load_vintage_filtered(
         {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3}
     ).fillna(0).astype(float)
 
+    # ── HARP eligibility flag (advisor's Oct 4 decision) ─────────────────────
+    # Placeholder column, all zeros -- no eligibility logic implemented yet.
+    df['harp_eligible'] = 0.0
+
     # ── Prepay label — CRITICAL: only from rows within cutoff window ──────────
     # Any row with zbc==1 at monthly_reporting_period <= cutoff is a prepay event.
     # Loans prepaying after the cutoff are labeled 0 (genuinely unknown at t=cutoff).
@@ -608,6 +616,7 @@ def main():
                 {'R': 0, 'C': 1, 'P': 2}).fillna(0).astype(float)
             sample['property_type_enc'] = sample['property_type'].map(
                 {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3}).fillna(0).astype(float)
+            sample['harp_eligible'] = 0.0
 
             valid = sample[FEATURE_COLS].dropna()
             if len(valid) > 0:

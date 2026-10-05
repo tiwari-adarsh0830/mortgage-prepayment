@@ -33,9 +33,11 @@ import numpy as np
 BASE = '/scratch/at7095/mortgage_prepayment'
 BUILD_DIR = os.path.join(BASE, 'data/sequences_rolling/cutoff_2002_zbc_multiobs_f0.2_h1_hist_30y')
 EXPECTED_L = 33
+EXPECTED_N_FEATURES = 10
 EXPECTED_PT_CODES = {0, 1, 2, 3, 4}
 EXPECTED_LP_CODES = {0, 1, 2, 3}
 PT_IDX, LP_IDX = 8, 7   # FEATURE_COLS indices, see prepare_sequences_multiobs_zbc.py
+HARP_IDX = 9             # harp_eligible -- all zeros, no eligibility logic yet
 OLD_N_LOANS, OLD_N_OBS = 304_447, 906_877   # pre-30y build reference (README job 17980942)
 EXPECTED_CELL_SAMPLE_PATH = os.path.join(BASE, 'outputs', 'pre2013_cell_sample_30y_loans.csv')
 EXPECTED_N_IDS = 1_482_004
@@ -74,9 +76,16 @@ def main():
         print(f'{split}_seq.npy shape: {seq.shape}', flush=True)
         if seq.shape[1] != EXPECTED_L:
             fail(f'{split}_seq.npy L={seq.shape[1]}, expected {EXPECTED_L}')
+        if seq.shape[2] != EXPECTED_N_FEATURES:
+            fail(f'{split}_seq.npy n_features={seq.shape[2]}, expected {EXPECTED_N_FEATURES}')
 
         mask_np = np.asarray(mask)
         seq_np  = np.asarray(seq)
+        valid_harp = seq_np[..., HARP_IDX][mask_np]
+        harp_unscaled = valid_harp * scaler.scale_[HARP_IDX] + scaler.mean_[HARP_IDX]
+        if not np.allclose(harp_unscaled, 0.0):
+            fail(f'{split} harp_eligible (col {HARP_IDX}) not all zero: '
+                 f'max abs {np.abs(harp_unscaled).max():.6g}')
         valid_pt = seq_np[..., PT_IDX][mask_np]
         valid_lp = seq_np[..., LP_IDX][mask_np]
         pt_codes = np.unique(np.round(valid_pt * scaler.scale_[PT_IDX] + scaler.mean_[PT_IDX])).astype(int)

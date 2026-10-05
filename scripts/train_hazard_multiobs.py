@@ -73,7 +73,9 @@ WEIGHT_DECAY    = 1e-4
 GRAD_CLIP       = 1.0
 STEPS_PER_EPOCH = 10_000  # steps not full passes — keeps epoch wall-clock predictable
 MAX_SEQ         = 33
-N_FEATURES      = 9
+N_FEATURES      = 9   # fallback only -- PrepaymentTransformer's default when no
+                       # input_dim is given; every real training run below passes
+                       # input_dim derived from train_seq.shape[-1] explicitly.
 DEVICE          = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
@@ -238,6 +240,11 @@ def train_and_evaluate(
 ):
     print(f'Active options: pos_ratio={pos_ratio!r}  use_ipw={use_ipw}', flush=True)
 
+    # Derived from the loaded array, not the module-level N_FEATURES literal --
+    # so a schema change upstream (e.g. the harp_eligible column) propagates
+    # here automatically instead of needing this constant bumped in lockstep.
+    n_features = train_seq.shape[-1]
+
     sampler   = ObservationSampler(train_seq, train_mask, train_labels, train_incl_prob,
                                     pos_ratio=pos_ratio)
     print(f'CUBLAS_WORKSPACE_CONFIG={os.environ.get("CUBLAS_WORKSPACE_CONFIG", "NOT SET")}', flush=True)
@@ -253,7 +260,7 @@ def train_and_evaluate(
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True, warn_only=True)
-    model     = PrepaymentTransformer(max_seq=max_seq).to(DEVICE)
+    model     = PrepaymentTransformer(input_dim=n_features, max_seq=max_seq).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-5
@@ -360,7 +367,7 @@ def train_and_evaluate(
             if out_dir is not None:
                 torch.save({
                     'model_state': model.state_dict(),
-                    'config': {'input_dim': N_FEATURES, 'n_heads': 4, 'n_layers': 2,
+                    'config': {'input_dim': n_features, 'n_heads': 4, 'n_layers': 2,
                                'd_model': 64, 'dim_ff': 256, 'dropout': 0.1,
                                'max_seq': max_seq},
                     'epoch': epoch,
@@ -375,7 +382,7 @@ def train_and_evaluate(
     if out_dir is not None:
         torch.save({
             'model_state': model.state_dict(),
-            'config': {'input_dim': N_FEATURES, 'n_heads': 4, 'n_layers': 2,
+            'config': {'input_dim': n_features, 'n_heads': 4, 'n_layers': 2,
                        'd_model': 64, 'dim_ff': 256, 'dropout': 0.1,
                        'max_seq': max_seq},
             'epoch': epoch,

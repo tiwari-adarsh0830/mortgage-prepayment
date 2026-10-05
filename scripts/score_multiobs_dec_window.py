@@ -69,7 +69,7 @@ from prepare_sequences_multiobs_zbc import (
     load_vintage_filtered, load_pmms, load_zhvi, _prepare_panel,
     _eligible_candidates, build_sequences_multiobs, PRE2013_VINTAGES,
     _MODERN_VINTAGES, _vintage_quarter_start_yyyymm, dec_yyyymm, BASE,
-    FEATURE_COLS, N_FEATURES, MAX_SEQ_LEN, PRE2013_CELL_SAMPLE_PATH,
+    FEATURE_COLS, MAX_SEQ_LEN, PRE2013_CELL_SAMPLE_PATH,
 )
 from train_hazard_multiobs import PrepaymentTransformer
 
@@ -91,8 +91,13 @@ _PREFIX_PROPERTY_TYPE_MAP = {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3}
 def load_checkpoint(ckpt_path: str):
     ckpt = torch.load(ckpt_path, map_location=DEVICE)
     cfg = ckpt.get('config', {})
+    # Fallback (for a checkpoint saved without a 'config'/'input_dim' key)
+    # derives input_dim from the checkpoint's OWN input_proj weight matrix,
+    # not the builder's N_FEATURES literal -- that tensor's shape is the
+    # actual dimension this model was trained with, by construction.
+    fallback_input_dim = ckpt['model_state']['input_proj.weight'].shape[1]
     m = PrepaymentTransformer(
-        input_dim=cfg.get('input_dim', N_FEATURES), d_model=cfg.get('d_model', 64),
+        input_dim=cfg.get('input_dim', fallback_input_dim), d_model=cfg.get('d_model', 64),
         n_heads=cfg.get('n_heads', 4), n_layers=cfg.get('n_layers', 2),
         dim_ff=cfg.get('dim_ff', 256), dropout=cfg.get('dropout', 0.1),
         max_seq=cfg.get('max_seq', MAX_SEQ_LEN),

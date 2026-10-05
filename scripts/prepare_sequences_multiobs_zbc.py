@@ -153,7 +153,6 @@ ALL_VINTAGES = _MODERN_VINTAGES
 
 MAX_SEQ_LEN  = 33   # default; override per-run with --max_seq_len
 _DEFAULT_SEQ_LEN = 33   # frozen reference — MAX_SEQ_LEN is rebound at runtime
-N_FEATURES   = 9
 FEATURE_COLS = [
     'refi_incentive',       # [0] original_rate - PMMS (time-varying)
     'borrower_credit_score',# [1]
@@ -164,7 +163,12 @@ FEATURE_COLS = [
     'dti',                  # [6]
     'loan_purpose_enc',     # [7] FIXED: R=0, C=1, P=2
     'property_type_enc',    # [8] FIXED: SF=0, PU=1, CO=2, MH=3
+    'harp_eligible',        # [9] HARP eligibility flag (advisor's Oct 4 decision) --
+                             # present in every build from now on; all zeros until the
+                             # yearly sequence reaches the HARP years. No eligibility
+                             # logic implemented yet -- zeros only.
 ]
+N_FEATURES = len(FEATURE_COLS)   # derived, not an independent literal
 
 # ── Fannie Mae column schema (same as prepare_sequences.py) ───────────────────
 _BASE_COLS = [
@@ -629,6 +633,14 @@ def load_vintage_filtered(
     _pt_map = property_type_map if property_type_map is not None else {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3, 'CP': 4}
     df['loan_purpose_enc'] = _encode_categorical(df['loan_purpose'], _lp_map, 'loan_purpose')
     df['property_type_enc'] = _encode_categorical(df['property_type'], _pt_map, 'property_type')
+
+    # ── HARP eligibility flag (advisor's Oct 4 decision) ─────────────────────
+    # Placeholder column, all zeros -- no eligibility logic implemented yet.
+    # Present now so every build from here forward has a stable 10-feature
+    # schema; a zero-variance column is safe through StandardScaler (it sets
+    # scale_=1 for zero variance instead of dividing by zero, so transform()
+    # just returns 0 for this column, no NaN/inf).
+    df['harp_eligible'] = 0.0
 
     # ── Prepay label — CRITICAL: only from rows within cutoff window ──────────
     # Any row with zbc==1 at monthly_reporting_period <= cutoff is a prepay event.
@@ -1366,6 +1378,7 @@ def main():
                     sample['loan_purpose'], {'R': 0, 'C': 1, 'P': 2, 'U': 3}, 'loan_purpose')
                 sample['property_type_enc'] = _encode_categorical(
                     sample['property_type'], {'SF': 0, 'PU': 1, 'CO': 2, 'MH': 3, 'CP': 4}, 'property_type')
+                sample['harp_eligible'] = 0.0
 
                 valid = sample[FEATURE_COLS].dropna()
                 if len(valid) > 0:
