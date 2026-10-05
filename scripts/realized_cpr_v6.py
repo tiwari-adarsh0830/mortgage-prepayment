@@ -63,16 +63,19 @@ def pass0_global_last(files, term_filter=360):
     """Per loan: note rate + global last appearance (YYYYMM) and UPB there.
     Prepaid iff UPB==0 at the true (YYYYMM-ordered) last row.
 
-    30-YEAR FILTER + POST-MOD (advisor's Sep 29 decision), applied here in
-    Pass 0 since it is the only pass that sees every row per loan:
-      - term_filter: a loan with ANY observed original_loan_term !=
-        term_filter -- including a blank/unparseable (NaN) term on any row
-        -- is dropped from rate_map entirely (Pass 1's existing
-        dropna(subset=['rate']) then excludes it for free). LOAN-level, not
-        row-level. (Fixed 2026-10-01: previously checked only the
-        first-observed term per loan, which silently kept mixed-term loans
-        on whichever term value appeared first in the file and never
-        flagged blank-term rows at all.) Pass None to disable.
+    30-YEAR FILTER + POST-MOD, applied here in Pass 0 since it is the only
+    pass that sees every row per loan:
+      - term_filter: a loan's 30-year status is determined by its
+        ORIGINATION characteristics, not by any row (advisor's Oct 4
+        decision). Keep the loan iff original_loan_term on its EARLIEST
+        row by YYYYMM (across all files, mirroring global_last's own
+        YYYYMM-ordered tracking below) == term_filter; blank/unparseable
+        (NaN) term on that row drops it. A loan failing this is dropped
+        from rate_map entirely (Pass 1's existing dropna(subset=['rate'])
+        then excludes it for free). LOAN-level, not row-level. (This
+        replaces the prior any-observed-row rule, which treated a loan
+        whose term changes at modification as non-30-year even though it
+        originated as one.) Pass None to disable.
       - post-mod: an ever-modified loan's prepay_month is unconditionally
         forced to -1 (censored) regardless of what its last-row UPB said --
         same sticky "drop all post-modification data" design choice as the
@@ -89,7 +92,7 @@ def pass0_global_last(files, term_filter=360):
     """
     print("Pass 0: global last appearance per loan (YYYYMM-ordered)...", flush=True)
     global_last = {}   # loan_id -> (last_ym, last_upb, rate)
-    bad_term_loans = set()  # loan_id -> has ANY row with term != term_filter (incl. blank/NaN)
+    orig_term = {}     # loan_id -> (earliest_ym_seen, term at that row)
     first_mod_ym = {}    # loan_id -> earliest YYYYMM with modification_flag=='Y'
 
     for fi, f in enumerate(files):
@@ -117,12 +120,16 @@ def pass0_global_last(files, term_filter=360):
                 if lid not in global_last or ym > global_last[lid][0]:
                     global_last[lid] = (ym, float(u) if not np.isnan(u) else np.nan, float(r))
 
-            # ANY row with term != term_filter disqualifies the loan --
-            # including blank/unparseable term (NaN != x is True elementwise)
-            # -- not just a dropna'd subset. Loan-level, not row-level.
+            # Track the origination-row term: the earliest row by YYYYMM
+            # seen so far for each loan (across all files). Never overwritten
+            # by a later row's term once an earlier one is recorded.
             if term_filter is not None:
-                bad_rows = chunk.loc[chunk['term'] != term_filter]
-                bad_term_loans.update(bad_rows['loan_id'].tolist())
+                idx_min = chunk.groupby('loan_id')['ym'].idxmin()
+                first_rows = chunk.loc[idx_min].set_index('loan_id')
+                for lid, row in first_rows.iterrows():
+                    ym_f = int(row['ym']); t = row['term']
+                    if lid not in orig_term or ym_f < orig_term[lid][0]:
+                        orig_term[lid] = (ym_f, t)
 
             y_rows = chunk.loc[chunk['mod'] == 'Y']
             if not y_rows.empty:
@@ -145,12 +152,13 @@ def pass0_global_last(files, term_filter=360):
           f"{n_prepaid:,} prepaid ({100*n_prepaid/max(len(global_last),1):.2f}%)", flush=True)
 
     if term_filter is not None:
+        bad_term_loans = {lid for lid, (_, t) in orig_term.items() if t != term_filter}
         n_before = len(rate_map)
         n_dropped = len(bad_term_loans & rate_map.keys())
         for lid in bad_term_loans:
             rate_map.pop(lid, None)
             prepay_month.pop(lid, None)
-        print(f"  term filter (=={term_filter}, loan-level): dropped {n_dropped:,} "
+        print(f"  term filter (=={term_filter}, origination row): dropped {n_dropped:,} "
               f"of {n_before:,} loans", flush=True)
 
     n_censored = 0

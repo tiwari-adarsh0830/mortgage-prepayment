@@ -90,14 +90,20 @@ def mmyyyy_to_quarter(v):
 def scan_file(path):
     """Per-loan vintage, coupon, and zero-balance code for one quarter file.
 
-    30-YEAR FILTER + POST-MOD: a loan with ANY observed original_loan_term
-    != 360 within this file -- including a blank/unparseable (NaN) term on
-    any row -- is dropped from the returned dicts entirely (advisor's Sep 29
-    decision; was first-observed-only until 2026-10-01, when 2 loans in
-    2002Q1 were found to carry more than one distinct term value across
-    their own rows -- any-observed is now used everywhere, matching the
-    _zbc readers' loan-level filter). A loan with any observed
-    modification_flag=='Y' has its zbc entry removed (CONSEQUENCE: build_
+    30-YEAR FILTER + POST-MOD: a loan's 30-year status is determined by its
+    ORIGINATION characteristics, not by any row (advisor's Oct 4 decision).
+    This reader has no per-row reporting-period field, so the "earliest
+    reporting-period row" used by the other readers is approximated as the
+    FIRST row encountered for that loan IN FILE ORDER: quarter files are
+    period-ordered (each covers one calendar quarter, rows within it appear
+    in reporting-month order), so the first row seen for a loan in a given
+    quarter file is its earliest row in that file. A loan whose
+    first-encountered original_loan_term != 360 -- including blank/
+    unparseable (NaN) -- is dropped from the returned dicts entirely. (This
+    replaces the prior any-observed-row rule, which treated a loan whose
+    term changes at modification as non-30-year even though it originated
+    as one.) A loan with any observed modification_flag=='Y' has its zbc
+    entry removed (CONSEQUENCE: build_
     cell_grid_sample_pre2013.py's `zbc.get(lid)` then returns None for it,
     i.e. treated as censored/no event for sampling purposes -- the same
     "termination row dropped -> censored" consequence as the main readers,
@@ -112,8 +118,8 @@ def scan_file(path):
     prepare_sequences_multiobs_zbc.py, whose per-row panel reader reports
     this as a diagnostic rather than asserting it).
     """
-    vint, cpn, zbc = {}, {}, {}
-    bad_term_loans, ever_y = set(), set()
+    vint, cpn, zbc, orig_term = {}, {}, {}, {}
+    ever_y = set()
     # usecols/names MUST be listed in ASCENDING column-index order: pandas
     # selects usecols columns in ascending file-index order regardless of
     # the order they're listed in, then zips the result positionally with
@@ -151,14 +157,22 @@ def scan_file(path):
             if lid not in zbc:
                 zbc[lid] = float(z)
 
-        # ANY row with term != 360 disqualifies the loan -- including blank/
-        # unparseable term (NaN != 360 is True elementwise), not just a
-        # dropna'd subset. This is a loan-level filter: no partial keeping.
-        bad_rows = chunk.loc[chunk['term'] != 360]
-        bad_term_loans.update(bad_rows['loan_id'].tolist())
+        # Record the origination-row term: the first row encountered for a
+        # loan, in file order (see docstring -- files are period-ordered, so
+        # this is that loan's earliest row in this file). Never overwritten
+        # once set, so a later row's term (e.g. post-mod) cannot change it.
+        new_rows = chunk.loc[~chunk['loan_id'].isin(orig_term.keys()),
+                              ['loan_id', 'term']].drop_duplicates('loan_id', keep='first')
+        for lid, t in zip(new_rows['loan_id'], new_rows['term']):
+            orig_term[lid] = t
 
         y_rows = chunk.loc[chunk['mod'] == 'Y']
         ever_y.update(y_rows['loan_id'].tolist())
+
+    # A loan's origination-row term != 360 -- including blank/unparseable
+    # (NaN != 360 is True elementwise) -- disqualifies it. Loan-level: no
+    # partial keeping.
+    bad_term_loans = {lid for lid, t in orig_term.items() if t != 360}
 
     n_vint_before = len(vint)
     n_dropped_from_vint = len(bad_term_loans & vint.keys())

@@ -214,14 +214,15 @@ def load_vintage_filtered(
         survives the cutoff filter. A loan that prepays AFTER the cutoff is
         labeled prepaid=0 in the training data — no lookahead leakage.
 
-    term_filter: drop a loan ENTIRELY (all its rows) if ANY observed
-    original_loan_term across its own rows != term_filter, including
-    blank/unparseable (NaN) term values (default 360, i.e. 30-year loans
-    only -- advisor's Sep 29 decision). LOAN-level, not row-level: a loan
-    is never partially kept (found necessary 2026-10-01 -- real loans carry
-    more than one distinct term value across their own rows). Pass None to
-    disable (diagnostics only). Applied BEFORE the calendar cutoff filter,
-    sort, loan_age derivation, or any window construction.
+    term_filter: keep a loan iff original_loan_term on its EARLIEST
+    reporting-period row (by YYYYMM, not raw MMYYYY) == term_filter; blank/
+    unparseable (NaN) term on that row drops the loan (default 360, i.e.
+    30-year loans only -- advisor's Oct 4 decision: 30-year status is an
+    ORIGINATION characteristic, determined by that first row alone). LOAN-
+    level, not row-level: a loan is never partially kept. A loan whose term
+    changes at modification is kept under this rule since its origination
+    row is unaffected. Pass None to disable (diagnostics only). Applied
+    BEFORE the sort, loan_age derivation, or any window construction.
     """
     path = os.path.join(DATA_DIR, f'{vintage}.csv')
     if not os.path.exists(path):
@@ -247,29 +248,36 @@ def load_vintage_filtered(
     del chunks
     gc.collect()
 
-    # ── 30-year filter — must run before cutoff/sort/loan_age/windows ────────
-    # Advisor's Sep 29 decision: 30-year loans only, throughout. LOAN-LEVEL,
-    # not row-level: a loan with ANY row whose original_loan_term !=
-    # term_filter (including blank/NaN -- NaN != x is True) is dropped
-    # entirely, never partially kept.
-    if term_filter is not None:
-        df['original_loan_term'] = pd.to_numeric(df['original_loan_term'], errors='coerce')
-        n_loans_before = df['loan_id'].nunique()
-        bad_term_loans = set(df.loc[df['original_loan_term'] != term_filter, 'loan_id'].unique())
-        df = df[~df['loan_id'].isin(bad_term_loans)].copy()
-        n_loans_after = df['loan_id'].nunique()
-        print(f'    term filter (=={term_filter}, loan-level): kept {n_loans_after:,} of '
-              f'{n_loans_before:,} loans ({n_loans_before - n_loans_after:,} dropped)',
-              flush=True)
-        if df.empty:
-            return None
-
-    # ── Calendar cutoff filter — must use YYYYMM, not raw MMYYYY integer ──────
+    # ── Calendar period conversion — must use YYYYMM, not raw MMYYYY integer ──
+    # Moved ahead of the term filter below: the term rule is keyed to each
+    # loan's EARLIEST reporting-period row, which needs YYYYMM (not raw
+    # MMYYYY) ordering to identify correctly across year boundaries.
     df['monthly_reporting_period'] = pd.to_numeric(
         df['monthly_reporting_period'], errors='coerce'
     )
     df = df[df['monthly_reporting_period'].notna()].copy()
     df['yyyymm'] = df['monthly_reporting_period'].astype(int).apply(mmyyyy_to_yyyymm)
+
+    # ── 30-year filter — must run before cutoff/sort/loan_age/windows ────────
+    # Advisor's Oct 4 decision: a loan's 30-year status is determined by its
+    # ORIGINATION characteristics, not by any row. Keep the loan iff
+    # original_loan_term on its EARLIEST reporting-period row (by YYYYMM)
+    # == term_filter; blank/unparseable term on that row drops the loan.
+    if term_filter is not None:
+        df['original_loan_term'] = pd.to_numeric(df['original_loan_term'], errors='coerce')
+        n_loans_before = df['loan_id'].nunique()
+        first_row_idx = df.groupby('loan_id')['yyyymm'].idxmin()
+        orig_term = df.loc[first_row_idx].set_index('loan_id')['original_loan_term']
+        bad_term_loans = set(orig_term[orig_term != term_filter].index)
+        df = df[~df['loan_id'].isin(bad_term_loans)].copy()
+        n_loans_after = df['loan_id'].nunique()
+        print(f'    term filter (=={term_filter}, origination row): kept {n_loans_after:,} of '
+              f'{n_loans_before:,} loans ({n_loans_before - n_loans_after:,} dropped)',
+              flush=True)
+        if df.empty:
+            return None
+
+    # ── Calendar cutoff filter ────────────────────────────────────────────────
     df = df[df['yyyymm'] <= cutoff_yyyymm].copy()
     if df.empty:
         return None

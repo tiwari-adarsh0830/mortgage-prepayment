@@ -42,17 +42,24 @@ def _merge_top2(existing, candidates):
 
 
 def pass0_global_top2(files, term_filter=360):
-    """30-YEAR FILTER + POST-MOD (advisor's Sep 29 decision) -- same
-    approach as realized_cpr_v6.py's pass0_global_last: a loan with ANY row
-    whose original_loan_term != term_filter -- including blank/unparseable
-    (NaN) -- is dropped from rate_map entirely (loan-level, not row-level;
-    fixed 2026-10-01, see realized_cpr_v6.py's docstring for why the prior
-    first-observed-term check was insufficient); an ever-modified loan's
-    prepay_month is forced to -1 (censored, unconditional sticky design
-    choice -- does NOT require modification_flag to be monotone; that
-    assumption was found FALSE for 2002Q1, see scripts/diag/
-    verify_term_mod_filters.py's decisive decode, 2026-10-01).
-    See realized_cpr_v6.py for the full rationale -- not repeated here.
+    """30-YEAR FILTER + POST-MOD -- same approach as realized_cpr_v6.py's
+    pass0_global_last: a loan's 30-year status is determined by its
+    ORIGINATION characteristics, not by any row (advisor's Oct 4 decision).
+    Keep the loan iff original_loan_term on its EARLIEST row by YYYYMM
+    (across all files) == term_filter; blank/unparseable (NaN) term on that
+    row drops it from rate_map entirely (loan-level, not row-level; this
+    replaces the prior any-observed-row rule, which treated a loan whose
+    term changes at modification as non-30-year even though it originated
+    as one). An ever-modified loan's prepay_month is forced to -1
+    (censored, unconditional sticky design choice -- does NOT require
+    modification_flag to be monotone; that assumption was found FALSE for
+    2002Q1, see scripts/diag/verify_term_mod_filters.py's decisive decode,
+    2026-10-01). See realized_cpr_v6.py for the full rationale -- not
+    repeated here.
+
+    NOTE: the checkpoint schema below changed with the origination-row term
+    rule (bad_term_loans -> orig_term) -- an old .partial checkpoint from
+    before this change is NOT compatible and must not be resumed from.
     """
     print("Pass 0 (UPB): global top-2 appearances per loan (YYYYMM-ordered)...", flush=True)
 
@@ -60,11 +67,11 @@ def pass0_global_top2(files, term_filter=360):
     start_idx = 0
     global_top2 = {}
     rate_map    = {}
-    bad_term_loans = set()  # loan_id -> has ANY row with term != term_filter (incl. blank/NaN)
+    orig_term   = {}  # loan_id -> (earliest_ym_seen, term at that row)
     first_mod_ym = {}
     if os.path.exists(ckpt_progress):
         with open(ckpt_progress, "rb") as fh:
-            start_idx, global_top2, rate_map, bad_term_loans, first_mod_ym = pickle.load(fh)
+            start_idx, global_top2, rate_map, orig_term, first_mod_ym = pickle.load(fh)
         print(f"  RESUMING from file index {start_idx} "
               f"({len(rate_map):,} loans tracked so far)", flush=True)
 
@@ -100,12 +107,16 @@ def pass0_global_top2(files, term_filter=360):
                 existing = global_top2.get(lid, [])
                 global_top2[lid] = _merge_top2(existing, cand)
 
-            # ANY row with term != term_filter disqualifies the loan --
-            # including blank/unparseable term (NaN != x is True elementwise)
-            # -- not just a dropna'd subset. Loan-level, not row-level.
+            # Track the origination-row term: the earliest row by YYYYMM
+            # seen so far for each loan (across all files). Never overwritten
+            # by a later row's term once an earlier one is recorded.
             if term_filter is not None:
-                bad_rows = chunk.loc[chunk['term'] != term_filter]
-                bad_term_loans.update(bad_rows['loan_id'].tolist())
+                idx_min = chunk.groupby('loan_id')['ym'].idxmin()
+                first_rows = chunk.loc[idx_min].set_index('loan_id')
+                for lid, row in first_rows.iterrows():
+                    ym_f = int(row['ym']); t = row['term']
+                    if lid not in orig_term or ym_f < orig_term[lid][0]:
+                        orig_term[lid] = (ym_f, t)
 
             y_rows = chunk.loc[chunk['mod'] == 'Y']
             if not y_rows.empty:
@@ -119,7 +130,7 @@ def pass0_global_top2(files, term_filter=360):
         # checkpoint every 5 files so a timeout doesn't lose all progress
         if (fi + 1) % 5 == 0 or (fi + 1) == len(files):
             with open(ckpt_progress, "wb") as fh:
-                pickle.dump((fi + 1, global_top2, rate_map, bad_term_loans, first_mod_ym), fh)
+                pickle.dump((fi + 1, global_top2, rate_map, orig_term, first_mod_ym), fh)
             print(f"  [checkpoint saved at file {fi+1}/{len(files)}]", flush=True)
 
     prepay_month  = {}
@@ -147,13 +158,14 @@ def pass0_global_top2(files, term_filter=360):
               f"still included in v6's loan-count panel.", flush=True)
 
     if term_filter is not None:
+        bad_term_loans = {lid for lid, (_, t) in orig_term.items() if t != term_filter}
         n_before = len(rate_map)
         n_dropped = len(bad_term_loans & rate_map.keys())
         for lid in bad_term_loans:
             rate_map.pop(lid, None)
             prepay_month.pop(lid, None)
             payoff_balance.pop(lid, None)
-        print(f"  term filter (=={term_filter}, loan-level): dropped {n_dropped:,} "
+        print(f"  term filter (=={term_filter}, origination row): dropped {n_dropped:,} "
               f"of {n_before:,} loans", flush=True)
 
     n_censored = 0
