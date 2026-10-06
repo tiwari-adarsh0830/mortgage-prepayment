@@ -175,8 +175,20 @@ def build_combined_pass(cutoff_year: int, include_pre2013: bool, map_era: str,
     # caller (e.g. score_rolling_one_step.py) already wrote/reads under the
     # SAME cache_dir/pop_hash (see the population-hash isolation bug this
     # module's docstring already documents -- same failure class).
-    _schema_tag = '' if _extra_keep_cols == ['current_actual_upb'] else \
-        '_cols' + ''.join(f'-{c}' for c in _extra_keep_cols)
+    #
+    # Also fold a FEATURE_COLS fingerprint in -- a manually-bumped
+    # CACHE_VERSION has now twice failed to catch a load_vintage_filtered
+    # schema change (bb8dece's term/post-mod fix, see
+    # score_matched_intersection_2003.py's docstring; e96857f's harp_eligible
+    # column, which crashed all 10 cutoff_2002_seq decwin jobs 2026-10-06
+    # against a combined-pass pickle written 2026-10-02, before that commit).
+    # Hashing FEATURE_COLS itself makes the cache self-invalidating on any
+    # future schema change, instead of depending on a human remembering to
+    # bump a string.
+    _feat_fp = hashlib.blake2b(','.join(FEATURE_COLS).encode(), digest_size=4).hexdigest()
+    _schema_tag = f'_feat{_feat_fp}' + (
+        '' if _extra_keep_cols == ['current_actual_upb'] else
+        '_cols' + ''.join(f'-{c}' for c in _extra_keep_cols))
     trunc_ym = dec_yyyymm(cutoff_year + 1)
     pop_hash = population_hash(cutoff_year, np.array(sorted(test_ids_set)), map_era)
     combined_path = os.path.join(

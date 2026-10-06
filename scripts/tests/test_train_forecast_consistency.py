@@ -127,6 +127,26 @@ CASES = [
         include_pre2013=False,
         has_trail_control=True,  # TRAIL_SEQ_DIR is cutoff_2020 -- applies here (unlike the cutoff_2002 cases)
     ),
+    dict(
+        name='cutoff_2002_seed42_seq',
+        # submit_cutoff_chain.sh's "_seq" schema (10-feature harp_eligible
+        # column, origination-row term rule, --include_pre2013
+        # --sample_frac 0.1). Added 2026-10-06 after all 10 decwin_2002_seq
+        # jobs crashed with KeyError: "['harp_eligible'] not in index" --
+        # root cause was a stale build_combined_pass cache pickle (written
+        # 2026-10-02, before e96857f added the column on 2026-10-05) that
+        # CACHE_VERSION didn't invalidate; see score_multiobs_dec_window.py's
+        # _feat_fp fingerprint fix. This case exercises Check 2, which routes
+        # through build_combined_pass/CACHE_DIR, so it stands as the
+        # regression guard for that cache-key fix specifically.
+        cutoff_year=2002,
+        seq_dir=os.path.join(BASE, 'data/sequences_rolling/cutoff_2002_zbc_multiobs_f0.2_h1_hist_seq'),
+        ckpt_path=os.path.join(BASE, 'outputs/rolling/cutoff_2002_multiobs_k5_h1_ipw_seq_s42/hazard_best.pt'),
+        map_era='fixed',
+        include_pre2013=True,
+        has_trail_control=False,  # TRAIL_SEQ_DIR is a cutoff_2020-only build
+        cell_sample_path=os.path.join(BASE, 'outputs/pre2013_cell_sample_30y_loans.csv'),
+    ),
 ]
 
 FAILURES = []
