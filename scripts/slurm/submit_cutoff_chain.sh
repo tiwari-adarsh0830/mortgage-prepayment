@@ -48,6 +48,26 @@ LOGDIR="$BASE/logs"
 mkdir -p "$LOGDIR"
 
 ACCOUNT=torch_pr_932_general
+# CPU_PARTITION: override for the census/build submissions only (both long,
+# CPU-only, memory-heavy jobs). Gate and ensemble already use cpu_short
+# unconditionally -- they're short/light regardless of which partition the
+# census/build ran on. GPU stages (train/dec-window/one-step) are untouched.
+# Default "cs" preserves every existing invocation's behavior.
+CPU_PARTITION="${CPU_PARTITION:-cs}"
+# cpu_short carries QoS cpu_short, which caps MaxWall at 6:00:00 (confirmed via
+# `sacctmgr show qos cpu_short` -- found 2026-10-05 when the plain partition
+# swap alone made sbatch reject both jobs with "CPU job setup is not valid").
+# The "cs" --time requests below (8h/12h) are safety margins, not real
+# requirements -- actual runtimes are ~18min (census) and ~2:45 (build, see
+# the cutoff_2020 _30y build, job 19067719 sacct record) -- so 5:45:00 still
+# leaves comfortable headroom under the 6h cap.
+if [[ "$CPU_PARTITION" == "cpu_short" ]]; then
+    CENSUS_TIME=5:45:00
+    BUILD_TIME=5:45:00
+else
+    CENSUS_TIME=8:00:00
+    BUILD_TIME=12:00:00
+fi
 CONDA_INIT='source /share/apps/anaconda3/2025.06/etc/profile.d/conda.sh && conda activate /scratch/at7095/conda_envs/mortgage_env'
 ENV_EXPORTS='export CLAUDE_CODE_TMPDIR=/scratch/at7095/mortgage_prepayment/.claude_tmp'
 
@@ -73,8 +93,8 @@ echo "=== submit_cutoff_chain.sh: cutoff_year=$YEAR seeds=[$SEEDS_CSV] ===" >&2
 # ── 1. Census baseline ───────────────────────────────────────────────────────
 CENSUS_JOBNAME="census_${YEAR}_seq"
 CENSUS_JOBID=$(sbatch --parsable \
-    --job-name="$CENSUS_JOBNAME" --account="$ACCOUNT" --partition=cs \
-    --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=96G --time=8:00:00 \
+    --job-name="$CENSUS_JOBNAME" --account="$ACCOUNT" --partition="$CPU_PARTITION" \
+    --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=96G --time="$CENSUS_TIME" \
     --output="$LOGDIR/${CENSUS_JOBNAME}_%j.out" --error="$LOGDIR/${CENSUS_JOBNAME}_%j.err" \
     --wrap="set -euo pipefail; $ENV_EXPORTS; $CONDA_INIT; cd $BASE; \
 python -u scripts/diag/census_panel_baseline.py \
@@ -85,8 +105,8 @@ echo "census:      job $CENSUS_JOBID"
 BUILD_JOBNAME="multiobs_${YEAR}_seq"
 BUILD_JOBID=$(sbatch --parsable \
     --dependency=afterok:"$CENSUS_JOBID" \
-    --job-name="$BUILD_JOBNAME" --account="$ACCOUNT" --partition=cs \
-    --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=96G --time=12:00:00 \
+    --job-name="$BUILD_JOBNAME" --account="$ACCOUNT" --partition="$CPU_PARTITION" \
+    --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=96G --time="$BUILD_TIME" \
     --output="$LOGDIR/${BUILD_JOBNAME}_%j.out" --error="$LOGDIR/${BUILD_JOBNAME}_%j.err" \
     --wrap="set -euo pipefail; $ENV_EXPORTS; $CONDA_INIT; cd $BASE; \
 python -u scripts/prepare_sequences_multiobs_zbc.py \
