@@ -449,8 +449,35 @@ if __name__ == '__main__':
     ap.add_argument('--case', type=str, default=None,
                      help="run only the named CASES entry (see CASES[*]['name']); "
                           'default runs the full standing-test suite (all cases).')
+    ap.add_argument('--seq_dir', type=str, default=None,
+                     help='Ad hoc mode (used by submit_cutoff_chain.sh\'s schema-smoke '
+                          'gate, one new cutoff/seed at a time without editing CASES): '
+                          'if set, runs a single ad hoc case built from --seq_dir/'
+                          '--ckpt_path/--cutoff_year/--map_era/--include_pre2013/'
+                          '--cell_sample instead of the named CASES list. Mutually '
+                          'exclusive with --case.')
+    ap.add_argument('--ckpt_path', type=str, default=None)
+    ap.add_argument('--cutoff_year', type=int, default=None)
+    ap.add_argument('--map_era', choices=['fixed', 'prefix'], default='fixed')
+    ap.add_argument('--include_pre2013', action='store_true', default=False)
+    ap.add_argument('--cell_sample', type=str, default=PRE2013_CELL_SAMPLE_PATH)
     args = ap.parse_args()
-    if args.case is None:
+    if args.seq_dir is not None:
+        if args.case is not None:
+            print('--seq_dir (ad hoc mode) and --case (named-CASES mode) are mutually exclusive.')
+            sys.exit(1)
+        missing = [f for f in ('ckpt_path', 'cutoff_year') if getattr(args, f) is None]
+        if missing:
+            print(f'--seq_dir requires {missing} to also be set.')
+            sys.exit(1)
+        adhoc_case = dict(
+            name=f'adhoc_cutoff_{args.cutoff_year}_{os.path.basename(args.ckpt_path)}',
+            cutoff_year=args.cutoff_year, seq_dir=args.seq_dir, ckpt_path=args.ckpt_path,
+            map_era=args.map_era, include_pre2013=args.include_pre2013,
+            has_trail_control=False, cell_sample_path=args.cell_sample,
+        )
+        run([adhoc_case])
+    elif args.case is None:
         run(CASES)
     else:
         matches = [c for c in CASES if c['name'] == args.case]

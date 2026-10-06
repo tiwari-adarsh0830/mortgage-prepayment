@@ -74,6 +74,18 @@ ENV_EXPORTS='export CLAUDE_CODE_TMPDIR=/scratch/at7095/mortgage_prepayment/.clau
 SEEDS=(42 7 123 1001 2026 3 11 77 314 999)   # advisor's Oct 4 decision: 10 seeds/cutoff
 SEEDS_CSV=$(IFS=,; echo "${SEEDS[*]}")
 
+# SCHEMA_SMOKE: 1-epoch seed-42 train + test_train_forecast_consistency.py
+# (ad hoc mode) between gate and the 10 real trainings. Default ON. Added
+# 2026-10-06 after all 10 decwin_2002_seq jobs failed on
+# KeyError: "['harp_eligible'] not in index" -- the 10 real trainings (each
+# ~2h) had already completed by the time the schema mismatch surfaced, at
+# the dec-window stage. A 1-epoch smoke train (~minutes) run through the
+# SAME consistency test catches a schema divergence between the train and
+# forecast paths before burning 10 real GPU trainings on it. Set
+# SCHEMA_SMOKE=0 to skip (not recommended; no known case where this is
+# correct other than re-running an already-validated schema unchanged).
+SCHEMA_SMOKE="${SCHEMA_SMOKE:-1}"
+
 CELL_SAMPLE="$BASE/outputs/pre2013_cell_sample_30y_loans.csv"
 BUILD_DIR="$BASE/data/sequences_rolling/cutoff_${YEAR}_zbc_multiobs_f0.2_h1_hist_seq"
 CENSUS_JSON="$BASE/outputs/census_panel_baseline_cutoff_${YEAR}_seq.json"
@@ -128,12 +140,43 @@ python -u scripts/diag/check_build_seq.py \
     --build_dir $BUILD_DIR --build_log $BUILD_LOG")
 echo "gate:        job $GATE_JOBID"
 
+# ── 3b. Schema smoke: 1-epoch seed-42 train + consistency test ──────────────
+FIRST_TRAIN_DEP="$GATE_JOBID"
+if [[ "$SCHEMA_SMOKE" == "1" ]]; then
+    SMOKE_TRAIN_JOBNAME="train_${YEAR}_seq_smoke_s42"
+    SMOKE_TRAIN_JOBID=$(sbatch --parsable \
+        --dependency=afterok:"$GATE_JOBID" \
+        --job-name="$SMOKE_TRAIN_JOBNAME" --account="$ACCOUNT" --partition=l40s_public \
+        --gres=gpu:1 --cpus-per-task=4 --mem=40G --time=0:30:00 \
+        --output="$LOGDIR/${SMOKE_TRAIN_JOBNAME}_%j.out" --error="$LOGDIR/${SMOKE_TRAIN_JOBNAME}_%j.err" \
+        --wrap="set -euo pipefail; export CUBLAS_WORKSPACE_CONFIG=:4096:8; $ENV_EXPORTS; $CONDA_INIT; cd $BASE; \
+python -u scripts/train_hazard_multiobs.py \
+    --cutoff_year $YEAR --sampling_mode fixed_fraction --frac_draws 0.2 \
+    --max_seq_len 33 --label_horizon 1 --n_epochs 1 --use_ipw --include_pre2013 \
+    --seed 42 --seq_dir $BUILD_DIR --run_tag _seq_smoke_s42 --ckpt_every 10")
+    echo "smoke train: job $SMOKE_TRAIN_JOBID"
+    SMOKE_CKPT_PATH="$BASE/outputs/rolling/cutoff_${YEAR}_multiobs_k5_h1_ipw_seq_smoke_s42/hazard_best.pt"
+
+    SMOKE_TEST_JOBNAME="smoketest_${YEAR}_seq"
+    SMOKE_TEST_JOBID=$(sbatch --parsable \
+        --dependency=afterok:"$SMOKE_TRAIN_JOBID" \
+        --job-name="$SMOKE_TEST_JOBNAME" --account="$ACCOUNT" --partition=cpu_short \
+        --nodes=1 --ntasks=1 --cpus-per-task=4 --mem=40G --time=0:30:00 \
+        --output="$LOGDIR/${SMOKE_TEST_JOBNAME}_%j.out" --error="$LOGDIR/${SMOKE_TEST_JOBNAME}_%j.err" \
+        --wrap="set -euo pipefail; $ENV_EXPORTS; $CONDA_INIT; cd $BASE; \
+python -u scripts/tests/test_train_forecast_consistency.py \
+    --seq_dir $BUILD_DIR --ckpt_path $SMOKE_CKPT_PATH --cutoff_year $YEAR \
+    --map_era fixed --include_pre2013 --cell_sample $CELL_SAMPLE")
+    echo "smoke test:  job $SMOKE_TEST_JOBID"
+    FIRST_TRAIN_DEP="$SMOKE_TEST_JOBID"
+fi
+
 # ── 4. Ten seeds: train -> dec-window -> one-step, each seed's own chain ─────
 ONESTEP_JOBIDS=()
 for SEED in "${SEEDS[@]}"; do
     TRAIN_JOBNAME="train_${YEAR}_seq_s${SEED}"
     TRAIN_JOBID=$(sbatch --parsable \
-        --dependency=afterok:"$GATE_JOBID" \
+        --dependency=afterok:"$FIRST_TRAIN_DEP" \
         --job-name="$TRAIN_JOBNAME" --account="$ACCOUNT" --partition=l40s_public \
         --gres=gpu:1 --cpus-per-task=4 --mem=40G --time=8:00:00 \
         --output="$LOGDIR/${TRAIN_JOBNAME}_%j.out" --error="$LOGDIR/${TRAIN_JOBNAME}_%j.err" \
