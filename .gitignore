@@ -15,3 +15,4 @@ work_log_archive_*.txt
 slurm-*.out
 docs/mistakes_and_lessons.md
 work_log*
+.claude_tmp/
