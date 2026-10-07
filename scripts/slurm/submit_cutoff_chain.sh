@@ -90,6 +90,45 @@ CELL_SAMPLE="$BASE/outputs/pre2013_cell_sample_30y_loans.csv"
 BUILD_DIR="$BASE/data/sequences_rolling/cutoff_${YEAR}_zbc_multiobs_f0.2_h1_hist_seq"
 CENSUS_JSON="$BASE/outputs/census_panel_baseline_cutoff_${YEAR}_seq.json"
 
+# START_AT: "census" (default, full chain) or "smoketest" (resume: skip
+# census/build/gate/smoke-train, which must already have completed, and submit
+# the consistency test with no dependency plus everything after it). Added
+# 2026-10-07 after the 2003-2005 chains died at the smoke test's old 0:30:00
+# limit with census/build/gate/smoke-train already done.
+START_AT="${START_AT:-census}"
+if [[ "$START_AT" != "census" && "$START_AT" != "smoketest" ]]; then
+    echo "START_AT must be census or smoketest, got: $START_AT" >&2
+    exit 1
+fi
+if [[ "$START_AT" == "smoketest" ]]; then
+    if [[ "${SCHEMA_SMOKE}" != "1" ]]; then
+        echo "START_AT=smoketest requires SCHEMA_SMOKE=1" >&2
+        exit 1
+    fi
+    if [[ ! -d "$BUILD_DIR" ]]; then
+        echo "START_AT=smoketest: build dir missing: $BUILD_DIR" >&2
+        exit 1
+    fi
+    GATE_LOG=$(ls -t "$LOGDIR"/gate_"${YEAR}"_seq_*.out 2>/dev/null | head -1 || true)
+    if [[ -z "$GATE_LOG" ]] || ! grep -q "ALL CHECKS PASSED" "$GATE_LOG"; then
+        echo "START_AT=smoketest: no gate log with ALL CHECKS PASSED for $YEAR (newest: ${GATE_LOG:-none})" >&2
+        exit 1
+    fi
+    SMOKE_CKPT_CHECK="$BASE/outputs/rolling/cutoff_${YEAR}_multiobs_k5_h1_ipw_seq_smoke_s42/hazard_best.pt"
+    if [[ ! -f "$SMOKE_CKPT_CHECK" ]]; then
+        echo "START_AT=smoketest: smoke checkpoint missing: $SMOKE_CKPT_CHECK" >&2
+        exit 1
+    fi
+    echo "START_AT=smoketest: build dir, gate log ($GATE_LOG) and smoke checkpoint verified" >&2
+fi
+
+# SMOKE_TEST_TIME: the consistency test builds the dec-window raw cache
+# (build_combined_pass) cold when it runs first in the chain. The old 0:30:00
+# was only ever validated against a hand-warmed cache (2002 _seq) and timed
+# out on all three 2003-2005 chains. Memory 96G: both cold-path runs sat at
+# their cap (prewarm 2002 64G, smoke tests 40G).
+SMOKE_TEST_TIME="${SMOKE_TEST_TIME:-3:00:00}"
+
 # cutoffs >= 2013 are the only ones where --sample_frac 0.1 actually fires
 # (RELEVANT_VINTAGES excludes every modern vintage for cutoffs <= 2012 --
 # see Part 3's inventory), so only those need the census_check_seq.py
@@ -102,6 +141,7 @@ fi
 
 echo "=== submit_cutoff_chain.sh: cutoff_year=$YEAR seeds=[$SEEDS_CSV] ===" >&2
 
+if [[ "$START_AT" == "census" ]]; then
 # ── 1. Census baseline ───────────────────────────────────────────────────────
 CENSUS_JOBNAME="census_${YEAR}_seq"
 CENSUS_JOBID=$(sbatch --parsable \
@@ -139,10 +179,14 @@ GATE_JOBID=$(sbatch --parsable \
 python -u scripts/diag/check_build_seq.py \
     --build_dir $BUILD_DIR --build_log $BUILD_LOG")
 echo "gate:        job $GATE_JOBID"
+fi
+
 
 # ── 3b. Schema smoke: 1-epoch seed-42 train + consistency test ──────────────
-FIRST_TRAIN_DEP="$GATE_JOBID"
+FIRST_TRAIN_DEP="${GATE_JOBID:-}"
 if [[ "$SCHEMA_SMOKE" == "1" ]]; then
+    SMOKE_TEST_DEP_ARGS=()
+    if [[ "$START_AT" == "census" ]]; then
     SMOKE_TRAIN_JOBNAME="train_${YEAR}_seq_smoke_s42"
     SMOKE_TRAIN_JOBID=$(sbatch --parsable \
         --dependency=afterok:"$GATE_JOBID" \
@@ -155,13 +199,15 @@ python -u scripts/train_hazard_multiobs.py \
     --max_seq_len 33 --label_horizon 1 --n_epochs 1 --use_ipw --include_pre2013 \
     --seed 42 --seq_dir $BUILD_DIR --run_tag _seq_smoke_s42 --ckpt_every 10")
     echo "smoke train: job $SMOKE_TRAIN_JOBID"
+    SMOKE_TEST_DEP_ARGS=(--dependency=afterok:"$SMOKE_TRAIN_JOBID")
+    fi
     SMOKE_CKPT_PATH="$BASE/outputs/rolling/cutoff_${YEAR}_multiobs_k5_h1_ipw_seq_smoke_s42/hazard_best.pt"
 
     SMOKE_TEST_JOBNAME="smoketest_${YEAR}_seq"
     SMOKE_TEST_JOBID=$(sbatch --parsable \
-        --dependency=afterok:"$SMOKE_TRAIN_JOBID" \
+        ${SMOKE_TEST_DEP_ARGS[@]+"${SMOKE_TEST_DEP_ARGS[@]}"} \
         --job-name="$SMOKE_TEST_JOBNAME" --account="$ACCOUNT" --partition=cpu_short \
-        --nodes=1 --ntasks=1 --cpus-per-task=4 --mem=40G --time=0:30:00 \
+        --nodes=1 --ntasks=1 --cpus-per-task=4 --mem=96G --time="$SMOKE_TEST_TIME" \
         --output="$LOGDIR/${SMOKE_TEST_JOBNAME}_%j.out" --error="$LOGDIR/${SMOKE_TEST_JOBNAME}_%j.err" \
         --wrap="set -euo pipefail; $ENV_EXPORTS; $CONDA_INIT; cd $BASE; \
 python -u scripts/tests/test_train_forecast_consistency.py \
@@ -235,7 +281,7 @@ echo "ensemble:    job $ENSEMBLE_JOBID"
 
 echo "" >&2
 echo "=== submit_cutoff_chain.sh done: cutoff_year=$YEAR ===" >&2
-echo "census=$CENSUS_JOBID build=$BUILD_JOBID gate=$GATE_JOBID onestep_jobs=[$ONESTEP_DEP] ensemble=$ENSEMBLE_JOBID" >&2
+echo "census=${CENSUS_JOBID:-skipped} build=${BUILD_JOBID:-skipped} gate=${GATE_JOBID:-skipped} onestep_jobs=[$ONESTEP_DEP] ensemble=$ENSEMBLE_JOBID" >&2
 echo "" >&2
 echo "NOTE: census_check_seq.py is NOT in this automated chain (it's informational," >&2
 echo "not a pass/fail gate) -- run it manually after the build/census jobs finish:" >&2
