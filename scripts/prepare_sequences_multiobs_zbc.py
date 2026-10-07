@@ -837,7 +837,10 @@ def select_observations(
         loan-level statistic -- the two must not be confused). Because
         n_pool cancels in budget/n_pool = ceil(f*n_pool)/n_pool, the
         non-mandatory incl_prob is CONSTANT ≈ frac_draws regardless of loan
-        length, unlike fixed_k. Two honest caveats, not swept under the rug:
+        length, unlike fixed_k. No explicit max(1, budget) floor is needed:
+        ceil(frac_draws * n_pool) is already >= 1 for any n_pool >= 1 and
+        frac_draws > 0, since frac_draws * n_pool > 0 and ceil() of a
+        positive number is always >= 1. Two honest caveats, not swept under the rug:
           (a) ceil() rounds up, so incl_prob is always >= frac_draws, most
               visibly for small pools -- a pool of size 1 gets incl_prob
               exactly 1.0 for ANY frac_draws in (0, 1], since you cannot
