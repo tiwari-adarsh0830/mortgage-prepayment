@@ -5144,11 +5144,15 @@ between the two cutoffs rather than disappearing.
 
 **Same data, different initialization — measured vs. inferred.** *Measured:* the census JSON and CSV
 are byte-identical to `_30y` (`cmp`); the `_seq` and `_30y` decwin raw-pass caches share the same
-`pop_hash` (`73fab0fbc4de189c`, in the cache filenames). *Inferred, not yet measured:* that the
-0.8883-vs-0.8982 gap on the same five seeds is initialization noise from the changed parameter shapes
-and nothing else. That holds only if the first nine columns of `train_seq.npy` / `test_seq.npy` and
-every other array are identical; `scripts/diag/compare_seq_30y_vs_seq_2002.py` tests exactly that
-(submitted as job 19313234; its result is not recorded in this section).
+`pop_hash` (`73fab0fbc4de189c`, in the cache filenames); and `scripts/diag/compare_seq_30y_vs_seq_2002.py`
+(job 19313234, `logs/compare_seq_30y_vs_seq_2002_19313234.out`) found `train_seq.npy` (833,720 × 33 × 10
+vs. 833,720 × 33 × 9) and `test_seq.npy` (208,187 × 33 × 10 vs. 208,187 × 33 × 9) identical on the first
+nine columns (max abs diff 0, all chunks), the tenth column all zeros, and the other 24 `.npy`
+arrays (mask, labels, loan ids and splits, ref_month, incl_prob, etc.) identical. *Inferred:* the
+0.8883-vs-0.8982 gap on the same five seeds is therefore initialization noise from the changed
+parameter shapes, by elimination — the data are identical and the only training-script change is
+`input_dim` (e96857f); the seed-42 `_30y` and `_seq` trainings use the same arguments apart from the
+run tag. Not tested directly (no 9-column retrain on the new code, no second 10-column draw per seed).
 
 **Cache-contamination check (verdict as of Oct 6).** No feature-value change landed between the
 Oct 2 cache build and the `_30y` jobs; 189ddd0 came three days later (Oct 5). The `_seq` results
@@ -5186,6 +5190,7 @@ pickle that crashed the first ten decwin jobs.
 | 0.8883 / 0.8661, 0.8714 / 0.8486 | same file | means of seeds {42,7,123,1001,2026} / the other five, computed this session |
 | 0.8982 / 0.8818 | `outputs/rolling/ensemble_onestep_cutoff_2002_30y/pooled_stats.csv` | rows `model=ensemble` |
 | 9 of 12 months below | `outputs/rolling/ensemble_onestep_cutoff_2002_seq/month_by_month.csv` | rows `model=ensemble`, predicted vs. realized annualized |
+| 26 arrays identical; shapes; tenth column zeros | `logs/compare_seq_30y_vs_seq_2002_19313234.out` | per-array lines and VERDICT |
 | census byte-identical | `outputs/census_panel_baseline_cutoff_2002_{30y,seq}.{json,csv}` | `cmp`, this session |
 | pop_hash 73fab0fbc4de189c | `outputs/rolling/_dec_window_raw_cache/_raw_combined_pass_73fab0fbc4de189c_trunc200312_v2_upb{,_feat6faa879d}.pkl` | filenames |
 | 33:12 / 46:13; 66.4 GB / 87.1 GB | `sacct -j 19255256`, `sacct -j 19255257` | Elapsed; `.batch` MaxRSS (66370368K, 87075292K) |
