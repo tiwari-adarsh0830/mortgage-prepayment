@@ -1,6 +1,9 @@
 ## Current state
 *(Oct 6, 2026 — rewritten each session, not appended to.)*
 
+**Oct 7 — chains stopped at the smoke test.** All three Oct 6 chains (2003, 2004, 2005) died at the consistency test's 30-minute limit (jobs 19312981, 19313031, 19313104, TIMEOUT, while building the dec-window raw cache from cold; Check 1 had passed). Census, build, gate and smoke train completed in every cutoff and were kept; the 31 later jobs per cutoff were cancelled by the failed dependency.
+**Oct 7 — resumed from the test stage** with the fixed driver (`START_AT=smoketest`, test limit 3:00:00 / 96G, commit a4b8f95): 2003 19388298–19388333, 2004 19388334–19388409, 2005 19388410–19388533 (other users' ids interleaved). This supersedes "still running" in the next paragraph.
+
 **Oct 5–6 update (new schema, `_seq`).** Everything below the next paragraph describes the Oct 1–3
 `_30y` builds and is unchanged. Since then the pipeline moved to the `_seq` schema: `harp_eligible`
 is a tenth feature column (all zeros — no eligibility logic yet), the 30-year rule is applied to the
