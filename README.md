@@ -1,5 +1,16 @@
 ## Current state
-*(Oct 3, 2026 — rewritten each session, not appended to.)*
+*(Oct 6, 2026 — rewritten each session, not appended to.)*
+
+**Oct 5–6 update (new schema, `_seq`).** Everything below the next paragraph describes the Oct 1–3
+`_30y` builds and is unchanged. Since then the pipeline moved to the `_seq` schema: `harp_eligible`
+is a tenth feature column (all zeros — no eligibility logic yet), the 30-year rule is applied to the
+loan's origination (earliest) row, and `scripts/slurm/submit_cutoff_chain.sh <year>` submits the whole
+census → build → gate → smoke → 10 seeds → ensemble chain for one cutoff. `cutoff_2002_seq` is
+done: 10-seed ensemble one-step pooled ratio **0.8798** (count) / **0.8573** (UPB), vs. 0.8982 /
+0.8818 for the five-seed `_30y` ensemble (source files in the Oct 5–6 section's number audit). The
+census is byte-identical to `_30y`. Cutoffs 2003, 2004, 2005 are submitted and still running as of
+this writing (job ids in the Oct 5–6 section). The `_30y` numbers below remain the record for the
+five-seed runs.
 
 **Advisor's Oct 1 clarification.** "Rebuild the 2021 cutoff" means the existing `cutoff_2020`
 design (train ≤ Dec 2020, forecast CY2021) — not a new train-≤-Dec-2021 cutoff. No new
@@ -27,9 +38,14 @@ for the `cutoff_2002` matched-intersection model-vs-population comparison (below
 new forecast number.
 
 **Pending, not started:** the two-realized-series split (voluntary code-01-30y vs. total payoffs,
-for `realized_cpr_v6.py`); the HARP eligibility feature (fields located, changes input dim, cannot
-share a training run with models that lack it); the recency-weighting form; the advisor reply
+for `realized_cpr_v6.py`); the HARP eligibility *logic* (the column now exists, all zeros, since Oct 5 —
+see the Oct 5–6 section; the real eligibility rule is not written); the recency-weighting form; the advisor reply
 email.
+
+**Pending, added Oct 6.** (1) `outputs/hazard_best.pt`, `outputs/hazard_calibration.json` and
+`outputs/transformer_best.pt` (dated April–June, from the old stage2/OAS pipeline; no current
+writer) must be replaced before the DER regression is rerun with the new models. (2)
+`docs/artifact_map.md` is an untracked provenance audit awaiting review.
 
 **Standing test.** `scripts/tests/test_train_forecast_consistency.py` — both `_30y` cases now pass:
 `cutoff_2002_seed42_30y` (Oct 2, Check 1 exact n=2,000, Check 2 verified at 3 months, negative
@@ -5092,3 +5108,87 @@ between the two cutoffs rather than disappearing.
 | Dec-window in-sample table (both cutoffs) | `outputs/rolling/dec_window_cutoff_{2002,2020}_30y_seed{N}/dec_window_scores_seed{N}.csv` | `annual_pp`/`realized_prepay` columns, computed this session |
 | Sep 23 one-step-sample figures (1.0269/1.0696/1.0212) | README.md "cutoff_2002: seed replication..." section | `ipw_consistent_gap.py` correction text |
 | D.4 denominators (589,311/278,641) | `.claude_tmp/verify_term_mod_filters_18992408.log` (not committed) | `D.4` lines, both vintages |
+
+
+## Oct 5–6, 2026 — seq schema, cache fingerprint, 2002 `_seq` result, 2003–2005 launch
+
+**What changed in the pipeline.**
+- **`harp_eligible` as the tenth feature column (all zeros).** `FEATURE_COLS` in the three `_zbc`
+  builders gains `harp_eligible` as its last entry (commit e96857f); no eligibility logic. The
+  trainer now takes `input_dim` from `train_seq.shape[-1]` instead of a hardcoded 9. This is the
+  only change to the training script between the `_30y` and `_seq` runs.
+- **30-year rule by origination row (189ddd0).** A loan is kept iff `original_loan_term` on its
+  earliest reporting-period row is 360, replacing "drop if any row is non-360". A loan whose term
+  changes at modification is now kept. The smoke test's kept counts on 2002Q1 and 2018Q1 (594,424
+  and 367,395) match the prior rule's reference numbers.
+- **Cache-key fingerprint (17d5120).** The decwin raw-pass cache was keyed on a hand-bumped
+  `CACHE_VERSION` that was not bumped when `harp_eligible` landed, so all ten `_seq` decwin jobs read
+  the Oct 2 pre-`harp_eligible` pickle and died with `KeyError: ['harp_eligible'] not in index`. The
+  key now includes a blake2b fingerprint of `FEATURE_COLS` (cache filenames gain a `_feat<8 hex>`
+  suffix), so a schema change selects a new file instead of silently reusing a stale one.
+- **`SCHEMA_SMOKE` stage (7a5b1af, default on).** After the gate, the driver submits a 1-epoch
+  seed-42 train and the train/forecast consistency test on that checkpoint; the ten real trainings
+  depend on the consistency-test job, not the gate. A schema divergence is caught before ten GPU
+  trainings are spent on it.
+
+**`cutoff_2002_seq` result (10 seeds: 42, 7, 123, 1001, 2026, 3, 11, 77, 314, 999).**
+- Ensemble one-step pooled ratio: **0.8798** by count, **0.8573** by UPB.
+- Per-seed range: count 0.8050 (seed 77) to 0.9830 (seed 999); UPB 0.7806 (seed 77) to 0.9696
+  (seed 999).
+- SE of the ten per-seed ratios (sd/√10, computed from the per-seed rows): 0.0212 count, 0.0220 UPB.
+- Seeds 42, 7, 123, 1001, 2026 only (the five that also exist as `_30y`): mean per-seed ratio 0.8883
+  count / 0.8661 UPB, vs. the `_30y` five-seed ensemble **0.8982** count / **0.8818** UPB. The other
+  five seeds average 0.8714 count / 0.8486 UPB.
+- Month by month (annualized, ensemble, 12 reference months 200212–200311): predicted is below
+  realized in 9 of 12 (200301–200309); above in 200212, 200310, 200311.
+
+**Same data, different initialization — measured vs. inferred.** *Measured:* the census JSON and CSV
+are byte-identical to `_30y` (`cmp`); the `_seq` and `_30y` decwin raw-pass caches share the same
+`pop_hash` (`73fab0fbc4de189c`, in the cache filenames). *Inferred, not yet measured:* that the
+0.8883-vs-0.8982 gap on the same five seeds is initialization noise from the changed parameter shapes
+and nothing else. That holds only if the first nine columns of `train_seq.npy` / `test_seq.npy` and
+every other array are identical; `scripts/diag/compare_seq_30y_vs_seq_2002.py` tests exactly that
+(submitted as job 19313234; its result is not recorded in this section).
+
+**Cache-contamination check (verdict as of Oct 6).** No feature-value change landed between the
+Oct 2 cache build and the `_30y` jobs; 189ddd0 came three days later (Oct 5). The `_seq` results
+were scored from the fresh `..._feat6faa879d.pkl` cache (file time Oct 6 11:35), not the stale
+pickle that crashed the first ten decwin jobs.
+
+**Cutoffs 2003, 2004, 2005 launched (Oct 6).**
+- Driver verified before launch: no hardcoded 2002, run tag, or output path in the driver or in any
+  script it calls (the 2002 mentions are docstrings, usage examples, and a named-case table the
+  driver does not use); all paths are keyed by cutoff year and seed. `--include_pre2013` prepends
+  `PRE2013_VINTAGES` to the vintage list and the cutoff then drops vintages starting after Dec of
+  the cutoff year, so a pre-2013 cutoff uses only 2000Q1 through the cutoff year's Q4. Census and
+  build for every cutoff use `outputs/pre2013_cell_sample_30y_loans.csv`.
+- Partition: census and build on `cpu_short`, `--time=5:45:00`. Basis: `cutoff_2002_seq` census took
+  33:12 and build 46:13 (sacct, jobs 19255256 and 19255257); times three is 1:39:36 and 2:18:39,
+  under the 5:30:00 threshold. Peak RSS was 66.4 GB (census) and 87.1 GB (build) against 96 GB
+  requested. A timed-out build resumes on resubmission into the same directory (Pass 1/2 per-vintage
+  pickles, Pass 3 per-vintage shards).
+- Job ids (ranges are first to last of each chain; other users' ids fall inside them):
+  2003 = 19312977–19313023 (census 19312977, build 19312978, gate 19312979, ensemble 19313023);
+  2004 = 19313024–19313093 (census 19313024, build 19313025, gate 19313026, ensemble 19313093);
+  2005 = 19313095–19313156 (census 19313095, build 19313096, gate 19313099, ensemble 19313156).
+  Each chain is 36 jobs. For one train job per cutoff (seed 42: 19312982, 19313033, 19313105),
+  `scontrol` shows `Dependency=afterok:` the cutoff's own smoke-test job.
+- State when written: 2003 census running; the 2004 and 2005 censuses pending on
+  `QOSMaxMemoryPerUser` (96 GB each), so the three CPU stages run effectively one after another.
+
+### Number audit (this section)
+
+| number | file | key |
+|---|---|---|
+| 0.8798 / 0.8573 (10-seed ensemble count / UPB) | `outputs/rolling/ensemble_onestep_cutoff_2002_seq/pooled_stats.csv` | rows `model=ensemble` |
+| per-seed ranges 0.8050–0.9830 / 0.7806–0.9696 | same file | `ratio`, rows `model=seed{N}` |
+| SE 0.0212 / 0.0220 | same file | sd(ddof=1)/√10 of the ten `ratio` values, computed this session |
+| 0.8883 / 0.8661, 0.8714 / 0.8486 | same file | means of seeds {42,7,123,1001,2026} / the other five, computed this session |
+| 0.8982 / 0.8818 | `outputs/rolling/ensemble_onestep_cutoff_2002_30y/pooled_stats.csv` | rows `model=ensemble` |
+| 9 of 12 months below | `outputs/rolling/ensemble_onestep_cutoff_2002_seq/month_by_month.csv` | rows `model=ensemble`, predicted vs. realized annualized |
+| census byte-identical | `outputs/census_panel_baseline_cutoff_2002_{30y,seq}.{json,csv}` | `cmp`, this session |
+| pop_hash 73fab0fbc4de189c | `outputs/rolling/_dec_window_raw_cache/_raw_combined_pass_73fab0fbc4de189c_trunc200312_v2_upb{,_feat6faa879d}.pkl` | filenames |
+| 33:12 / 46:13; 66.4 GB / 87.1 GB | `sacct -j 19255256`, `sacct -j 19255257` | Elapsed; `.batch` MaxRSS (66370368K, 87075292K) |
+| fresh cache used by `_seq` scoring | `logs/decwin_2002_seq_s42_19291350.out` | "Cache hit (combined)" line |
+| 594,424 / 367,395 | commit message of 189ddd0 | smoke-test line |
+| job ids | `.claude_tmp/submit_{2003,2004,2005}.out` (not committed) | driver stdout |
