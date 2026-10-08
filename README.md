@@ -1,16 +1,14 @@
 ## Current state
 *(Oct 8, 2026 — rewritten each session, not appended to.)*
 
-**Oct 7–8 — cutoffs 2003, 2004, 2005 `_seq` done; 2006, 2007, 2008 submitted.** The resumed chains
-(test limit 3:00:00) completed with every job at exit 0:0. Ten-seed ensemble one-step pooled ratio,
-count / UPB: **1.1800 / 1.2069** (cutoff 2003, forecast 2004), **1.1623 / 1.1885** (2004 → 2005),
-**1.0506 / 1.0997** (2005 → 2006), against 0.8798 / 0.8573 for cutoff 2002 → 2003. The per-coupon
-dispersion written by the ensemble script is `inf` for 2004 and 2005 (thin zero-realized coupons
-at its min_n=100); the reportable dispersion for 2002–2005 is the min_n=1,000 recompute in the
-Oct 7–8 section, and the scorer now guards against zero-realized groups (1c5b613). Cutoffs 2006,
-2007, 2008 were submitted Oct 8 with the smoke test at 120G (`SMOKE_TEST_MEM`, 65239fb): 2006 =
-19413362–19413405, 2007 = 19413407–19413459, 2008 = 19413461–19413511. Detail and sources in the
-Oct 7–8 section at the end of this file.
+**Oct 8 — cutoffs 2006, 2007, 2008 `_seq` done; 2009, 2010, 2011 submitted.** All 2006–2008 jobs
+COMPLETED at exit 0:0. Ten-seed ensemble one-step pooled ratio, count / UPB: **1.3095 / 1.3898**
+(cutoff 2006, forecast 2007), **1.5598 / 1.5962** (2007 → 2008), **1.4505 / 1.2765** (2008 → 2009);
+seed-42 held-out in-sample ratios are 1.0020 (2006), 0.9692 (2007) and **1.1141 (2008)**. Two cutoffs
+fail the ±0.05 in-sample gate and are **pending in-sample check, not reportable: 2008 (1.1141) and
+2003 (1.0505)**; the 2003 numbers in the Oct 7–8 section below stand as recorded but carry this flag.
+2009–2011 were submitted Oct 8 with the smoke test at 160G with no `--partition` (named CPU
+partitions reject >120G); ids and memory in the Oct 8 section at the end of this file.
 
 **Oct 5–6 update (new schema, `_seq`).** Everything below the next paragraph describes the Oct 1–3
 `_30y` builds and is unchanged. Since then the pipeline moved to the `_seq` schema: `harp_eligible`
@@ -5316,4 +5314,150 @@ ensemble 19413405); 2007 = 19413407–19413459 (19413407, 19413408, 19413409, 19
 2008 = 19413461–19413511 (19413461, 19413462, 19413463, 19413465, 19413511). 108 jobs queued;
 `scontrol` shows each smoke test at TimeLimit 03:00:00, MinMemoryNode 120G, `afterok` on its smoke
 train, and 2006 train s42 `afterok:19413372`. Driver stdout: `.claude_tmp/submit_2006_2008.out`
+(not committed).
+
+## Oct 8, 2026 — 2006–2008 `_seq` results, in-sample check, 2009–2011 launch
+
+### Results, cutoffs 2006–2008 (forecast years 2007–2009)
+
+All census, build, gate, smoke-train, smoke-test, 30 train/decwin/onestep and ensemble jobs COMPLETED
+0:0 (`sacct -u at7095 -S 2026-10-08T00:00 -X`). Gate logs (`logs/gate_{2006,2007,2008}_seq_*.out`):
+ALL CHECKS PASSED, `.err` empty. Consistency tests (`logs/smoketest_<y>_seq_*.out`): all PASS, Check 2
+months 200612/200706/200711 (2006), 200712/200806/200811 (2007), 200812/200906/200911 (2008),
+negative control "bug caught" (63831/63831, 77149/77149, 90015/90015 loan-months disagree), total
+elapsed 3384.7s / 4219.2s / 3940.8s. The build logs' loader line (line 6) is
+`Loaded pre-2013 cell-grid sample ...pre2013_cell_sample_30y_loans.csv: 1,482,004 loan_ids`.
+
+Summary, 2002–2008. Census: `outputs/census_panel_baseline_cutoff_<y>_seq.json` "overall"
+(n_loans, n_prepay_events). AUC: mean of `best_auc` over the ten
+`outputs/rolling/cutoff_<y>_multiobs_k5_h1_ipw_seq_s*/results.json`. One-step:
+`outputs/rolling/ensemble_onestep_cutoff_<y>_seq/pooled_stats.csv` (ensemble rows; per-seed count ratios
+for min/max; SE = sample stdev / sqrt(10), computed) and `month_by_month.csv` (months with annualized
+predicted/realized < 1). Dispersion: `scripts/diag/dispersion_recompute.py --min_n 1000`.
+
+| cutoff → forecast | census loans | events | mean AUC | pooled count | pooled UPB | SE | seed min / max | months <1 | disp ratio @1000 |
+|---|---|---|---|---|---|---|---|---|---|
+| 2002 → 2003 | 277,042 | 99,227 | 0.7761 | 0.8798 | 0.8573 | 0.0212 | 0.8050 / 0.9830 | 9 | 1.434 |
+| 2003 → 2004 (pending in-sample check) | 384,301 | 187,537 | 0.7855 | 1.1800 | 1.2069 | 0.0197 | 1.0448 / 1.2398 | 1 | 1.445 |
+| 2004 → 2005 | 473,195 | 238,540 | 0.7782 | 1.1623 | 1.1885 | 0.0155 | 1.0815 / 1.2462 | 1 | 1.459 |
+| 2005 → 2006 | 572,493 | 286,606 | 0.7760 | 1.0506 | 1.0997 | 0.0187 | 0.9480 / 1.1332 | 6 | 0.967 |
+| 2006 → 2007 | 669,508 | 324,408 | 0.7773 | 1.3095 | 1.3898 | 0.0114 | 1.2354 / 1.3463 | 0 | 1.300 |
+| 2007 → 2008 | 782,404 | 364,747 | 0.7769 | 1.5598 | 1.5962 | 0.0230 | 1.4407 / 1.6487 | 0 | 1.616 |
+| 2008 → 2009 (pending in-sample check) | 906,012 | 405,197 | 0.7760 | 1.4505 | 1.2765 | 0.0637 | 1.2198 / 1.8905 | 0 | 0.679 |
+
+Loans and events grow monotonically 2002 → 2008. Ten-seed best-AUC range: 2006 0.7762–0.7788, 2007
+0.7761–0.7781, 2008 0.7756–0.7766. The scorer's own `dispersion_stats.csv` (ensemble row; these three
+ran with the zero guard, all finite) equals the recompute at min_n=100: 2006 4.930 / 3.794 / 1.2995
+(12 groups, 3 excluded), 2007 8.791 / 3.518 / 2.4988 (12, 3), 2008 9.722 / 7.509 / 1.2947 (13, 1).
+The 2008 cutoff has a much wider seed spread (SE 0.0637) and diverging count and UPB ratios
+(1.4505 vs 1.2765); not explained.
+
+### Dispersion tables at min_n=1,000, cutoffs 2006–2008
+
+**Cutoff 2006 (forecast 2007)**, `outputs/rolling/ensemble_onestep_cutoff_2006_seq/ensemble_merged_all_months.csv`, min_n=1,000, no coupon dropped for zero realized events:
+
+| coupon | n loan-months | pred events | real events | pred rate | real rate | ratio |
+|---|---|---|---|---|---|---|
+| 4.0 | 5,608 | 27.2816 | 26 | 0.0049 | 0.0046 | 1.0493 |
+| 4.5 | 40,491 | 218.3094 | 198 | 0.0054 | 0.0049 | 1.1026 |
+| 5.0 | 236,262 | 1560.3440 | 1367 | 0.0066 | 0.0058 | 1.1414 |
+| 5.5 | 99,725 | 876.1733 | 758 | 0.0088 | 0.0076 | 1.1559 |
+| 6.0 | 244,074 | 3404.1751 | 2496 | 0.0139 | 0.0102 | 1.3639 |
+| 6.5 | 61,646 | 1188.6984 | 757 | 0.0193 | 0.0123 | 1.5703 |
+| 7.0 | 59,064 | 1416.6118 | 1025 | 0.0240 | 0.0174 | 1.3821 |
+| 7.5 | 7,732 | 170.7884 | 136 | 0.0221 | 0.0176 | 1.2558 |
+| 8.0 | 6,673 | 112.4541 | 85 | 0.0169 | 0.0127 | 1.3230 |
+| 8.5 | 1,249 | 20.7224 | 17 | 0.0166 | 0.0136 | 1.2190 |
+| 9.0 | 1,590 | 24.5446 | 27 | 0.0154 | 0.0170 | 0.9091 |
+
+Predicted max/min 4.930, realized max/min 3.794, **dispersion ratio 1.300** (11 coupons).
+
+**Cutoff 2007 (forecast 2008)**, `outputs/rolling/ensemble_onestep_cutoff_2007_seq/ensemble_merged_all_months.csv`, min_n=1,000, no coupon dropped for zero realized events:
+
+| coupon | n loan-months | pred events | real events | pred rate | real rate | ratio |
+|---|---|---|---|---|---|---|
+| 4.0 | 5,445 | 23.1944 | 20 | 0.0043 | 0.0037 | 1.1597 |
+| 4.5 | 39,101 | 196.8288 | 157 | 0.0050 | 0.0040 | 1.2537 |
+| 5.0 | 260,715 | 1619.2022 | 1311 | 0.0062 | 0.0050 | 1.2351 |
+| 5.5 | 123,351 | 1066.9454 | 857 | 0.0086 | 0.0069 | 1.2450 |
+| 6.0 | 306,671 | 4407.6756 | 2790 | 0.0144 | 0.0091 | 1.5798 |
+| 6.5 | 80,481 | 1543.5724 | 788 | 0.0192 | 0.0098 | 1.9588 |
+| 7.0 | 90,313 | 2164.8418 | 1167 | 0.0240 | 0.0129 | 1.8550 |
+| 7.5 | 10,919 | 264.3471 | 136 | 0.0242 | 0.0125 | 1.9437 |
+| 8.0 | 6,547 | 100.9394 | 72 | 0.0154 | 0.0110 | 1.4019 |
+| 8.5 | 1,197 | 15.4441 | 14 | 0.0129 | 0.0117 | 1.1031 |
+| 9.0 | 1,737 | 19.8748 | 12 | 0.0114 | 0.0069 | 1.6562 |
+
+Predicted max/min 5.683, realized max/min 3.518, **dispersion ratio 1.616** (11 coupons).
+
+**Cutoff 2008 (forecast 2009)**, `outputs/rolling/ensemble_onestep_cutoff_2008_seq/ensemble_merged_all_months.csv`, min_n=1,000, no coupon dropped for zero realized events:
+
+| coupon | n loan-months | pred events | real events | pred rate | real rate | ratio |
+|---|---|---|---|---|---|---|
+| 4.0 | 5,672 | 27.7815 | 15 | 0.0049 | 0.0026 | 1.8521 |
+| 4.5 | 47,866 | 321.5104 | 298 | 0.0067 | 0.0062 | 1.0789 |
+| 5.0 | 301,447 | 3742.2676 | 3655 | 0.0124 | 0.0121 | 1.0239 |
+| 5.5 | 133,000 | 2898.0735 | 2641 | 0.0218 | 0.0199 | 1.0973 |
+| 6.0 | 335,682 | 8378.0663 | 5553 | 0.0250 | 0.0165 | 1.5087 |
+| 6.5 | 105,458 | 2540.2793 | 1106 | 0.0241 | 0.0105 | 2.2968 |
+| 7.0 | 125,279 | 2955.1354 | 1197 | 0.0236 | 0.0096 | 2.4688 |
+| 7.5 | 12,482 | 232.2192 | 96 | 0.0186 | 0.0077 | 2.4189 |
+| 8.0 | 6,788 | 80.9713 | 33 | 0.0119 | 0.0049 | 2.4537 |
+| 9.0 | 1,334 | 11.0965 | 10 | 0.0083 | 0.0075 | 1.1097 |
+
+Predicted max/min 5.096, realized max/min 7.509, **dispersion ratio 0.679** (10 coupons).
+
+### In-sample check (seed 42), cutoffs 2003–2008
+
+`scripts/diag/ipw_consistent_gap.py` accepted only `--cutoff 2002|2020`; it gained `CFG` entries for
+2003–2008 (filtered block uses coupons 4.0–9.0, n_obs>=1000; the **UNFILTERED** ratio below is the
+figure used). One job per cutoff, `scripts/slurm/run_ipw_consistent_gap_<y>_seq_seed42.sbatch`, same
+resources as the 2002 `_30y` run (`l40s_public`, GPU, 32G, 1h; not cpu_short), seed-42 `hazard_best.pt`
+against the `_seq` build's test split, jobs 19438529–19438534 (all COMPLETED 0:0). Logs
+`logs/ipw_gap_<y>_seq_s42_*.out`; the re-scored AUC matched `results.json` in every case.
+
+| cutoff | in-sample IPW pred / realized (unfiltered) | out-of-time pooled count | gap from 1.00 > 0.05? |
+|---|---|---|---|
+| 2002 `_30y` s42 (reference) | 1.0078 | 0.8798 (`_seq` ensemble) | no |
+| 2003 | 1.0505 | 1.1800 | **yes — pending in-sample check** |
+| 2004 | 1.0297 | 1.1623 | no |
+| 2005 | 0.9546 | 1.0506 | no |
+| 2006 | 1.0020 | 1.3095 | no |
+| 2007 | 0.9692 | 1.5598 | no |
+| 2008 | 1.1141 | 1.4505 | **yes — pending in-sample check** |
+
+The prompt quoted a 2002 in-sample reference of 1.002; no file read this session contains it. The
+2002 `_30y` seed-42 figure (`logs/ipw_gap_2002_30y_s42_19088977.out`) is 1.0078 unfiltered / 1.0081
+filtered, and the five 2002 `_30y` seeds span 0.9523–1.0283 (`logs/ipw_gap_2002_30y_s{42,7,123,1001,2026}_*.out`),
+so a ±0.05 gate would also have flagged 2002 seed 7. No `_seq` 2002 run of this script exists. The
+2003 breach is 0.0005 past the threshold. Seed 42 only; not a ten-seed statement.
+
+### 2009–2011 launch
+
+Memory sizing (`sacct --format=MaxRSS,ReqMem`, `.batch` step): smoke tests 2003–2008 MaxRSS
+85,987,124K / 100,659,604K / 100,659,296K / 122,316,140K / 125,824,956K / 84,683,988K against
+96G / 96G / 96G / 120G / 120G / 120G; builds 2003–2008 100,658,848K–100,659,472K (19312978 … 19413462) against 96G. Most
+sit at their request, so the true demand is not observed and the 2005 → 2008 growth cannot be
+extrapolated (2008 is below 2007). `sacctmgr`: `cpu_short` per-user `cpu=32,mem=120G`, MaxWall 6:00:00;
+`cpu48` per-user `cpu=3000,mem=6000G`, MaxWall 2-00:00:00. `sbatch --test-only` (no job created):
+`--mem=160G` is rejected with "CPU job setup is not valid" for `cs`, `cpu_short`, `cpu_prem` and
+`all`; with no `--partition` it is accepted (start estimate 2026-10-10T01:36 on a `cl` node;
+128G: today on `cs`). The 2011 cache covers 48 vintages against 36 for 2008 (figure from the session prompt, not
+re-read), and the 2007 run already hit the 120G ceiling. Chosen: **smoke test 160G, no `--partition`**, 3:00:00;
+builds stay 96G (no observation below the cap exists; revisit if one OOMs).
+
+Driver commits: c5e7044 (`BUILD_MEM`, default 96G; `SMOKE_PARTITION`, default cpu_short) and 5413d17
+(empty `SMOKE_PARTITION` omits `--partition`). Mock-sbatch dry run in a clean env, one atomic call:
+36 calls; defaults give smoke test `--partition=cpu_short --mem=96G`; with the overrides the smoke
+test has no `--partition` and `--mem=160G`. First real attempt used `SMOKE_PARTITION=cs` and was
+rejected at the smoke-test submit; its 12 pending jobs (19438018–19438054) were cancelled before running.
+
+`CPU_PARTITION=cpu_short SMOKE_PARTITION= SMOKE_TEST_MEM=160G scripts/slurm/submit_cutoff_chain.sh <year>`,
+36 jobs each: 2009 = 19438230–19438282 (census 19438230, build 19438233, gate 19438236, smoke train
+19438239, smoke test 19438241, ensemble 19438282); 2010 = 19438283–19438352 (19438283, 19438284,
+19438286, 19438287, 19438288, 19438352); 2011 = 19438355–19438427 (19438355, 19438356, 19438358,
+19438360, 19438363, 19438427). `scontrol show job` on each smoke test: TimeLimit 03:00:00,
+MinMemoryNode 160G, `afterok` on its smoke train. State at submission: 2009 census RUNNING, 2010 and
+2011 censuses pending on `QOSMaxMemoryPerUser` (96G jobs run one at a time under the 120G cap), smoke
+tests pending on dependency in partition `cl`. Driver stdout: `.claude_tmp/submit_{2009,2010,2011}.out`
 (not committed).
