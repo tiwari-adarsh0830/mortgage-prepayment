@@ -128,6 +128,11 @@ fi
 # out on all three 2003-2005 chains. Memory 96G: both cold-path runs sat at
 # their cap (prewarm 2002 64G, smoke tests 40G).
 SMOKE_TEST_TIME="${SMOKE_TEST_TIME:-3:00:00}"
+# SMOKE_TEST_MEM: added 2026-10-08. The 2004/2005 smoke tests (19388334,
+# 19388410) peaked at MaxRSS 100,659,604K / 100,659,296K -- at their 96G cap.
+# 2006+ caches cover more vintages; QoS cpu_short has no per-job memory limit
+# but caps each user at mem=120G (MaxTRESPU), so 120G is the per-job ceiling.
+SMOKE_TEST_MEM="${SMOKE_TEST_MEM:-96G}"
 
 # cutoffs >= 2013 are the only ones where --sample_frac 0.1 actually fires
 # (RELEVANT_VINTAGES excludes every modern vintage for cutoffs <= 2012 --
@@ -207,7 +212,7 @@ python -u scripts/train_hazard_multiobs.py \
     SMOKE_TEST_JOBID=$(sbatch --parsable \
         ${SMOKE_TEST_DEP_ARGS[@]+"${SMOKE_TEST_DEP_ARGS[@]}"} \
         --job-name="$SMOKE_TEST_JOBNAME" --account="$ACCOUNT" --partition=cpu_short \
-        --nodes=1 --ntasks=1 --cpus-per-task=4 --mem=96G --time="$SMOKE_TEST_TIME" \
+        --nodes=1 --ntasks=1 --cpus-per-task=4 --mem="$SMOKE_TEST_MEM" --time="$SMOKE_TEST_TIME" \
         --output="$LOGDIR/${SMOKE_TEST_JOBNAME}_%j.out" --error="$LOGDIR/${SMOKE_TEST_JOBNAME}_%j.err" \
         --wrap="set -euo pipefail; $ENV_EXPORTS; $CONDA_INIT; cd $BASE; \
 python -u scripts/tests/test_train_forecast_consistency.py \
