@@ -138,7 +138,14 @@ SMOKE_TEST_MEM="${SMOKE_TEST_MEM:-96G}"
 # smoke test (19413412) peaked at MaxRSS 125,824,956K against its 120G request,
 # so a cutoff needing more than 120G must go to a partition under QoS cpu48
 # (per-user mem=6000G, MaxWall 2-00:00:00), e.g. SMOKE_PARTITION=cs.
-SMOKE_PARTITION="${SMOKE_PARTITION:-cpu_short}"
+# Set SMOKE_PARTITION="" to omit --partition: every named CPU partition rejects
+# --mem above 120G ("CPU job setup is not valid", checked with sbatch --test-only
+# 2026-10-08); with no partition Slurm routes >128G jobs to the cl nodes.
+SMOKE_PARTITION="${SMOKE_PARTITION-cpu_short}"
+SMOKE_PART_ARGS=()
+if [[ -n "$SMOKE_PARTITION" ]]; then
+    SMOKE_PART_ARGS=(--partition="$SMOKE_PARTITION")
+fi
 # BUILD_MEM: added 2026-10-08. Memory for the build job only (census stays
 # 96G). Default 96G preserves every existing invocation. The 2003-2008 builds
 # all peaked at their 96G cap (MaxRSS ~100,659,000K), so the true need is unobserved.
@@ -221,7 +228,7 @@ python -u scripts/train_hazard_multiobs.py \
     SMOKE_TEST_JOBNAME="smoketest_${YEAR}_seq"
     SMOKE_TEST_JOBID=$(sbatch --parsable \
         ${SMOKE_TEST_DEP_ARGS[@]+"${SMOKE_TEST_DEP_ARGS[@]}"} \
-        --job-name="$SMOKE_TEST_JOBNAME" --account="$ACCOUNT" --partition="$SMOKE_PARTITION" \
+        --job-name="$SMOKE_TEST_JOBNAME" --account="$ACCOUNT" ${SMOKE_PART_ARGS[@]+"${SMOKE_PART_ARGS[@]}"} \
         --nodes=1 --ntasks=1 --cpus-per-task=4 --mem="$SMOKE_TEST_MEM" --time="$SMOKE_TEST_TIME" \
         --output="$LOGDIR/${SMOKE_TEST_JOBNAME}_%j.out" --error="$LOGDIR/${SMOKE_TEST_JOBNAME}_%j.err" \
         --wrap="set -euo pipefail; $ENV_EXPORTS; $CONDA_INIT; cd $BASE; \
