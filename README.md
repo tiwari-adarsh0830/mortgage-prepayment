@@ -1,14 +1,15 @@
 ## Current state
 *(Oct 8, 2026 — rewritten each session, not appended to.)*
 
-**Oct 8 — cutoffs 2006, 2007, 2008 `_seq` done; 2009, 2010, 2011 submitted.** All 2006–2008 jobs
-COMPLETED at exit 0:0. Ten-seed ensemble one-step pooled ratio, count / UPB: **1.3095 / 1.3898**
-(cutoff 2006, forecast 2007), **1.5598 / 1.5962** (2007 → 2008), **1.4505 / 1.2765** (2008 → 2009);
-seed-42 held-out in-sample ratios are 1.0020 (2006), 0.9692 (2007) and **1.1141 (2008)**. Two cutoffs
-fail the ±0.05 in-sample gate and are **pending in-sample check, not reportable: 2008 (1.1141) and
-2003 (1.0505)**; the 2003 numbers in the Oct 7–8 section below stand as recorded but carry this flag.
-2009–2011 were submitted Oct 8 with the smoke test at 160G with no `--partition` (named CPU
-partitions reject >120G); ids and memory in the Oct 8 section at the end of this file.
+**Oct 8 (afternoon) — in-sample gate passed for 2003–2008; 2009–2011 resume pending.** Ten-seed
+in-sample IPW pred/realized ratios (seed-mean gate |mean − 1| < 2·SE + 0.02) pass for every cutoff
+2003–2008, so the seed-42 "pending in-sample check" flags on 2003 and 2008 are lifted (table and
+margins in the Oct 8 (afternoon) section at the end). Out-of-time pooled count ratios are as in the
+Oct 8 section (1.3095 / 1.5598 / 1.4505 for cutoffs 2006 / 2007 / 2008). A process-level RSS probe
+found the cold cache build peaks at 2.1 GB resident, so the cgroup MaxRSS values sitting at each
+job's request are page cache; the 160G smoke-test setting from the morning is **retracted**, and
+2009–2011 resume with `SMOKE_TEST_MEM=96G` on `cpu_short`. As of writing the three 2009–2011 censuses
+(19438230, 19438283, 19438355) are RUNNING and multiobs/gate/smoke-train are pending behind them.
 
 **Oct 5–6 update (new schema, `_seq`).** Everything below the next paragraph describes the Oct 1–3
 `_30y` builds and is unchanged. Since then the pipeline moved to the `_seq` schema: `harp_eligible`
@@ -5461,3 +5462,77 @@ MinMemoryNode 160G, `afterok` on its smoke train. State at submission: 2009 cens
 2011 censuses pending on `QOSMaxMemoryPerUser` (96G jobs run one at a time under the 120G cap), smoke
 tests pending on dependency in partition `cl`. Driver stdout: `.claude_tmp/submit_{2009,2010,2011}.out`
 (not committed).
+
+## Oct 8, 2026 (afternoon) — ten-seed in-sample gate, cold-cache memory probe, 2009–2011 resume
+
+### Ten-seed in-sample check, cutoffs 2003–2008
+
+`scripts/slurm/run_ipw_consistent_gap_<y>_seq_allseeds.sbatch`: one `l40s_public` GPU job per cutoff
+(32G, seed-42 took 30–47 s so the ten seeds run sequentially), `hazard_best.pt` of each seed against
+the `_seq` build's test split, unfiltered IPW-weighted pred/realized. Jobs 19440127 (2003), 19440129
+(2004), 19440141 (2005), 19440143 (2006), 19440146 (2007), 19440165 (2008), all COMPLETED 0:0, logs
+`logs/ipw_gap_<y>_seq_allseeds_*.out`. Gate: reportable iff |mean − 1| < 2·SE + 0.02, SE = sample
+stdev / sqrt(10); margin = (2·SE + 0.02) − |mean − 1|.
+
+| cutoff | ten ratios (seeds 42, 7, 123, 1001, 2026, 3, 11, 77, 314, 999) | mean | stdev | margin | out-of-time count |
+|---|---|---|---|---|---|
+| 2003 | 1.0505 0.9975 0.9919 1.0038 0.9934 0.9896 1.0163 1.0503 1.0242 0.9761 | 1.0094 | 0.0255 | +0.0268 | 1.1800 |
+| 2004 | 1.0297 0.9931 1.0393 0.9424 0.9966 1.0061 0.9977 1.0191 0.9967 1.0001 | 1.0021 | 0.0262 | +0.0345 | 1.1623 |
+| 2005 | 0.9546 0.9421 0.9988 1.0449 1.0323 0.9950 1.0119 0.9813 1.0335 1.0457 | 1.0040 | 0.0366 | +0.0391 | 1.0506 |
+| 2006 | 1.0020 0.9909 1.0120 0.9971 0.9914 0.9734 0.9836 1.0120 0.9150 1.0250 | 0.9902 | 0.0304 | +0.0295 | 1.3095 |
+| 2007 | 0.9692 0.9780 0.9887 1.0224 0.9354 1.0159 1.0183 0.9698 0.9207 1.0599 | 0.9878 | 0.0423 | +0.0346 | 1.5598 |
+| 2008 | 1.1141 1.0051 0.9749 0.9438 0.9637 0.9468 1.0282 0.9587 0.9586 0.9255 | 0.9819 | 0.0553 | +0.0369 | 1.4505 |
+
+All six pass. The flags on 2003 (seed 42: 1.0505) and 2008 (seed 42: 1.1141) are lifted: those were
+single-seed values, and the ten-seed means are 1.0094 and 0.9819. Individual seeds still range from
+0.9150 (2006 seed 314) to 1.1141, so a single-seed ±0.05 gate is noisy — it would also have failed
+2002 `_30y` seed 7 (0.9523). The gate is loose by construction (every margin is at least 0.027);
+it excludes gross miscalibration, not a 2–3 point bias. The in-sample ratios are near 1 while the
+out-of-time ratios are 1.05–1.56, i.e. the over-prediction is out-of-time, not a fit failure.
+
+**2008 best vs final (seed 42):** `hazard_best.pt` ratio 1.1141 vs `hazard_final.pt` ratio 1.0648
+(re-scored AUC 0.7748 for the final epoch, checked against the checkpoint's own stored AUC; the
+script's AUC assert now compares against `ckpt['auc']` when `--ckpt_file` is not `hazard_best.pt`).
+The last-epoch model is less over-predicting on this seed; one seed only, and the other nine seeds
+were not run on `hazard_final.pt`.
+
+### Cold-cache build memory: page cache, not resident memory
+
+Reading `build_combined_pass` (`scripts/score_multiobs_dec_window.py:134–235`) and
+`load_vintage_filtered` (`scripts/prepare_sequences_multiobs_zbc.py:376`): each raw vintage is read in
+500,000-row chunks, filtered to the test ids per chunk, and only the filtered pieces are concatenated;
+`build_combined_pass` keeps the filtered per-vintage frames in one list until the final concat. The
+finished combined-pass pickles are 143 MB (2002 trunc 200312) to 804 MB (2008 trunc 200912). Warm 2008
+decwin (19413469) MaxRSS was 8,279,888K. Every cold run's cgroup MaxRSS sat at its own request:
+2002 pre-warm 19290085 67,103,152K (64G), 2004/2005 smoke tests ≈100.66M K (96G), 2007 smoke test
+125,824,956K (120G); 2008 (36 vintages) peaked lower, 84,683,988K, than 2007 (32 vintages).
+
+Probe, job 19440794 (`scripts/slurm/probe_cold_cache_rss_2002.sbatch`, cpu_short, 64G, 16:16): a cold
+`--build_cache_only` 2002 rebuild into a scratch cache dir, with the child's own peak RSS from
+`resource.getrusage(RUSAGE_CHILDREN).ru_maxrss`:
+
+| measure | value |
+|---|---|
+| process peak RSS (`ru_maxrss`) | 2,171,580 KB |
+| cgroup MaxRSS, `.batch` (sacct) | 67,105,176K (request 64G) |
+
+**Verdict: page cache counted against the request, not resident memory.** The streaming patch
+(per-vintage write, drop, re-read) was therefore not made, the real 2002 cache was not touched, and the
+probe's scratch cache was deleted. Consequences: the "MaxRSS at the cap, extrapolate +25%" sizing and
+the morning's 160G/no-partition smoke-test setting (`SMOKE_PARTITION=`, `SMOKE_TEST_MEM=160G`, Oct 8
+section above) are **retracted**; `BUILD_MEM` and `SMOKE_PARTITION` remain in the driver with
+unchanged defaults. The probe measured the cache-build step on 2002 only, not the consistency test's
+other stages on later cutoffs; 96G is kept for 2009–2011 because the 2003–2005 runs completed at 96G.
+
+### 2009–2011 cancel and resume
+
+The three smoke tests (19438241, 19438288, 19438363) were cancelled; their dependents were not removed
+by Slurm (30 train jobs at `DependencyNeverSatisfied`, 63 decwin/onestep/ensemble jobs behind them) and
+were cancelled by hand. Remaining at the last `squeue`: census 19438230 / 19438283 / 19438355 RUNNING;
+multiobs 19438233 / 19438284 / 19438356, gate 19438236 / 19438286 / 19438358 and smoke train
+19438239 / 19438287 / 19438360 PENDING on dependency; plus the three stale
+`ensemble_{2009,2010,2011}_seq` (19438282, 19438352, 19438427) at `DependencyNeverSatisfied` (not part
+of the intended 12). No smoke train has completed, so the resume
+(`START_AT=smoketest CPU_PARTITION=cpu_short SMOKE_PARTITION=cpu_short SMOKE_TEST_MEM=96G
+scripts/slurm/submit_cutoff_chain.sh <year>`) has not been run; it needs the stale ensembles gone first
+so the resubmitted chain's names do not collide.
