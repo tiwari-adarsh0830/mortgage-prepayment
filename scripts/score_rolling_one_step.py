@@ -186,17 +186,27 @@ def rate_table(df: pd.DataFrame, group_col: str, weight_col: str | None, min_n: 
 
 def dispersion_stats(table: pd.DataFrame, rate_col_pred: str, rate_col_real: str, min_n_col: str, min_n: int) -> dict:
     f = table[table[min_n_col] >= min_n]
-    pred_disp = f[rate_col_pred].max() / f[rate_col_pred].min()
-    real_disp = f[rate_col_real].max() / f[rate_col_real].min()
+    # Zero-realized guard (Oct 8, 2026): a thin group with no realized events
+    # made real_disp = max/0 = inf for cutoffs 2004/2005 _seq. Exclude such
+    # groups from every max/min and ratio below, and log how many.
+    zero = f[f[rate_col_real] <= 0]
+    if len(zero):
+        print(f'  dispersion_stats: excluded {len(zero)} group(s) with zero realized events '
+              f'(n>={min_n}): {zero.iloc[:, 0].tolist()}', flush=True)
+    f = f[f[rate_col_real] > 0]
+    pred_min, real_min = f[rate_col_pred].min(), f[rate_col_real].min()
+    pred_disp = f[rate_col_pred].max() / pred_min if len(f) and pred_min > 0 else float('nan')
+    real_disp = f[rate_col_real].max() / real_min if len(f) else float('nan')
     f = f.copy()
     f['ratio'] = f[rate_col_pred] / f[rate_col_real]
     return {
         'PRIMARY_predicted_dispersion_max_over_min': pred_disp,
         'PRIMARY_realized_dispersion_max_over_min': real_disp,
-        'PRIMARY_dispersion_ratio': pred_disp / real_disp,
+        'PRIMARY_dispersion_ratio': pred_disp / real_disp if real_disp > 0 else float('nan'),
         'SECONDARY_ratio_max': float(f['ratio'].max()),
         'SECONDARY_ratio_min': float(f['ratio'].min()),
         'n_groups': len(f),
+        'n_zero_realized_excluded': len(zero),
     }
 
 
