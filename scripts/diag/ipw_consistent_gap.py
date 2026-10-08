@@ -85,6 +85,8 @@ def main():
                      help='Override CFG[cutoff]["seq_dir"] (e.g. a _30y build dir). When given, '
                           'the expected_n_test assert is skipped (that reference figure is only '
                           'valid for the hardcoded CFG build it was measured on).')
+    ap.add_argument('--ckpt_file', type=str, default='hazard_best.pt',
+                     help='Checkpoint filename inside ckpt_dir (e.g. hazard_final.pt for the last epoch).')
     ap.add_argument('--ckpt_dir', type=str, default=None,
                      help='Override CFG[cutoff]["out_dir"] (dir containing hazard_best.pt and '
                           'results.json) -- e.g. a specific seed\'s _30y checkpoint dir, so this '
@@ -119,7 +121,7 @@ def main():
         assert n == cfg['expected_n_test']
     print(f'Loaded {n:,} test observations', flush=True)
 
-    ckpt = torch.load(os.path.join(out_dir, 'hazard_best.pt'), map_location=DEVICE, weights_only=False)
+    ckpt = torch.load(os.path.join(out_dir, args.ckpt_file), map_location=DEVICE, weights_only=False)
     mcfg = ckpt['config']
     model = PrepaymentTransformer(
         input_dim=mcfg['input_dim'], d_model=mcfg['d_model'], n_heads=mcfg['n_heads'],
@@ -128,7 +130,7 @@ def main():
     ).to(DEVICE)
     model.load_state_dict(ckpt['model_state'])
     model.eval()
-    print(f"Loaded hazard_best.pt: epoch={ckpt['epoch']}, auc={ckpt['auc']:.4f}", flush=True)
+    print(f"Loaded {args.ckpt_file}: epoch={ckpt['epoch']}, auc={ckpt['auc']:.4f}", flush=True)
 
     bs_ = cfg['batch_size']
     raw_scores = np.zeros(n, dtype=np.float32)
@@ -140,8 +142,9 @@ def main():
             raw_scores[i:i + bs_] = torch.sigmoid(logits).cpu().numpy()
     from sklearn.metrics import roc_auc_score
     auc_check = roc_auc_score(labels, raw_scores)
-    print(f'Re-scored AUC: {auc_check:.4f} (results.json: {results["best_auc"]:.4f})', flush=True)
-    assert abs(auc_check - results['best_auc']) < 1e-3, 'wrong checkpoint/scoring path, STOP'
+    ref_auc = results['best_auc'] if args.ckpt_file == 'hazard_best.pt' else ckpt['auc']
+    print(f'Re-scored AUC: {auc_check:.4f} ({"results.json" if args.ckpt_file == "hazard_best.pt" else "checkpoint"}: {ref_auc:.4f})', flush=True)
+    assert abs(auc_check - ref_auc) < 1e-3, 'wrong checkpoint/scoring path, STOP'
 
     with open(os.path.join(seq_dir, 'scaler.pkl'), 'rb') as f:
         scaler = pickle.load(f)
