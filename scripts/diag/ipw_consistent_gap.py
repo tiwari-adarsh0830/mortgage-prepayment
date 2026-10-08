@@ -56,6 +56,16 @@ CFG = {
     ),
 }
 
+# _seq cutoffs 2003-2008 (added 2026-10-08): seq_dir/ckpt_dir must be passed on
+# the command line, so the hardcoded-build asserts are skipped. The filtered
+# block uses coupons 4.0-9.0 at n_obs>=1000 (the range the 2006-2008 one-step
+# dispersion recompute kept); the UNFILTERED pooled ratio is the figure to read.
+for _y in range(2003, 2009):
+    CFG[_y] = dict(
+        seq_dir=None, out_dir=None, batch_size=2048, expected_n_test=None,
+        coupon_lo=4.0, coupon_hi=9.0, min_n=1000, census_rate=None,
+    )
+
 
 def logit(p):
     if p <= 0.0 or p >= 1.0:
@@ -70,7 +80,7 @@ def wmean(x, w):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--cutoff', type=int, required=True, choices=[2002, 2020])
+    ap.add_argument('--cutoff', type=int, required=True, choices=sorted(CFG))
     ap.add_argument('--seq_dir', type=str, default=None,
                      help='Override CFG[cutoff]["seq_dir"] (e.g. a _30y build dir). When given, '
                           'the expected_n_test assert is skipped (that reference figure is only '
@@ -81,6 +91,8 @@ def main():
                           'script can be run per-seed instead of only the CFG-hardcoded seed42.')
     args = ap.parse_args()
     cfg = CFG[args.cutoff]
+    if cfg['seq_dir'] is None:
+        assert args.seq_dir and args.ckpt_dir, f'cutoff {args.cutoff} needs --seq_dir and --ckpt_dir'
     overridden = args.seq_dir is not None or args.ckpt_dir is not None
 
     print(f'Device: {DEVICE}', flush=True)
