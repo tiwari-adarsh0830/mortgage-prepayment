@@ -1,8 +1,16 @@
 ## Current state
-*(Oct 6, 2026 — rewritten each session, not appended to.)*
+*(Oct 8, 2026 — rewritten each session, not appended to.)*
 
-**Oct 7 — chains stopped at the smoke test.** All three Oct 6 chains (2003, 2004, 2005) died at the consistency test's 30-minute limit (jobs 19312981, 19313031, 19313104, TIMEOUT, while building the dec-window raw cache from cold; Check 1 had passed). Census, build, gate and smoke train completed in every cutoff and were kept; the 31 later jobs per cutoff were cancelled by the failed dependency.
-**Oct 7 — resumed from the test stage** with the fixed driver (`START_AT=smoketest`, test limit 3:00:00 / 96G, commit a4b8f95): 2003 19388298–19388333, 2004 19388334–19388409, 2005 19388410–19388533 (other users' ids interleaved). This supersedes "still running" in the next paragraph.
+**Oct 7–8 — cutoffs 2003, 2004, 2005 `_seq` done; 2006, 2007, 2008 submitted.** The resumed chains
+(test limit 3:00:00) completed with every job at exit 0:0. Ten-seed ensemble one-step pooled ratio,
+count / UPB: **1.1800 / 1.2069** (cutoff 2003, forecast 2004), **1.1623 / 1.1885** (2004 → 2005),
+**1.0506 / 1.0997** (2005 → 2006), against 0.8798 / 0.8573 for cutoff 2002 → 2003. The per-coupon
+dispersion written by the ensemble script is `inf` for 2004 and 2005 (thin zero-realized coupons
+at its min_n=100); the reportable dispersion for 2002–2005 is the min_n=1,000 recompute in the
+Oct 7–8 section, and the scorer now guards against zero-realized groups (1c5b613). Cutoffs 2006,
+2007, 2008 were submitted Oct 8 with the smoke test at 120G (`SMOKE_TEST_MEM`, 65239fb): 2006 =
+19413362–19413405, 2007 = 19413407–19413459, 2008 = 19413461–19413511. Detail and sources in the
+Oct 7–8 section at the end of this file.
 
 **Oct 5–6 update (new schema, `_seq`).** Everything below the next paragraph describes the Oct 1–3
 `_30y` builds and is unchanged. Since then the pipeline moved to the `_seq` schema: `harp_eligible`
@@ -11,8 +19,8 @@ loan's origination (earliest) row, and `scripts/slurm/submit_cutoff_chain.sh <ye
 census → build → gate → smoke → 10 seeds → ensemble chain for one cutoff. `cutoff_2002_seq` is
 done: 10-seed ensemble one-step pooled ratio **0.8798** (count) / **0.8573** (UPB), vs. 0.8982 /
 0.8818 for the five-seed `_30y` ensemble (source files in the Oct 5–6 section's number audit). The
-census is byte-identical to `_30y`. Cutoffs 2003, 2004, 2005 are submitted and still running as of
-this writing (job ids in the Oct 5–6 section). The `_30y` numbers below remain the record for the
+census is byte-identical to `_30y`. Cutoffs 2003, 2004, 2005 have since completed (Oct 7–8
+section). The `_30y` numbers below remain the record for the
 five-seed runs.
 
 **Advisor's Oct 1 clarification.** "Rebuild the 2021 cutoff" means the existing `cutoff_2020`
@@ -75,8 +83,9 @@ instruction). Frozen-Dec-window 12-month forecast, superseded design, reported f
 `cutoff_2002` 0.7137, `cutoff_2020` 1.0303; not comparable to the one-step numbers (0.8982, 0.8441)
 and not an in-sample check.
 
-**Next.** The two-realized-series split, HARP eligibility feature, recency weighting, advisor
-reply email.
+**Next.** Read out cutoffs 2006–2008 when their chains finish (dispersion via
+`scripts/diag/dispersion_recompute.py --min_n 1000`); the two-realized-series split, HARP eligibility
+feature, recency weighting, advisor reply email.
 
 ---
 
@@ -5200,3 +5209,111 @@ pickle that crashed the first ten decwin jobs.
 | fresh cache used by `_seq` scoring | `logs/decwin_2002_seq_s42_19291350.out` | "Cache hit (combined)" line |
 | 594,424 / 367,395 | commit message of 189ddd0 | smoke-test line |
 | job ids | `.claude_tmp/submit_{2003,2004,2005}.out` (not committed) | driver stdout |
+
+## Oct 7–8, 2026 — 2003–2005 `_seq` results, dispersion recompute at min_n=1,000, 2006–2008 launch
+
+### Smoke-test timeout and fix
+
+All three Oct 6 chains died at the consistency test's 30-minute limit (19312981, 19313031,
+19313104): in the chain the test is the first stage to build the dec-window raw cache, and it built
+it cold. Census, build, gate and smoke train had completed and were kept. The driver's test limit
+became `SMOKE_TEST_TIME` (default 3:00:00), memory 96G, with a `START_AT=smoketest` resume path
+(a4b8f95); the chains were resumed from the test. The resumed tests passed in 1211.7 s, 1564.6 s
+and 1794.5 s (`Total elapsed`, `logs/smoketest_{2003,2004,2005}_seq_{19388298,19388334,19388410}.out`):
+Check 1 exact, Check 2 at three months each, negative control (b) caught the frozen-window bug on
+33,913/33,913, 42,265/42,265 and 52,798/52,798 loan-months. The 2004 and 2005 tests peaked at their
+96G cap (MaxRSS 100,659,604K and 100,659,296K, `sacct` `.batch` rows), which is why 2006+ run with
+`SMOKE_TEST_MEM` (below).
+
+### Results, cutoffs 2002–2005 (forecast years 2003–2006)
+
+| cutoff | forecast year | census loans | census prepay events | mean best AUC (10 seeds) | pooled ratio, count | pooled ratio, UPB | SE (count) | per-seed min / max (count) | months below 1.0 (of 12) |
+|---|---|---|---|---|---|---|---|---|---|
+| 2002 | 2003 | 277,042 | 99,227 | 0.7761 | 0.8798 | 0.8573 | 0.0212 | 0.8050 / 0.9830 | 9 |
+| 2003 | 2004 | 384,301 | 187,537 | 0.7855 | 1.1800 | 1.2069 | 0.0197 | 1.0448 / 1.2398 | 1 |
+| 2004 | 2005 | 473,195 | 238,540 | 0.7782 | 1.1623 | 1.1885 | 0.0155 | 1.0815 / 1.2462 | 1 |
+| 2005 | 2006 | 572,493 | 286,606 | 0.7760 | 1.0506 | 1.0997 | 0.0187 | 0.9480 / 1.1332 | 6 |
+
+Sources: census columns from `outputs/census_panel_baseline_cutoff_<year>_seq.json`, key `overall`
+(`n_loans`, `n_prepay_events`; no `a_eff`/`b_eff` keys exist there). AUC from
+`outputs/rolling/cutoff_<year>_multiobs_k5_h1_ipw_seq_s<seed>/results.json`, `best_auc` (range per
+cutoff: 0.7756–0.7769, 0.7846–0.7869, 0.7765–0.7790, 0.7736–0.7769). Pooled ratios and per-seed
+min/max from `outputs/rolling/ensemble_onestep_cutoff_<year>_seq/pooled_stats.csv`, rows
+`model=ensemble` / `model=seed<N>`, `weight=count|upb`, column `ratio`. SE = sample stdev
+(ddof=1) of the ten per-seed count ratios / √10, computed Oct 8. Months below 1.0 from the same
+dir's `month_by_month.csv`, rows `model=ensemble`, `predicted_rate_annualized /
+realized_rate_annualized` (ref_months Dec of the cutoff year through Nov of the forecast year).
+Loan-months scored (rows of `ensemble_merged_all_months.csv`): 323,203 / 408,399 / 501,245 /
+631,194. The census grows monotonically 2002→2005 in loans, eligible loan-months (3,595,798 /
+5,743,437 / 8,265,852 / 11,271,300) and events. Every build loaded the same cell sample
+(`Loaded pre-2013 cell-grid sample from .../outputs/pre2013_cell_sample_30y_loans.csv: 1,482,004
+loan_ids`, line 6 of `logs/multiobs_<year>_seq_*.out`); all three gates print `ALL CHECKS PASSED`
+with empty `.err`.
+
+**Observation (no mechanism claimed):** the 2002 model under-predicted 2003 (pooled 0.88, 9 of 12
+months below 1.0); the 2003 model and later over-predict their forecast year (pooled 1.05–1.18;
+1, 1 and 6 months below 1.0).
+
+### Dispersion: definition problem and the reportable numbers
+
+`ensemble_onestep_seq.py` (line 125, `coupon_min_n = 100`) calls
+`score_rolling_one_step.dispersion_stats`, which took max/min of the per-coupon realized rate over
+every coupon with ≥100 loan-months. In 2004 and 2005 coupons with 120–228 loan-months and zero
+realized prepayments passed that filter (2004: 2.5, 3.0; 2005: 2.5, 3.5), so realized dispersion
+was max/0 = `inf` and the dispersion ratio 0.0 in each year's `dispersion_stats.csv`. The 2002 `_seq`
+and 2003 values in those files are finite but also at min_n=100, so not comparable to the earlier
+min_n=1,000 reporting.
+
+`scripts/diag/dispersion_recompute.py` recomputes from `ensemble_merged_all_months.csv` (ensemble
+hazard `h`, `realized_event`, `coupon`), drops coupons under min_n and lists any zero-realized
+coupon it drops. Validation: at min_n=100 it reproduces the `ensemble` rows of the 2002 `_seq`
+(22.158 / 6.477 / 3.421) and 2003 (18.064 / 14.130 / 1.278) `dispersion_stats.csv`; at min_n=1,000
+on `outputs/rolling/ensemble_onestep_cutoff_2002` it reproduces that dir's
+`dispersion_stats_minn1000.csv` ensemble row (11.525 / 8.486 / 1.358, 10 coupons 4.5–9.0).
+
+**Reportable dispersion, cutoffs 2002–2005 `_seq`, min_n=1,000** (ensemble, count-weighted;
+`python scripts/diag/dispersion_recompute.py --run_dir outputs/rolling/ensemble_onestep_cutoff_<year>_seq --min_n 1000`, Oct 8):
+
+| cutoff | forecast year | coupons kept | coupon range | predicted dispersion | realized dispersion | ratio |
+|---|---|---|---|---|---|---|
+| 2002 | 2003 | 9 | 5.0–9.0 | 9.286 | 6.477 | 1.434 |
+| 2003 | 2004 | 11 | 4.0–9.0 | 18.064 | 12.501 | 1.445 |
+| 2004 | 2005 | 11 | 4.0–9.0 | 5.764 | 3.952 | 1.459 |
+| 2005 | 2006 | 11 | 4.0–9.0 | 4.161 | 4.303 | 0.967 |
+
+No coupon with ≥1,000 loan-months had zero realized events in any year. For reference only, the
+same script at min_n=100 gives 22.158 / 6.477 / 3.421 (2002, 12 coupons), 18.064 / 14.130 / 1.278
+(2003, 15), 6.458 / 11.038 / 0.585 (2004, 14 after dropping 2.5 and 3.0), 4.161 / 4.673 / 0.890
+(2005, 13 after dropping 2.5 and 3.5) — the 2004/2005 realized figures there are set by coupons
+with one realized event.
+
+The earlier "2002" min_n=1,000 figure (11.525 / 8.486 / 1.358, "Five-seed ensemble: pooled ratios
+and dispersion at min_n=1,000" above) is the pre-`_30y` five-seed run, 374,850 loan-months; it stays
+the record for that run but is superseded for the yearly `_seq` comparison by 9.286 / 6.477 / 1.434.
+
+**Scorer guard (1c5b613).** `dispersion_stats` now excludes groups with zero realized events from
+every max/min and ratio, prints how many it excluded, returns `n_zero_realized_excluded`, and
+returns NaN instead of dividing by zero. Checked on the 2003–2005 merged files at min_n=100: 2003
+unchanged, 2004 and 2005 equal the recompute above. No one-step job was re-run; the recompute is
+authoritative for 2002–2005, and the guard applies from 2006 on.
+
+### 2006–2008 launch (Oct 8)
+
+`sacctmgr show qos cpu_short`: no per-job TRES limit, per-user `MaxTRESPU cpu=32,mem=120G`, MaxWall
+6:00:00 (`cpu48`: per-user `cpu=3000,mem=6000G`, 2-00:00:00). The 2005 smoke test's MaxRSS × 1.5
+(≈144G) exceeds 96G, so the driver gained `SMOKE_TEST_MEM` (default 96G, 65239fb; mock-sbatch dry
+run in a clean env: 36 calls, default 96G, override 120G, nothing submitted) and 2006–2008 were
+launched with `SMOKE_TEST_MEM=120G`, the largest a single cpu_short job can get under the 120G
+per-user cap. That is below the 1.5× estimate. If a smoke test is OOM-killed, the chain stops
+before any GPU training (`afterok`). The three 120G tests will also run one at a time under the
+per-user cap. Builds (MaxRSS 100,658,848K / 100,659,472K / 100,658,976K for 19312978 / 19313025 /
+19313096) also sat at their 96G request and are unchanged.
+
+`CPU_PARTITION=cpu_short scripts/slurm/submit_cutoff_chain.sh <year>`, census/build 5:45:00 / 96G as
+before (Slurm placed the censuses in partition `all` under QOS `cpu48`, as it did for 2004/2005):
+2006 = 19413362–19413405 (census 19413362, build 19413363, gate 19413367, smoke test 19413372,
+ensemble 19413405); 2007 = 19413407–19413459 (19413407, 19413408, 19413409, 19413412, 19413459);
+2008 = 19413461–19413511 (19413461, 19413462, 19413463, 19413465, 19413511). 108 jobs queued;
+`scontrol` shows each smoke test at TimeLimit 03:00:00, MinMemoryNode 120G, `afterok` on its smoke
+train, and 2006 train s42 `afterok:19413372`. Driver stdout: `.claude_tmp/submit_2006_2008.out`
+(not committed).
