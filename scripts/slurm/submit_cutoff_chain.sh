@@ -133,6 +133,16 @@ SMOKE_TEST_TIME="${SMOKE_TEST_TIME:-3:00:00}"
 # 2006+ caches cover more vintages; QoS cpu_short has no per-job memory limit
 # but caps each user at mem=120G (MaxTRESPU), so 120G is the per-job ceiling.
 SMOKE_TEST_MEM="${SMOKE_TEST_MEM:-96G}"
+# SMOKE_PARTITION: added 2026-10-08. Default cpu_short preserves every existing
+# invocation. cpu_short caps a user at mem=120G (MaxTRESPU), and the 2007
+# smoke test (19413412) peaked at MaxRSS 125,824,956K against its 120G request,
+# so a cutoff needing more than 120G must go to a partition under QoS cpu48
+# (per-user mem=6000G, MaxWall 2-00:00:00), e.g. SMOKE_PARTITION=cs.
+SMOKE_PARTITION="${SMOKE_PARTITION:-cpu_short}"
+# BUILD_MEM: added 2026-10-08. Memory for the build job only (census stays
+# 96G). Default 96G preserves every existing invocation. The 2003-2008 builds
+# all peaked at their 96G cap (MaxRSS ~100,659,000K), so the true need is unobserved.
+BUILD_MEM="${BUILD_MEM:-96G}"
 
 # cutoffs >= 2013 are the only ones where --sample_frac 0.1 actually fires
 # (RELEVANT_VINTAGES excludes every modern vintage for cutoffs <= 2012 --
@@ -163,7 +173,7 @@ BUILD_JOBNAME="multiobs_${YEAR}_seq"
 BUILD_JOBID=$(sbatch --parsable \
     --dependency=afterok:"$CENSUS_JOBID" \
     --job-name="$BUILD_JOBNAME" --account="$ACCOUNT" --partition="$CPU_PARTITION" \
-    --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=96G --time="$BUILD_TIME" \
+    --nodes=1 --ntasks=1 --cpus-per-task=8 --mem="$BUILD_MEM" --time="$BUILD_TIME" \
     --output="$LOGDIR/${BUILD_JOBNAME}_%j.out" --error="$LOGDIR/${BUILD_JOBNAME}_%j.err" \
     --wrap="set -euo pipefail; $ENV_EXPORTS; $CONDA_INIT; cd $BASE; \
 python -u scripts/prepare_sequences_multiobs_zbc.py \
@@ -211,7 +221,7 @@ python -u scripts/train_hazard_multiobs.py \
     SMOKE_TEST_JOBNAME="smoketest_${YEAR}_seq"
     SMOKE_TEST_JOBID=$(sbatch --parsable \
         ${SMOKE_TEST_DEP_ARGS[@]+"${SMOKE_TEST_DEP_ARGS[@]}"} \
-        --job-name="$SMOKE_TEST_JOBNAME" --account="$ACCOUNT" --partition=cpu_short \
+        --job-name="$SMOKE_TEST_JOBNAME" --account="$ACCOUNT" --partition="$SMOKE_PARTITION" \
         --nodes=1 --ntasks=1 --cpus-per-task=4 --mem="$SMOKE_TEST_MEM" --time="$SMOKE_TEST_TIME" \
         --output="$LOGDIR/${SMOKE_TEST_JOBNAME}_%j.out" --error="$LOGDIR/${SMOKE_TEST_JOBNAME}_%j.err" \
         --wrap="set -euo pipefail; $ENV_EXPORTS; $CONDA_INIT; cd $BASE; \
