@@ -1,15 +1,16 @@
 ## Current state
-*(Oct 8, 2026 — rewritten each session, not appended to.)*
+*(Oct 9, 2026 — rewritten each session, not appended to.)*
 
-**Oct 8 (afternoon) — in-sample gate passed for 2003–2008; 2009–2011 resume pending.** Ten-seed
-in-sample IPW pred/realized ratios (seed-mean gate |mean − 1| < 2·SE + 0.02) pass for every cutoff
-2003–2008, so the seed-42 "pending in-sample check" flags on 2003 and 2008 are lifted (table and
-margins in the Oct 8 (afternoon) section at the end). Out-of-time pooled count ratios are as in the
-Oct 8 section (1.3095 / 1.5598 / 1.4505 for cutoffs 2006 / 2007 / 2008). A process-level RSS probe
-found the cold cache build peaks at 2.1 GB resident, so the cgroup MaxRSS values sitting at each
-job's request are page cache; the 160G smoke-test setting from the morning is **retracted**, and
-2009–2011 resume with `SMOKE_TEST_MEM=96G` on `cpu_short`. As of writing the three 2009–2011 censuses
-(19438230, 19438283, 19438355) are RUNNING and multiobs/gate/smoke-train are pending behind them.
+**Oct 9 — 2009–2011 `_seq` chains complete (36/36 jobs COMPLETED 0:0 each); ten-seed in-sample gate passed for all three; 2012 launched.**
+Out-of-time pooled count ratios (ensemble, ten seeds; cutoff → forecast year): **0.9930** (2009 → 2010),
+**0.9653** (2010 → 2011), **0.8548** (2011 → 2012); UPB 0.9121 / 0.9569 / 0.8530. Mean ten-seed AUC fell to
+0.7626 / 0.7514 / 0.7483 (2003–2008: 0.7760–0.7855). Ten-seed in-sample ratios 0.9911 / 0.9721 / 0.9693, all
+PASS the gate |mean − 1| < 2·SE + 0.02 (margins +0.0395 / +0.0319 / +0.0260), so none is marked pending. The
+full ten-row table (2002–2011), dispersion tables at `min_n` 1,000, and the in-sample table are in the Oct 9
+section at the end. Cutoff **2012** (forecast 2013) was submitted Oct 9 (shortly after 12:40 EDT) with `CPU_PARTITION=cs`
+(census 19491619, build 19491620, ensemble 19491663; full id list in the Oct 9 section); as of writing all 36
+jobs are PENDING. Still untracked and unreviewed: `docs/artifact_map.md`,
+`scripts/diag/decoded_content_check_cell_sample_30y.py`.
 
 **Oct 5–6 update (new schema, `_seq`).** Everything below the next paragraph describes the Oct 1–3
 `_30y` builds and is unchanged. Since then the pipeline moved to the `_seq` schema: `harp_eligible`
@@ -5536,3 +5537,246 @@ of the intended 12). No smoke train has completed, so the resume
 (`START_AT=smoketest CPU_PARTITION=cpu_short SMOKE_PARTITION=cpu_short SMOKE_TEST_MEM=96G
 scripts/slurm/submit_cutoff_chain.sh <year>`) has not been run; it needs the stale ensembles gone first
 so the resubmitted chain's names do not collide.
+
+## Oct 9, 2026 — 2009–2011 `_seq` results, ten-seed in-sample gate, 2012 launch
+
+### Chain status, cutoffs 2009–2011
+
+The resume (`START_AT=smoketest CPU_PARTITION=cpu_short SMOKE_PARTITION=cpu_short SMOKE_TEST_MEM=96G
+scripts/slurm/submit_cutoff_chain.sh <year>`) **was run on Oct 8 evening** (driver stdout mtimes 17:47 /
+17:54 / 17:55, `.claude_tmp/chain_{2009,2010,2011}_submit.out`, not committed); the last paragraph of the
+Oct 8 (afternoon) section above, which says it had not been run, was written before that. `sacct -u at7095
+-S 2026-10-08T12:00 -X`, jobs named `*_<year>_seq*`: **36 of 36 COMPLETED, exit 0:0, for each of 2009, 2010
+and 2011**; no job in any other state. Ids — 2009: census 19438230, build 19438233, gate 19438236, smoke train
+19438239, smoke test 19453547, trains 19453548–19453575 (every third), ensemble 19453578; 2010: 19438283 /
+19438284 / 19438286 / 19438287 / test 19453673 / ensemble 19453705; 2011: 19438355 / 19438356 / 19438358 /
+19438360 / test 19453707 / ensemble 19453776. Elapsed (sacct): smoke test 1:05:38 / 1:53:44 / 2:01:04 (limit
+3:00:00); smoke train 0:04:56 / 0:05:10 / 0:07:16; census 2:00:51 / 1:18:18 / 1:29:17; build 2:22:36 / 4:04:58 /
+3:49:09; ensemble 0:02:05 / 0:02:26 / 0:02:08. Ensemble logs `logs/ensemble_<year>_seq_*.out` end with "All outputs
+saved under: …/ensemble_onestep_cutoff_<year>_seq"; `.err` 0 bytes for the three.
+
+**Gate logs** `logs/gate_<year>_seq_{19438236,19438286,19438358}.out`: ALL CHECKS PASSED, `.err` empty. n_loans
+(train+test) 1,013,321 / 1,107,045 / 1,201,863; n_obs 7,355,894 / 8,711,070 / 10,079,755; label==1 482,714 /
+561,130 / 632,788. Loader line in each gate log and in `logs/multiobs_<year>_seq_*.out`: `pre2013_cell_sample_30y_loans.csv`
+count 1,482,004.
+
+**Census** (`scripts/diag/census_check_seq.py`, run on the login node, no `--divide_out_subsample`, outputs not
+committed; census json `outputs/census_panel_baseline_cutoff_<year>_seq.json`, key `overall`): events in the
+sample equal the census events exactly for all three (a_eff = 1.000000); b_eff 0.227585 / 0.224138 / 0.222069;
+log(a_eff/b_eff) 1.480230 / 1.495495 / 1.504768; IPW-weighted sample prepay rate equals the census raw rate
+(0.015732 / 0.015198 / 0.014657). Sample n_loans differs from census n_loans for each (1,013,321 vs 1,022,129;
+1,107,045 vs 1,116,008; 1,201,863 vs 1,210,384) — the script's own note, build drops loans with no eligible
+observation. `overall` n_loans / n_prepay_events: 2008 906,012 / 405,197 (read fresh), 2009 1,022,129 / 482,714,
+2010 1,116,008 / 561,130, 2011 1,210,384 / 632,788 — **monotone increasing in both, 2002 through 2011** (checked
+pairwise on all ten jsons).
+
+**Train/forecast consistency test** (the chain's smoke test, `logs/smoketest_<year>_seq_*.out`; 4 sklearn
+"feature names" UserWarnings in each `.err`, nothing else): Check 1 all `[PASS]` (vintage 2003Q2 / 2010Q1 /
+2005Q2; sequences and masks match stored train arrays < 1e-06; same-checkpoint predictions match < 1e-06;
+elapsed 361.3 s / 110.2 s / 139.5 s). Check 2 `[PASS]` at three months each — 200912 / 201006 / 201011,
+201012 / 201106 / 201111, 201112 / 201206 / 201211 — max abs window diff 2.10e-07–2.31e-07 (2009),
+1.55e-07–2.27e-07 (2010), 1.61e-07–2.29e-07 (2011). Negative control (b) `[PASS (bug caught)]`: frozen-Dec window
+disagrees on 97213/97213, 96545/96545, 94484/94484 loan-months. Total elapsed 3906.0 s / 6786.1 s / 7229.3 s.
+
+### Ten-seed AUCs (`results.json` `best_auc`, `outputs/rolling/cutoff_<year>_multiobs_k5_h1_ipw_seq_s<seed>/`)
+
+Each `best_auc` equals the maximum of that run's `history[*].auc` (asserted). All 50 epochs ran (final epoch 50).
+
+| cutoff | mean best_auc | range | best epochs (seeds 42, 7, 123, 1001, 2026, 3, 11, 77, 314, 999) |
+|---|---|---|---|
+| 2009 | 0.7626 | 0.7618–0.7645 | 39 46 49 41 50 50 43 47 50 46 |
+| 2010 | 0.7514 | 0.7499–0.7524 | 44 50 45 46 50 45 48 44 47 49 |
+| 2011 | 0.7483 | 0.7475–0.7494 | 48 44 46 45 45 43 45 50 47 50 |
+
+### One-step read-out, cutoffs 2009–2011 (`outputs/rolling/ensemble_onestep_cutoff_<year>_seq/`)
+
+Seven files in each directory (`disagreement_summary.csv`, `dispersion_stats.csv`, `ensemble_merged_all_months.csv`,
+`month_by_month.csv`, `per_bin_ratio_disagreement.csv`, `per_coupon_ratio_disagreement.csv`, `pooled_stats.csv`).
+Ratio = predicted / realized; the ensemble count ratio equals the mean of the ten per-seed count ratios.
+Two bins report `inf` (realized zero): 2009 (−3.0, −2.0] with 62 loan-months and 2010 (−2.0, −1.0] with 955.
+
+**Cutoff 2009 (forecast year 2010).** Ensemble pooled count ratio 0.9930 (predicted 0.1450 / realized 0.1460, annualized), UPB ratio 0.9121 (0.1597 / 0.1738). Ten per-seed count ratios: s42 1.0178, s7 1.1083, s123 1.0153, s1001 0.9808, s2026 0.9087, s3 1.0554, s11 0.8713, s77 1.0025, s314 1.0449, s999 0.9248; mean 0.9930, sample stdev 0.0729, SE = stdev/√10 = 0.0230. n loan-months 1,149,530 (sum of ensemble `n_active` in `month_by_month.csv`; the incentive-bin `n_loan_months` sum to 1,149,508, 22 fewer). Monthly ratio (annualized predicted / realized, `month_by_month.csv`), 200912–201011: 200912 1.356, 201001 1.516, 201002 1.226, 201003 1.164, 201004 1.276, 201005 1.027, 201006 0.988, 201007 0.806, 201008 0.846, 201009 0.853, 201010 0.835, 201011 0.808; **6 below 1.0, 6 above**.
+
+| incentive bin | n loan-months | ensemble ratio |
+|---|---|---|
+| (-3.0, -2.0] | 62 | inf |
+| (-2.0, -1.0] | 1,960 | 2.0145 |
+| (-1.0, -0.5] | 20,979 | 2.1542 |
+| (-0.5, 0.0] | 59,707 | 1.7865 |
+| (0.0, 0.5] | 142,467 | 1.3455 |
+| (0.5, 1.0] | 221,205 | 0.9761 |
+| (1.0, 1.5] | 226,678 | 0.8611 |
+| (1.5, 2.0] | 204,794 | 0.9551 |
+| (2.0, 3.0] | 226,925 | 1.0264 |
+| (3.0, 4.0] | 40,904 | 1.4192 |
+| (4.0, 6.0] | 3,827 | 2.3404 |
+
+**Cutoff 2010 (forecast year 2011).** Ensemble pooled count ratio 0.9653 (predicted 0.1297 / realized 0.1341, annualized), UPB ratio 0.9569 (0.1529 / 0.1592). Ten per-seed count ratios: s42 0.9792, s7 1.0501, s123 0.8992, s1001 0.9442, s2026 1.1555, s3 0.8256, s11 1.0465, s77 1.0841, s314 0.8488, s999 0.8201; mean 0.9653, sample stdev 0.1170, SE = stdev/√10 = 0.0370. n loan-months 1,146,565 (sum of ensemble `n_active` in `month_by_month.csv`; the incentive-bin `n_loan_months` sum to 1,146,516, 49 fewer). Monthly ratio (annualized predicted / realized, `month_by_month.csv`), 201012–201111: 201012 1.140, 201101 1.262, 201102 1.019, 201103 1.126, 201104 1.106, 201105 0.929, 201106 1.049, 201107 0.909, 201108 0.812, 201109 0.835, 201110 0.845, 201111 0.862; **6 below 1.0, 6 above**.
+
+| incentive bin | n loan-months | ensemble ratio |
+|---|---|---|
+| (-2.0, -1.0] | 955 | inf |
+| (-1.0, -0.5] | 23,119 | 1.4671 |
+| (-0.5, 0.0] | 87,109 | 1.5227 |
+| (0.0, 0.5] | 133,869 | 1.1877 |
+| (0.5, 1.0] | 225,178 | 1.0494 |
+| (1.0, 1.5] | 196,762 | 0.9223 |
+| (1.5, 2.0] | 199,945 | 0.8641 |
+| (2.0, 3.0] | 228,183 | 0.8306 |
+| (3.0, 4.0] | 47,112 | 1.0246 |
+| (4.0, 6.0] | 4,284 | 0.7418 |
+
+**Cutoff 2011 (forecast year 2012).** Ensemble pooled count ratio 0.8548 (predicted 0.1963 / realized 0.2259, annualized), UPB ratio 0.8530 (0.2439 / 0.2799). Ten per-seed count ratios: s42 0.9490, s7 0.8913, s123 0.8115, s1001 0.8784, s2026 0.7865, s3 0.7731, s11 0.8773, s77 0.7998, s314 0.8635, s999 0.9178; mean 0.8548, sample stdev 0.0592, SE = stdev/√10 = 0.0187. n loan-months 1,115,447 (sum of ensemble `n_active` in `month_by_month.csv`; the incentive-bin `n_loan_months` sum to 1,115,159, 288 fewer). Monthly ratio (annualized predicted / realized, `month_by_month.csv`), 201112–201211: 201112 1.202, 201201 1.001, 201202 0.925, 201203 0.935, 201204 0.813, 201205 0.818, 201206 0.796, 201207 0.779, 201208 0.886, 201209 0.774, 201210 0.855, 201211 0.827; **10 below 1.0, 2 above**.
+
+| incentive bin | n loan-months | ensemble ratio |
+|---|---|---|
+| (-1.0, -0.5] | 290 | 0.6895 |
+| (-0.5, 0.0] | 4,946 | 1.3953 |
+| (0.0, 0.5] | 67,019 | 1.0899 |
+| (0.5, 1.0] | 150,705 | 1.1528 |
+| (1.0, 1.5] | 174,784 | 1.0971 |
+| (1.5, 2.0] | 225,052 | 0.8875 |
+| (2.0, 3.0] | 316,763 | 0.6326 |
+| (3.0, 4.0] | 150,335 | 0.4620 |
+| (4.0, 6.0] | 25,265 | 0.4425 |
+
+**Reading, as measured only.** The 2008 cutoff's 0/12 months below 1 (ratio 1.4505) becomes 6/12 (2009), 6/12
+(2010) and 10/12 (2011). Within 2009 and 2010 the monthly ratio is mostly above 1 early in the forecast year and below 1 from
+mid-year on; within 2011 it is below 1 from February on (201201 is 1.001). The high-incentive bins
+(incentive above 2) read 1.03–2.34 (2009), 0.74–1.02 (2010) and 0.44–0.63 (2011). No cause has been tested.
+
+### Summary, cutoffs 2002–2011 (forecast years 2003–2012)
+
+| cutoff | fcst yr | census loans | events | mean AUC | pooled count | pooled UPB | SE | seed min–max | months <1 | dispersion ratio @1000 (pred, real, k) | in-sample 10-seed mean |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2002 | 2003 | 277,042 | 99,227 | 0.7761 | 0.8798 | 0.8573 | 0.0212 | 0.8050–0.9830 | 9 of 12 | 1.434 (9.286, 6.477, k=9) | n/a |
+| 2003 | 2004 | 384,301 | 187,537 | 0.7855 | 1.1800 | 1.2069 | 0.0197 | 1.0448–1.2398 | 1 of 12 | 1.445 (18.064, 12.501, k=11) | 1.0094 |
+| 2004 | 2005 | 473,195 | 238,540 | 0.7782 | 1.1623 | 1.1885 | 0.0155 | 1.0815–1.2462 | 1 of 12 | 1.459 (5.764, 3.952, k=11) | 1.0021 |
+| 2005 | 2006 | 572,493 | 286,606 | 0.7760 | 1.0506 | 1.0997 | 0.0187 | 0.9480–1.1332 | 6 of 12 | 0.967 (4.161, 4.303, k=11) | 1.0040 |
+| 2006 | 2007 | 669,508 | 324,408 | 0.7773 | 1.3095 | 1.3898 | 0.0114 | 1.2354–1.3463 | 0 of 12 | 1.300 (4.930, 3.794, k=11) | 0.9902 |
+| 2007 | 2008 | 782,404 | 364,747 | 0.7769 | 1.5598 | 1.5962 | 0.0230 | 1.4407–1.6487 | 0 of 12 | 1.616 (5.683, 3.518, k=11) | 0.9878 |
+| 2008 | 2009 | 906,012 | 405,197 | 0.7760 | 1.4505 | 1.2765 | 0.0637 | 1.2198–1.8905 | 0 of 12 | 0.679 (5.096, 7.509, k=10) | 0.9819 |
+| 2009 | 2010 | 1,022,129 | 482,714 | 0.7626 | 0.9930 | 0.9121 | 0.0230 | 0.8713–1.1083 | 6 of 12 | 0.534 (5.912, 11.061, k=12) | 0.9911 |
+| 2010 | 2011 | 1,116,008 | 561,130 | 0.7514 | 0.9653 | 0.9569 | 0.0370 | 0.8201–1.1555 | 6 of 12 | 0.869 (5.234, 6.020, k=11) | 0.9721 |
+| 2011 | 2012 | 1,210,384 | 632,788 | 0.7483 | 0.8548 | 0.8530 | 0.0187 | 0.7731–0.9490 | 10 of 12 | 1.141 (6.582, 5.769, k=11) | 0.9693 |
+
+Sources, all read fresh this session (rows 2002–2008 from their files, not from this README): census loans and
+events — `outputs/census_panel_baseline_cutoff_<y>_seq.json`, `overall.n_loans` / `overall.n_prepay_events`;
+mean AUC — mean of `best_auc` over `outputs/rolling/cutoff_<y>_multiobs_k5_h1_ipw_seq_s<seed>/results.json`
+(ten seeds); pooled count / UPB — `outputs/rolling/ensemble_onestep_cutoff_<y>_seq/pooled_stats.csv`, rows
+`model=ensemble`, `weight=count|upb`, column `ratio`; SE and seed min–max — the ten `model=seed<N>`,
+`weight=count` rows of the same file, SE = sample stdev (ddof 1) / √10; months <1 — `month_by_month.csv`,
+`model=ensemble`, `predicted_rate_annualized` / `realized_rate_annualized` < 1; dispersion —
+`scripts/diag/dispersion_recompute.py --run_dir <ensemble dir> --min_n 1000` (k = coupons kept; no coupon dropped
+for zero realized events at 1,000 in any of the ten); in-sample — mean of the first ten (`hazard_best.pt`) blocks'
+`UNFILTERED … ratio=` line in `logs/ipw_gap_<y>_seq_allseeds_*.out`. **2002 in-sample: n/a** — no `_seq`
+in-sample run exists (the 2002 `ipw_gap` logs are the older `_hist`/`_30y` builds); not run this session.
+The 2003–2008 in-sample rows were re-parsed from their logs and reproduce the Oct 8 (afternoon) table exactly.
+
+### Dispersion at `min_n` 1,000, cutoffs 2009–2011 (`scripts/diag/dispersion_recompute.py`)
+
+**Cutoff 2009 (forecast year 2010), `--min_n 1000`** — 12 coupons kept; zero-realized coupons dropped: none. Predicted max/min 5.912, realized max/min 11.061, **dispersion ratio 0.534**.
+
+| coupon | n loan-months | pred events | real events | pred rate | real rate | ratio |
+|---|---|---|---|---|---|---|
+| 3.5 | 6,939 | 18.8 | 11 | 0.0027 | 0.0016 | 1.7129 |
+| 4.0 | 79,675 | 482.7 | 293 | 0.0061 | 0.0037 | 1.6475 |
+| 4.5 | 83,969 | 1,032.8 | 1,027 | 0.0123 | 0.0122 | 1.0057 |
+| 5.0 | 328,157 | 5,075.4 | 5,754 | 0.0155 | 0.0175 | 0.8821 |
+| 5.5 | 132,378 | 2,125.0 | 2,188 | 0.0161 | 0.0165 | 0.9712 |
+| 6.0 | 300,376 | 3,902.8 | 3,940 | 0.0130 | 0.0131 | 0.9906 |
+| 6.5 | 90,856 | 994.2 | 834 | 0.0109 | 0.0092 | 1.1921 |
+| 7.0 | 108,078 | 1,123.3 | 871 | 0.0104 | 0.0081 | 1.2897 |
+| 7.5 | 10,050 | 92.0 | 61 | 0.0092 | 0.0061 | 1.5078 |
+| 8.0 | 5,798 | 45.9 | 29 | 0.0079 | 0.0050 | 1.5811 |
+| 8.5 | 1,162 | 8.1 | 6 | 0.0070 | 0.0052 | 1.3553 |
+| 9.0 | 1,172 | 8.7 | 3 | 0.0074 | 0.0026 | 2.9059 |
+
+**Cutoff 2010 (forecast year 2011), `--min_n 1000`** — 11 coupons kept; zero-realized coupons dropped: none. Predicted max/min 5.234, realized max/min 6.020, **dispersion ratio 0.869**.
+
+| coupon | n loan-months | pred events | real events | pred rate | real rate | ratio |
+|---|---|---|---|---|---|---|
+| 3.5 | 16,822 | 49.2 | 42 | 0.0029 | 0.0025 | 1.1708 |
+| 4.0 | 149,731 | 1,155.9 | 1,074 | 0.0077 | 0.0072 | 1.0762 |
+| 4.5 | 102,324 | 1,445.7 | 1,391 | 0.0141 | 0.0136 | 1.0393 |
+| 5.0 | 330,756 | 5,060.4 | 4,971 | 0.0153 | 0.0150 | 1.0180 |
+| 5.5 | 121,617 | 1,603.5 | 1,748 | 0.0132 | 0.0144 | 0.9173 |
+| 6.0 | 243,196 | 2,487.9 | 2,952 | 0.0102 | 0.0121 | 0.8428 |
+| 6.5 | 74,270 | 617.7 | 641 | 0.0083 | 0.0086 | 0.9636 |
+| 7.0 | 90,921 | 692.0 | 777 | 0.0076 | 0.0085 | 0.8905 |
+| 7.5 | 8,640 | 53.4 | 36 | 0.0062 | 0.0042 | 1.4827 |
+| 8.0 | 4,881 | 23.2 | 35 | 0.0048 | 0.0072 | 0.6624 |
+| 9.0 | 1,029 | 3.6 | 4 | 0.0035 | 0.0039 | 0.9099 |
+
+**Cutoff 2011 (forecast year 2012), `--min_n 1000`** — 11 coupons kept; zero-realized coupons dropped: none. Predicted max/min 6.582, realized max/min 5.769, **dispersion ratio 1.141**.
+
+| coupon | n loan-months | pred events | real events | pred rate | real rate | ratio |
+|---|---|---|---|---|---|---|
+| 3.0 | 2,877 | 17.8 | 13 | 0.0062 | 0.0045 | 1.3671 |
+| 3.5 | 36,948 | 566.9 | 577 | 0.0153 | 0.0156 | 0.9825 |
+| 4.0 | 201,122 | 5,459.6 | 4,760 | 0.0271 | 0.0237 | 1.1470 |
+| 4.5 | 108,411 | 3,054.8 | 2,826 | 0.0282 | 0.0261 | 1.0810 |
+| 5.0 | 312,231 | 6,449.6 | 7,290 | 0.0207 | 0.0233 | 0.8847 |
+| 5.5 | 107,139 | 1,596.1 | 2,264 | 0.0149 | 0.0211 | 0.7050 |
+| 6.0 | 196,079 | 1,978.0 | 3,863 | 0.0101 | 0.0197 | 0.5120 |
+| 6.5 | 62,712 | 473.3 | 914 | 0.0075 | 0.0146 | 0.5179 |
+| 7.0 | 74,128 | 472.1 | 934 | 0.0064 | 0.0126 | 0.5054 |
+| 7.5 | 7,110 | 35.2 | 66 | 0.0050 | 0.0093 | 0.5336 |
+| 8.0 | 4,525 | 19.4 | 26 | 0.0043 | 0.0057 | 0.7451 |
+
+At `min_n` 100 (the scorer's own setting) coupons with zero realized events are dropped and listed: 2009 — 2.5
+(240 loan-months), 3.0 (468), 9.5 (144); 2010 — 2.5 (318), 3.0 (972), 9.5 (144); 2011 — 9.5 (110). Ratios at
+`min_n` 100: 2009 0.534 (12 coupons, identical to 1,000), 2010 0.869 (12 coupons against 11 at 1,000, same ratio), 2011 **1.493** (14
+coupons, predicted max/min 10.896, realized 7.299) against 1.141 at 1,000 — 2011 is the one cutoff where the
+choice moves the ratio.
+
+### In-sample check, ten seeds, cutoffs 2009–2011
+
+`scripts/slurm/run_ipw_consistent_gap_<y>_seq_allseeds.sbatch` (copy of the 2008 file, only the cutoff
+changed; `l40s_public`), jobs 19491449 (2009), 19491450 (2010), 19491451 (2011), all COMPLETED 0:0, 3:53 /
+3:44 / 4:05, `.err` empty. `scripts/diag/ipw_consistent_gap.py` needed `CFG` entries: the `_seq` loop was
+`range(2003, 2009)`, now `range(2003, 2012)` (single-match patch, `ast.parse` ok; the filtered block still uses
+coupons 4.0–9.0, the unfiltered pooled ratio is the figure read). Test n 1,473,338 / 1,740,464 / 2,018,101, zero
+observations dropped. Gate as on Oct 8: reportable iff |mean − 1| < 2·SE + 0.02, SE = stdev / √10; margin =
+(2·SE + 0.02) − |mean − 1|. The 11th pass in each log (seed 42, `hazard_final.pt`: 1.0156 / 1.0621 / 1.0113) is
+excluded from the means.
+
+| cutoff | ten ratios (seeds 42, 7, 123, 1001, 2026, 3, 11, 77, 314, 999) | mean | stdev | SE | margin | gate | out-of-time count |
+|---|---|---|---|---|---|---|---|
+| 2009 | 0.9669 1.0642 1.0219 1.0650 0.9471 0.9396 0.9929 0.9684 0.9796 0.9650 | 0.9911 | 0.0450 | 0.0142 | +0.0395 | PASS | 0.9930 |
+| 2010 | 0.9601 1.0014 0.9450 1.0200 1.1079 0.8896 0.9809 0.9758 0.9416 0.8986 | 0.9721 | 0.0630 | 0.0199 | +0.0319 | PASS | 0.9653 |
+| 2011 | 1.0603 1.0344 0.9494 0.9821 0.8998 0.8850 0.9381 0.9493 0.9632 1.0313 | 0.9693 | 0.0580 | 0.0183 | +0.0260 | PASS | 0.8548 |
+
+All three pass; none is marked pending in-sample check. **Correction to the Oct 8 (afternoon) text:** "every
+margin is at least 0.027" held for 2003–2008 only; 2011's margin is +0.0260. The in-sample ratios are 0.97–1.01
+for all three while the out-of-time count ratios are 0.9930 / 0.9653 / 0.8548; across 2003–2011 the in-sample
+means span 0.9693–1.0094 and the out-of-time ratios 0.8548–1.5598.
+
+### 2012 launch (cutoff 2012, forecast 2013)
+
+`ls -d data/sequences_rolling/cutoff_2012* outputs/rolling/*cutoff_2012*` returned "No such file or directory"
+for both globs before submission. Command (stdout to `.claude_tmp/chain_2012_submit.out`, not committed):
+`CPU_PARTITION=cs SMOKE_PARTITION=cpu_short SMOKE_TEST_MEM=96G scripts/slurm/submit_cutoff_chain.sh 2012`.
+
+**Partition choice and the departure from 2009–2011.** 2009–2011 census and build ran with
+`--time=5:45:00` (sacct `Timelimit`; driver default for `CPU_PARTITION=cpu_short`, whose QOS caps MaxWall at
+6:00:00). Build elapsed against `n_obs` (train+test, from the gate logs): 2008 2:14:06 / 6.00M, 2009 2:22:36 /
+7.36M, 2010 4:04:58 / 8.71M, 2011 3:49:09 / 10.08M. 2012 `n_obs` extrapolated at 11.45M (2011 plus the last
+increment, +13.6%). Hours: OLS on 2008–2011 gives 4.75 (+1 residual sd 5.33); the per-observation rate of 2010
+gives 5.37, of 2011 4.34, of 2009 3.70; OLS on 2003–2011 gives 4.00. The range crosses 5:00 and its top is 20–25
+minutes under the 5:45 limit, so the 'extrapolates past 5:00' condition was treated as met. Timing varies with
+the node (2010 on cl015, 2011 on cs637), which the fit cannot separate. With `CPU_PARTITION=cs` the driver sets
+**census 8:00:00 and build 12:00:00**, so these are *not* the same limits as 2009–2011. `sbatch --test-only`
+(no job created, 8 CPUs, 96G) was accepted on `cs` at both 8:00:00 and 12:00:00; estimated start
+2026-10-09T20:32:42 on `cs` versus 12:45:19 on `cpu_short` (5:45:00), i.e. the `cs` route costs about eight
+hours of queue wait in exchange for removing the timeout risk. Not resolved: sacct lists the 2010 and 2011
+census/build `Partition` as `all`, not `cpu_short`, although they were submitted with `CPU_PARTITION=cpu_short`.
+
+Ids: census **19491619** (`cs`, 8:00:00, 96G, Reason None), build **19491620** (`cs`, 12:00:00, 96G, after census),
+gate 19491621, smoke train 19491622, smoke test **19491623** (`scontrol`: `afterok:19491622`, TimeLimit
+03:00:00, MinMemoryNode 96G, partition `cpu_short`), trains 19491624 (s42), 19491627 (s7), 19491630 (s123),
+19491635 (s1001), 19491642 (s2026), 19491647 (s3), 19491651 (s11), 19491654 (s77), 19491657 (s314), 19491660
+(s999), one-step 19491626 / 19491629 / 19491634 / 19491641 / 19491646 / 19491650 / 19491653 / 19491656 / 19491659
+/ 19491662 (same seed order), ensemble **19491663**; decwin ids are in the driver stdout. 36 jobs in `squeue`
+at submission, all PENDING (census Reason None, the rest Dependency). The consistency test's 3:00:00 limit
+was 1.5–2.7× the 2009–2011 smoke tests' elapsed (2:01:04 for 2011); 2012 has not been checked beyond that.
