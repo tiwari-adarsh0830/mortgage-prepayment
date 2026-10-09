@@ -56,11 +56,11 @@ CFG = {
     ),
 }
 
-# _seq cutoffs 2003-2008 (added 2026-10-08): seq_dir/ckpt_dir must be passed on
+# _seq cutoffs 2003-2008 (added 2026-10-08), 2009-2011 (added 2026-10-09): seq_dir/ckpt_dir must be passed on
 # the command line, so the hardcoded-build asserts are skipped. The filtered
 # block uses coupons 4.0-9.0 at n_obs>=1000 (the range the 2006-2008 one-step
 # dispersion recompute kept); the UNFILTERED pooled ratio is the figure to read.
-for _y in range(2003, 2009):
+for _y in range(2003, 2012):
     CFG[_y] = dict(
         seq_dir=None, out_dir=None, batch_size=2048, expected_n_test=None,
         coupon_lo=4.0, coupon_hi=9.0, min_n=1000, census_rate=None,
