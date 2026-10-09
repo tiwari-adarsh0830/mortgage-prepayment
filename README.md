@@ -7,9 +7,9 @@ Out-of-time pooled count ratios (ensemble, ten seeds; cutoff → forecast year):
 0.7626 / 0.7514 / 0.7483 (2003–2008: 0.7760–0.7855). Ten-seed in-sample ratios 0.9911 / 0.9721 / 0.9693, all
 PASS the gate |mean − 1| < 2·SE + 0.02 (margins +0.0395 / +0.0319 / +0.0260), so none is marked pending. The
 full ten-row table (2002–2011), dispersion tables at `min_n` 1,000, and the in-sample table are in the Oct 9
-section at the end. Cutoff **2012** (forecast 2013) was submitted Oct 9 (shortly after 12:40 EDT) with `CPU_PARTITION=cs`
-(census 19491619, build 19491620, ensemble 19491663; full id list in the Oct 9 section); as of writing all 36
-jobs are PENDING. Still untracked and unreviewed: `docs/artifact_map.md`,
+section at the end. Cutoff **2012** (forecast 2013) was submitted Oct 9 12:41:11 EDT (sacct `Submit`) with `CPU_PARTITION=cs`
+(census 19491619, build 19491620, ensemble 19491663; full id list in the Oct 9 section); at submission all 36
+jobs were PENDING; the census started at 12:43:38 (sacct `Start`, node cs607). Still untracked and unreviewed: `docs/artifact_map.md`,
 `scripts/diag/decoded_content_check_cell_sample_30y.py`.
 
 **Oct 5–6 update (new schema, `_seq`).** Everything below the next paragraph describes the Oct 1–3
@@ -5768,8 +5768,10 @@ minutes under the 5:45 limit, so the 'extrapolates past 5:00' condition was trea
 the node (2010 on cl015, 2011 on cs637), which the fit cannot separate. With `CPU_PARTITION=cs` the driver sets
 **census 8:00:00 and build 12:00:00**, so these are *not* the same limits as 2009–2011. `sbatch --test-only`
 (no job created, 8 CPUs, 96G) was accepted on `cs` at both 8:00:00 and 12:00:00; estimated start
-2026-10-09T20:32:42 on `cs` versus 12:45:19 on `cpu_short` (5:45:00), i.e. the `cs` route costs about eight
-hours of queue wait in exchange for removing the timeout risk. Not resolved: sacct lists the 2010 and 2011
+2026-10-09T20:32:42 on `cs` versus 12:45:19 on `cpu_short` (5:45:00). **Retracted the same day:** the
+census (19491619) was submitted 12:41:11 and started 12:43:38 on cs607 (sacct), so the `--test-only` estimate
+overstated the `cs` wait by about eight hours and the `cs` route cost the census no queue wait; the build's
+start (it waits on the census) is not yet observed. Not resolved: sacct lists the 2010 and 2011
 census/build `Partition` as `all`, not `cpu_short`, although they were submitted with `CPU_PARTITION=cpu_short`.
 
 Ids: census **19491619** (`cs`, 8:00:00, 96G, Reason None), build **19491620** (`cs`, 12:00:00, 96G, after census),
@@ -5778,5 +5780,5 @@ gate 19491621, smoke train 19491622, smoke test **19491623** (`scontrol`: `after
 19491635 (s1001), 19491642 (s2026), 19491647 (s3), 19491651 (s11), 19491654 (s77), 19491657 (s314), 19491660
 (s999), one-step 19491626 / 19491629 / 19491634 / 19491641 / 19491646 / 19491650 / 19491653 / 19491656 / 19491659
 / 19491662 (same seed order), ensemble **19491663**; decwin ids are in the driver stdout. 36 jobs in `squeue`
-at submission, all PENDING (census Reason None, the rest Dependency). The consistency test's 3:00:00 limit
+at submission, all PENDING (census Reason None, the rest Dependency); census RUNNING by 12:43:38. The consistency test's 3:00:00 limit
 was 1.5–2.7× the 2009–2011 smoke tests' elapsed (2:01:04 for 2011); 2012 has not been checked beyond that.
