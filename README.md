@@ -5919,7 +5919,8 @@ lines changed, `grep -c 2011` on the new file 0; `--partition=l40s_public`), job
 started 00:46:35 on gl006, `.err` empty. `scripts/diag/ipw_consistent_gap.py` `CFG` loop `range(2003, 2012)` →
 `range(2003, 2013)` (single-match patch, `ast.parse` ok; the filtered block still uses coupons 4.0–9.0, the
 unfiltered pooled ratio is the figure read). Test n 2,289,253 in every block, zero observations dropped, re-scored AUC
-equal to `results.json` in all eleven. Gate as before: reportable iff |mean − 1| < 2·SE + 0.02, SE = stdev / √10;
+equal to `results.json` in the ten `hazard_best.pt` passes; the 11th pass (`hazard_final.pt`) is compared against the
+checkpoint's stored AUC (0.7361 vs 0.7361). Gate as before: reportable iff |mean − 1| < 2·SE + 0.02, SE = stdev / √10;
 margin = (2·SE + 0.02) − |mean − 1|. The 11th pass (seed 42, `hazard_final.pt`: 0.9774) is excluded from the mean; it
 equals seed 42's `hazard_best.pt` ratio because that seed's best epoch is its final epoch (50).
 
