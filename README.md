@@ -5942,3 +5942,40 @@ incentive bin the ratio is above 1 for incentive up to 1.5 (1.21–2.20) and bel
 
 The task text named `scripts/ipw_consistent_gap.py` and `slurm/`; the tracked paths are
 `scripts/diag/ipw_consistent_gap.py` and `scripts/slurm/`. Used the tracked paths.
+
+## Oct 10, 2026 (later) — sequence email sent; 2008 size gradient and AUC/base-rate tables; cleanup notes
+
+**Current state.** The 2002–2012 sequence email was sent Oct 10 with the eleven-row table, the regime pattern, the 2008 size gradient, the AUC/base-rate observation, the open Sep 29 items, and the mixed-population design question. Nothing launches until the advisor answers the 2013 question.
+
+### Ratio by loan-size quartile, cutoffs 2007 / 2008 / 2009
+
+Read-only pass over each cutoff's `ensemble_merged_all_months.csv` (Part C1 of the Oct 10 morning audit, recomputed for this section). The merged file has no `original_upb` column, so size is `current_actual_upb` at the loan's first scored month, restricted to UPB > 0; quartiles are over loans. Ratio = Σ ensemble `h` / Σ `realized_event` over the quartile's loan-months (count-weighted). Rows are labeled cutoff (forecast year).
+
+| cutoff (forecast year) | UPB cut points 25 / 50 / 75% | Q1 small | Q2 | Q3 | Q4 large | pooled count | pooled UPB |
+|---|---|---|---|---|---|---|---|
+| 2007 (2008) | 92,934 / 145,766 / 217,978 | 1.434 | 1.521 | 1.745 | 1.555 | 1.560 | 1.596 |
+| 2008 (2009) | 94,993 / 150,171 / 226,422 | 1.790 | 1.589 | 1.470 | 1.093 | 1.451 | 1.277 |
+| 2009 (2010) | 94,037 / 150,138 / 229,606 | 1.242 | 0.992 | 0.936 | 0.865 | 0.993 | 0.912 |
+
+Zero-UPB rows (excluded from the quartiles, zero weight in the UPB ratio, full weight in the count ratio), cutoff 2008: 44,393 rows across 12,157 loans; dropping them moves the pooled count ratio from 1.4505 to 1.4221. Descriptive only: the gradient is present in cutoffs 2008 and 2009 and not in 2007; nothing was fit.
+
+### Held-out event rate vs mean best AUC, cutoffs 2006–2012
+
+Held-out label mean and n are from each build's `test_labels.npy`; the IPW rate weights the same labels by `test_incl_prob.npy` (the events are over-sampled, so the unweighted mean is not a population rate). Realized rate is the ensemble count-weighted monthly rate in the forecast year from `pooled_stats.csv`. Mean best AUC is over the ten `_seq` seeds' `results.json`.
+
+| cutoff | n test obs | held-out label mean | held-out IPW rate | realized monthly, forecast year | mean best AUC |
+|---|---|---|---|---|---|
+| 2006 | 755,586 | 0.0859 | 0.0217 | 0.0090 | 0.7773 |
+| 2007 | 959,677 | 0.0760 | 0.0188 | 0.0079 | 0.7769 |
+| 2008 | 1,202,166 | 0.0674 | 0.0164 | 0.0136 | 0.7760 |
+| 2009 | 1,473,338 | 0.0655 | 0.0157 | 0.0131 | 0.7626 |
+| 2010 | 1,740,464 | 0.0645 | 0.0152 | 0.0119 | 0.7514 |
+| 2011 | 2,018,101 | 0.0627 | 0.0146 | 0.0211 | 0.7483 |
+| 2012 | 2,289,253 | 0.0659 | 0.0153 | 0.0187 | 0.7360 |
+
+Spearman against mean best AUC, n = 7: held-out label mean +0.79 (p = 0.036); held-out IPW rate +0.89 (p = 0.007); forecast-year realized rate -0.79 (p = 0.036). AUC falls every year from 2008; the held-out rates do not (2012 is above 2011) and the forecast-year realized rate rises in 2011–12 while AUC keeps falling. Seven points, three correlations, no conclusion beyond the numbers.
+
+### Cleanup notes
+
+- `config/ensemble_seeds.json` lists five seeds (42, 7, 123, 1001, 2026), the Sep 26 fixed set for the 2002 and 2020-control runs. No script loads it (the only references are docstrings and sbatch echo text); the ten `_seq` seeds are the `SEEDS` array in `scripts/slurm/submit_cutoff_chain.sh` (line 74).
+- `outputs/realized_v6_upb_pass0_checkpoint.pkl.partial` (mtime Oct 5 18:15) is a stale partial from a realized-series rerun that never completed; no log under `logs/` matches it and no output under `outputs/` reflects the current 30-year/post-mod `realized_cpr_v6*.py`. Left in place.
