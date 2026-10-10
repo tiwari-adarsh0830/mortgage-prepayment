@@ -1,15 +1,15 @@
 ## Current state
-*(Oct 9, 2026 — rewritten each session, not appended to.)*
+*(Oct 10, 2026 — rewritten each session, not appended to.)*
 
-**Oct 9 — 2009–2011 `_seq` chains complete (36/36 jobs COMPLETED 0:0 each); ten-seed in-sample gate passed for all three; 2012 launched.**
-Out-of-time pooled count ratios (ensemble, ten seeds; cutoff → forecast year): **0.9930** (2009 → 2010),
-**0.9653** (2010 → 2011), **0.8548** (2011 → 2012); UPB 0.9121 / 0.9569 / 0.8530. Mean ten-seed AUC fell to
-0.7626 / 0.7514 / 0.7483 (2003–2008: 0.7760–0.7855). Ten-seed in-sample ratios 0.9911 / 0.9721 / 0.9693, all
-PASS the gate |mean − 1| < 2·SE + 0.02 (margins +0.0395 / +0.0319 / +0.0260), so none is marked pending. The
-full ten-row table (2002–2011), dispersion tables at `min_n` 1,000, and the in-sample table are in the Oct 9
-section at the end. Cutoff **2012** (forecast 2013) was submitted Oct 9 12:41:11 EDT (sacct `Submit`) with `CPU_PARTITION=cs`
-(census 19491619, build 19491620, ensemble 19491663; full id list in the Oct 9 section); at submission all 36
-jobs were PENDING; the census started at 12:43:38 (sacct `Start`, node cs607). Still untracked and unreviewed: `docs/artifact_map.md`,
+**Oct 10 — 2012 `_seq` chain complete (36/36 jobs COMPLETED 0:0); ten-seed in-sample gate passed; the pre-2013 sequence (cutoffs 2002–2012) is complete.**
+Cutoff 2012 (forecast 2013): out-of-time pooled count ratio **1.0338** (ensemble, ten seeds), UPB **1.0507**; ten
+per-seed count ratios 0.9558–1.1149 (SE 0.0177); 5 of 12 forecast months below 1.0. Mean ten-seed AUC 0.7360
+(0.7341–0.7372). Ten-seed in-sample ratio **0.9821**, PASS the gate |mean − 1| < 2·SE + 0.02 (margin +0.0316).
+Dispersion at `min_n` 1,000: 0.809 (predicted 9.653, realized 11.925, 13 coupons; the smallest rates on both sides
+are the 2.5 coupon, 16 realized events). Consistency test and gate passed; census a_eff 1.000000. The full
+2002–2012 table, the 2012 dispersion table and the in-sample table are in the Oct 10 section at the end; the
+2009–2011 results (count 0.9930 / 0.9653 / 0.8548, in-sample 0.9911 / 0.9721 / 0.9693) stay in the Oct 9 section.
+No cutoff-2013 build, output, census json or queued job exists (`ls`, `squeue`, Oct 10). Still untracked and unreviewed: `docs/artifact_map.md`,
 `scripts/diag/decoded_content_check_cell_sample_30y.py`.
 
 **Oct 5–6 update (new schema, `_seq`).** Everything below the next paragraph describes the Oct 1–3
@@ -5782,3 +5782,162 @@ gate 19491621, smoke train 19491622, smoke test **19491623** (`scontrol`: `after
 / 19491662 (same seed order), ensemble **19491663**; decwin ids are in the driver stdout. 36 jobs in `squeue`
 at submission, all PENDING (census Reason None, the rest Dependency); census RUNNING by 12:43:38. The consistency test's 3:00:00 limit
 was 1.5–2.7× the 2009–2011 smoke tests' elapsed (2:01:04 for 2011); 2012 has not been checked beyond that.
+
+## Oct 10, 2026 — 2012 `_seq` result, ten-seed in-sample gate; pre-2013 sequence complete
+
+Every figure below was read this session from the file named next to it. Rows 2002–2011 of the summary table are
+carried from the Oct 9 section (which read them from their files that day); they were not re-read today. Only the
+2012 row is new.
+
+### Chain status, cutoff 2012
+
+`sacct -u at7095 -S 2026-10-09T12:00 --format=JobID,JobName%42,State,ExitCode,Elapsed -X | grep 2012_seq` returned 36
+lines, all `COMPLETED 0:0`; the filter for any other state returned nothing. Elapsed: census 19491619 2:26:40, build
+19491620 4:26:16 (inside the 3.70–5.37 h range the Oct 9 section extrapolated from per-observation rates), gate
+19491621 0:01:11, smoke train 19491622 0:05:37, smoke test 19491623 1:38:39 (limit 3:00:00), ten trains 2:12:21–2:18:21,
+ensemble 19491663 0:02:02.
+
+**Gate** `logs/gate_2012_seq_19491621.out`: ALL CHECKS PASSED, `.err` 0 bytes. n_loans (train+test) 1,318,509; n_obs
+11,443,720 (train 9,154,467 / test 2,289,253); label==1 754,333 (train 603,473 / test 150,860). Loader line
+`pre2013_cell_sample_30y_loans.csv` count 1,482,004.
+
+**Census** (`scripts/diag/census_check_seq.py --build_dir data/sequences_rolling/cutoff_2012_zbc_multiobs_f0.2_h1_hist_seq
+--census_json outputs/census_panel_baseline_cutoff_2012_seq.json`, login node, no `--divide_out_subsample`, output not
+committed): a_eff = 754,333 / 754,333 = 1.000000; b_eff = 10,689,387 / 48,565,806 = 0.220101; log(a_eff/b_eff) =
+1.513668; IPW-weighted sample prepay rate 0.015295 = census `raw_prepay_rate` 0.015295. Sample n_loans 1,318,509 vs
+census 1,330,706 (the script's own note: the build drops loans with no eligible observation). Census json `overall`
+`n_loans` / `n_prepay_events`: 2011 1,210,384 / 632,788, **2012 1,330,706 / 754,333** — higher in both; the earlier
+pairs were not re-checked today.
+
+**Train/forecast consistency test** (`logs/smoketest_2012_seq_19491623.out`; `.err` holds four sklearn "feature
+names" UserWarnings, nothing else; no `[FAIL]`/Traceback in `.out`): Check 1 all `[PASS]` (vintage 2007Q3, picked at
+random; rebuilt sequences max_seq_diff 0.000e+00, masks match exactly, same-checkpoint predictions max_pred_diff
+0.000e+00; checkpoint `cutoff_2012_multiobs_k5_h1_ipw_seq_smoke_s42`, AUC 0.7228; 68.1 s). Check 2 `[PASS]` at three
+months — 201212 / 201306 / 201311 — max abs window diff 2.04e-07 / 2.38e-07 / 1.88e-07 (57.8 s). Negative control (b)
+`[PASS (bug caught)]`: frozen-Dec window disagrees on 89710/89710 loan-months (max abs diff 1.380e+00). Total elapsed
+5889.9 s.
+
+### Ten-seed AUCs (`results.json` `best_auc`, `outputs/rolling/cutoff_2012_multiobs_k5_h1_ipw_seq_s<seed>/`)
+
+Each `best_auc` equals the maximum of that run's `history[*].auc` (asserted); 50 epochs ran for every seed.
+
+| cutoff | mean best_auc | range | best epochs (seeds 42, 7, 123, 1001, 2026, 3, 11, 77, 314, 999) |
+|---|---|---|---|
+| 2012 | 0.7360 | 0.7341–0.7372 | 50 47 49 50 49 50 46 50 50 50 |
+
+Per seed: s42 0.7361, s7 0.7353, s123 0.7358, s1001 0.7361, s2026 0.7368, s3 0.7371, s11 0.7351, s77 0.7372,
+s314 0.7341, s999 0.7364 (unrounded mean 0.7359867, sample stdev 0.0009705). Eight of the ten best epochs are 49 or 50 (the other two are 47 and 46).
+
+### One-step read-out, cutoff 2012 (`outputs/rolling/ensemble_onestep_cutoff_2012_seq/`)
+
+Seven files, as for 2009–2011. Ratio = predicted / realized; the `ratio` column of `pooled_stats.csv` is computed on
+the monthly rates (annualized rates are shown for comparison with the earlier paragraphs; their quotient is 1.0303
+for count and 1.0445 for UPB).
+
+**Cutoff 2012 (forecast year 2013).** Ensemble pooled count ratio 1.0338 (predicted 0.2089 / realized 0.2028,
+annualized), UPB ratio 1.0507 (0.2454 / 0.2350); unrounded 1.033826865460561 / 1.0507497078440657 (`pooled_stats.csv`,
+rows `ensemble,count` and `ensemble,upb`). Ten per-seed count ratios: s42 1.0108, s7 1.1129, s123 1.0669, s1001
+0.9969, s2026 0.9614, s3 0.9558, s11 1.0567, s77 1.0478, s314 1.0141, s999 1.1149 (3 below 1, 7 above); mean
+1.0338, sample stdev 0.0560, SE = stdev/√10 = 0.0177; min 0.9558 (s3), max 1.1149 (s999). n loan-months 1,073,959
+(sum of ensemble `n_active` in `month_by_month.csv`; equals the data rows of `ensemble_merged_all_months.csv`; the
+incentive-bin `n_loan_months` sum to 1,073,686, 273 fewer — all 273 have `incentive_at_ref` > 6.0, above the last
+bin edge). Monthly ratio (annualized predicted / realized, `month_by_month.csv`), 201212–201311: 201212 1.118,
+201301 1.202, 201302 1.104, 201303 1.011, 201304 0.949, 201305 0.993, 201306 0.858, 201307 0.909, 201308 1.081,
+201309 0.954, 201310 1.109, 201311 1.076; **5 below 1.0, 7 above**.
+
+| incentive bin | n loan-months | ensemble ratio |
+|---|---|---|
+| (-2.0, -1.0] | 13,158 | 1.3412 |
+| (-1.0, -0.5] | 40,810 | 2.2012 |
+| (-0.5, 0.0] | 80,393 | 2.0560 |
+| (0.0, 0.5] | 132,928 | 1.7592 |
+| (0.5, 1.0] | 146,426 | 1.4690 |
+| (1.0, 1.5] | 177,355 | 1.2096 |
+| (1.5, 2.0] | 137,612 | 0.9734 |
+| (2.0, 3.0] | 218,471 | 0.7235 |
+| (3.0, 4.0] | 104,798 | 0.5621 |
+| (4.0, 6.0] | 21,735 | 0.6035 |
+
+No bin reports `inf`.
+
+### Summary, cutoffs 2002–2012 (forecast years 2003–2013)
+
+| cutoff | fcst yr | census loans | events | mean AUC | pooled count | pooled UPB | SE | seed min–max | months <1 | dispersion ratio @1000 (pred, real, k) | in-sample 10-seed mean |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2002 | 2003 | 277,042 | 99,227 | 0.7761 | 0.8798 | 0.8573 | 0.0212 | 0.8050–0.9830 | 9 of 12 | 1.434 (9.286, 6.477, k=9) | n/a |
+| 2003 | 2004 | 384,301 | 187,537 | 0.7855 | 1.1800 | 1.2069 | 0.0197 | 1.0448–1.2398 | 1 of 12 | 1.445 (18.064, 12.501, k=11) | 1.0094 |
+| 2004 | 2005 | 473,195 | 238,540 | 0.7782 | 1.1623 | 1.1885 | 0.0155 | 1.0815–1.2462 | 1 of 12 | 1.459 (5.764, 3.952, k=11) | 1.0021 |
+| 2005 | 2006 | 572,493 | 286,606 | 0.7760 | 1.0506 | 1.0997 | 0.0187 | 0.9480–1.1332 | 6 of 12 | 0.967 (4.161, 4.303, k=11) | 1.0040 |
+| 2006 | 2007 | 669,508 | 324,408 | 0.7773 | 1.3095 | 1.3898 | 0.0114 | 1.2354–1.3463 | 0 of 12 | 1.300 (4.930, 3.794, k=11) | 0.9902 |
+| 2007 | 2008 | 782,404 | 364,747 | 0.7769 | 1.5598 | 1.5962 | 0.0230 | 1.4407–1.6487 | 0 of 12 | 1.616 (5.683, 3.518, k=11) | 0.9878 |
+| 2008 | 2009 | 906,012 | 405,197 | 0.7760 | 1.4505 | 1.2765 | 0.0637 | 1.2198–1.8905 | 0 of 12 | 0.679 (5.096, 7.509, k=10) | 0.9819 |
+| 2009 | 2010 | 1,022,129 | 482,714 | 0.7626 | 0.9930 | 0.9121 | 0.0230 | 0.8713–1.1083 | 6 of 12 | 0.534 (5.912, 11.061, k=12) | 0.9911 |
+| 2010 | 2011 | 1,116,008 | 561,130 | 0.7514 | 0.9653 | 0.9569 | 0.0370 | 0.8201–1.1555 | 6 of 12 | 0.869 (5.234, 6.020, k=11) | 0.9721 |
+| 2011 | 2012 | 1,210,384 | 632,788 | 0.7483 | 0.8548 | 0.8530 | 0.0187 | 0.7731–0.9490 | 10 of 12 | 1.141 (6.582, 5.769, k=11) | 0.9693 |
+| **2012** | **2013** | **1,330,706** | **754,333** | **0.7360** | **1.0338** | **1.0507** | **0.0177** | **0.9558–1.1149** | **5 of 12** | **0.809 (9.653, 11.925, k=13)** | **0.9821** |
+
+Sources for the 2012 row: census loans and events — `outputs/census_panel_baseline_cutoff_2012_seq.json`,
+`overall.n_loans` / `overall.n_prepay_events`; mean AUC — mean of `best_auc` over the ten `results.json` above; pooled
+count / UPB — `outputs/rolling/ensemble_onestep_cutoff_2012_seq/pooled_stats.csv`, rows `model=ensemble`,
+`weight=count|upb`, column `ratio`; SE and seed min–max — the ten `model=seed<N>`, `weight=count` rows of the same file,
+SE = sample stdev (ddof 1) / √10; months <1 — `month_by_month.csv`, `model=ensemble`, `predicted_rate_annualized` /
+`realized_rate_annualized` < 1; dispersion — `scripts/diag/dispersion_recompute.py --run_dir
+outputs/rolling/ensemble_onestep_cutoff_2012_seq --min_n 1000`; in-sample — mean of the first ten (`hazard_best.pt`)
+blocks' `UNFILTERED … ratio=` line in `logs/ipw_gap_2012_seq_allseeds_19518138.out`.
+
+### Dispersion at `min_n` 1,000, cutoff 2012 (`scripts/diag/dispersion_recompute.py`)
+
+**Cutoff 2012 (forecast year 2013), `--min_n 1000`** — 13 coupons kept; dropped for n_loan_months < 1,000: 2.0, 8.5,
+9.5, 10.0; zero-realized coupons dropped: none. Rows (loan-months) 1,073,959. Predicted max/min 9.653, realized
+max/min 11.925, **dispersion ratio 0.809**.
+
+| coupon | n loan-months | pred events | real events | pred rate | real rate | ratio |
+|---|---|---|---|---|---|---|
+| 2.5 | 7,570 | 20.9 | 16 | 0.0028 | 0.0021 | 1.3071 |
+| 3.0 | 101,336 | 770.6 | 364 | 0.0076 | 0.0036 | 2.1171 |
+| 3.5 | 71,932 | 1,346.9 | 757 | 0.0187 | 0.0105 | 1.7793 |
+| 4.0 | 226,032 | 5,916.9 | 3,768 | 0.0262 | 0.0167 | 1.5703 |
+| 4.5 | 99,324 | 2,648.7 | 2,087 | 0.0267 | 0.0210 | 1.2691 |
+| 5.0 | 241,066 | 5,359.1 | 5,420 | 0.0222 | 0.0225 | 0.9888 |
+| 5.5 | 75,278 | 1,350.4 | 1,787 | 0.0179 | 0.0237 | 0.7557 |
+| 6.0 | 137,353 | 2,082.4 | 3,462 | 0.0152 | 0.0252 | 0.6015 |
+| 6.5 | 45,846 | 567.8 | 1,022 | 0.0124 | 0.0223 | 0.5556 |
+| 7.0 | 56,681 | 609.1 | 1,238 | 0.0107 | 0.0218 | 0.4920 |
+| 7.5 | 5,901 | 53.9 | 98 | 0.0091 | 0.0166 | 0.5498 |
+| 8.0 | 3,703 | 30.4 | 58 | 0.0082 | 0.0157 | 0.5241 |
+| 9.0 | 1,019 | 8.1 | 5 | 0.0079 | 0.0049 | 1.6112 |
+
+The smallest predicted and smallest realized monthly rates are both on the 2.5 coupon (16 realized events in
+7,570 loan-months); the largest predicted rate is the 4.5 coupon and the largest realized the 6.0 coupon. The scorer's
+`min_n` 100 setting was not run for 2012 (not requested), so the 2011-style check of whether that choice moves the
+ratio is open for this cutoff.
+
+### In-sample check, ten seeds, cutoff 2012
+
+`scripts/slurm/run_ipw_consistent_gap_2012_seq_allseeds.sbatch` (copy of the 2011 file, `2011` → `2012` only — 11
+lines changed, `grep -c 2011` on the new file 0; `--partition=l40s_public`), job **19518138**, COMPLETED 0:0, 4:18,
+started 00:46:35 on gl006, `.err` empty. `scripts/diag/ipw_consistent_gap.py` `CFG` loop `range(2003, 2012)` →
+`range(2003, 2013)` (single-match patch, `ast.parse` ok; the filtered block still uses coupons 4.0–9.0, the
+unfiltered pooled ratio is the figure read). Test n 2,289,253 in every block, zero observations dropped, re-scored AUC
+equal to `results.json` in all eleven. Gate as before: reportable iff |mean − 1| < 2·SE + 0.02, SE = stdev / √10;
+margin = (2·SE + 0.02) − |mean − 1|. The 11th pass (seed 42, `hazard_final.pt`: 0.9774) is excluded from the mean; it
+equals seed 42's `hazard_best.pt` ratio because that seed's best epoch is its final epoch (50).
+
+| cutoff | ten ratios (seeds 42, 7, 123, 1001, 2026, 3, 11, 77, 314, 999) | mean | stdev | SE | margin | gate | out-of-time count |
+|---|---|---|---|---|---|---|---|
+| 2012 | 0.9774 1.0692 1.0420 0.9270 0.9628 0.9311 0.9808 0.9861 0.9399 1.0051 | 0.9821 | 0.0466 | 0.0147 | +0.0316 | PASS | 1.0338 |
+
+Unrounded: mean 0.98214, stdev 0.046587, 2·SE + 0.02 = 0.049464, |mean − 1| = 0.01786, margin 0.031604. Seven of the
+ten ratios are below 1, three above. Across 2003–2012 the in-sample means span 0.9693–1.0094 and the out-of-time
+ratios 0.8548–1.5598 (2012's 0.9821 and 1.0338 are inside both spans).
+
+**Reading, as measured only.** The 2011 cutoff's 10/12 months below 1 (ratio 0.8548) becomes 5/12 months below 1
+(ratio 1.0338) for 2012; seven of the ten seeds are above 1 and the seed range 0.9558–1.1149 straddles it. By
+incentive bin the ratio is above 1 for incentive up to 1.5 (1.21–2.20) and below 1 above 1.5 (0.97, 0.72, 0.56,
+0.60). The monthly ratio is above 1 in 201212–201303, below 1 in five of the six months 201304–201309 (201308 is
+1.081), and above 1 in 201310–201311. No cause has been tested.
+
+### Paths in the task instructions
+
+The task text named `scripts/ipw_consistent_gap.py` and `slurm/`; the tracked paths are
+`scripts/diag/ipw_consistent_gap.py` and `scripts/slurm/`. Used the tracked paths.
